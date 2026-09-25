@@ -41,6 +41,7 @@ from typing import Callable, Iterable
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
+from apps.approvals import interface as approvals
 from apps.signoff import interface as signoff
 from htqweb import date_rules
 from htqweb.http import ApiView, api_view, json_error
@@ -56,6 +57,7 @@ from .models import (
     InvoiceStatus,
     PaymentType,
 )
+from .services import agreement_items as agreement_items_svc
 from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
@@ -65,6 +67,7 @@ from .services import accountable_funds_request_service as accountable_funds_svc
 from .services import advance_report_service as advance_report_svc
 from .services import contract_payment_service as contract_payment_svc
 from .services import completion_act_service as completion_act_svc
+from .services import goods_invoice_service as goods_invoice_svc
 from .services import reference_service as ref_svc
 from .services import work_queue_service as work_queue_svc
 from .services.agreement_service import AgreementRuleViolation
@@ -75,7 +78,9 @@ from .services.accountable_funds_request_service import AccountableFundsRequestR
 from .services.advance_report_service import AdvanceReportRuleViolation
 from .services.contract_payment_service import ContractPaymentRuleViolation
 from .services.completion_act_service import CompletionActRuleViolation
+from .services.goods_invoice_service import GoodsInvoiceRuleViolation
 from .services.reference_service import ReferenceConflict
+from .services.request_link import RequestLinkViolation
 
 # Конфликты доменного уровня, которые вьюха переводит в 409. Собраны в один
 # кортеж, чтобы каждый `except` не перечислял их заново и не разъезжался с
@@ -90,7 +95,8 @@ CONFLICTS = (ReferenceConflict, AgreementRuleViolation, InvoiceRuleViolation,
              AccountableFundsRequestRuleViolation,
              AdvanceReportRuleViolation,
              ContractPaymentRuleViolation,
-             CompletionActRuleViolation,
+             CompletionActRuleViolation, RequestLinkViolation,
+             GoodsInvoiceRuleViolation,
              BudgetExceeded, signoff.SignoffError, signoff.UnknownSubject)
 
 
@@ -499,6 +505,13 @@ class CompletionActSubmitView(SubmitView):
             lambda **kw: completion_act_svc.submit_for_approval(act_id, **kw))
 
 
+class GoodsInvoiceSubmitView(SubmitView):
+    @write("POST", status=201, admin=False)
+    def post(self, request, invoice_id: int):
+        return self.submitted(
+            lambda **kw: goods_invoice_svc.submit_for_approval(invoice_id, **kw))
+
+
 class BudgetAgreementsView(ContractsView):
     """Договоры бюджета — по ВСЕМ его строкам, то, из чего сложился остаток."""
 
@@ -508,6 +521,63 @@ class BudgetAgreementsView(ContractsView):
         rows = agr_svc.list_agreements(budget_id=budget_id)
         return [schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
                 for row in rows]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Заявки конструктора «Запросы», по которым заводятся договоры и счета
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Три ручки-прокси к ``apps.approvals.interface``. Фронтенд договорного
+# контура ходит СЮДА, а не в ``/api/requests/v1``: там видимость заявки
+# определяется участием в согласовании, а финансисту, заводящему договор,
+# нужна карточка любой одобренной заявки. Выключенный approvals даёт 503 —
+# документ ПО заявке без approvals не заводится (``services/request_link.py``).
+
+class LinkedRequestCollectionView(ContractsView):
+    """Одобренные заявки со строкой бюджета — список для выбора в форме."""
+
+    @read
+    def get(self, request):
+        return [schemas.LinkedRequestRead.model_validate(row)
+                for row in approvals.list_approved_requests()]
+
+
+class LinkedRequestDetailView(ContractsView):
+    @read
+    def get(self, request, request_id: int):
+        brief = approvals.get_request_brief(request_id)
+        if brief is None:
+            raise Http404("Заявка не найдена")
+        return schemas.LinkedRequestRead.model_validate(brief)
+
+
+class LinkedRequestItemsView(ContractsView):
+    """Позиции заявки с остатком — «План закупок» формы договора.
+
+    ``exclude_agreement_id`` — правка договора: его собственные позиции
+    остатка не уменьшают."""
+
+    @read
+    def get(self, request, request_id: int):
+        try:
+            rows = agreement_items_svc.request_items(
+                request_id, exclude_agreement_id=self.int_param("exclude_agreement_id"))
+        except agreement_items_svc.AgreementItemsViolation as exc:
+            raise Http404(str(exc)) from exc
+        return [schemas.LinkedRequestItemRead.model_validate(row) for row in rows]
+
+
+class LinkedRequestDocumentsView(ContractsView):
+    """Договоры и счета, заведённые по заявке, — блок на карточке заявки."""
+
+    @read
+    def get(self, request, request_id: int):
+        return schemas.LinkedRequestDocumentsRead(
+            agreements=[schemas.AgreementRead.model_validate(agr_svc.serialize_agreement(row))
+                        for row in agr_svc.list_agreements(request_id=request_id)],
+            invoices=[schemas.InvoiceRead.model_validate(inv_svc.serialize_invoice(row))
+                      for row in inv_svc.list_invoices(request_id=request_id)],
+        )
 
 
 class BudgetLineCollectionView(ContractsView):
@@ -577,12 +647,12 @@ class BudgetLineDetailView(ContractsView):
 class CounterpartyCollectionView(ContractsView):
     @read
     def get(self, request):
-        rows = cp_svc.list_counterparties(
+        rows = cp_svc.attach_contractors(cp_svc.list_counterparties(
             search=self.str_param("search"),
             status=self.str_param("status"),
             country_id=self.int_param("country_id"),
             approval_state=self.str_param("approval_state"),
-        )
+        ))
         return self.paginated(rows, schemas.CounterpartyRead.model_validate)
 
     @write("POST", body=schemas.CounterpartyCreate, status=201, admin=False)
@@ -604,6 +674,7 @@ class CounterpartyFullCreateView(ContractsView):
                 bin_iin=data.bin_iin, name=data.name, country=data.country,
                 vat=data.vat, contact_name=data.contact_name, phone=data.phone,
                 email=data.email, address=data.address, status=data.status,
+                contractor_id=data.contractor_id,
             )
         except CONFLICTS as exc:
             return self.conflict(exc)
@@ -613,8 +684,9 @@ class CounterpartyFullCreateView(ContractsView):
 class CounterpartyDetailView(ContractsView):
     @read
     def get(self, request, counterparty_id: int):
+        row = cp_svc.get_counterparty_or_404(counterparty_id)
         return schemas.CounterpartyRead.model_validate(
-            cp_svc.get_counterparty_or_404(counterparty_id))
+            cp_svc.attach_contractors([row])[0])
 
     @write("PATCH", body=schemas.CounterpartyUpdate)
     def patch(self, request, counterparty_id: int,
@@ -623,7 +695,8 @@ class CounterpartyDetailView(ContractsView):
             row = cp_svc.update_counterparty(counterparty_id, **data.model_dump())
         except CONFLICTS as exc:
             return self.conflict(exc)
-        return schemas.CounterpartyRead.model_validate(row)
+        return schemas.CounterpartyRead.model_validate(
+            cp_svc.attach_contractors([row])[0])
 
     @write("DELETE")
     def delete(self, request, counterparty_id: int):
@@ -649,6 +722,7 @@ class AgreementCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
+            request_id=self.int_param("request_id"),
         )
         return self.paginated(
             rows,
@@ -804,6 +878,7 @@ class InvoiceCollectionView(ContractsView):
             program_id=self.int_param("program_id"),
             period_year=self.int_param("period_year"),
             status=self.str_param("status"),
+            request_id=self.int_param("request_id"),
         )
         return self.paginated(
             rows,
@@ -1329,6 +1404,98 @@ class CompletionActPaymentOrderUrlView(ContractsView):
             completion_act_svc.get_completion_act_or_404(act_id))
         if url is None:
             raise Http404("К акту не приложено платёжное поручение")
+        return {"url": url}
+
+
+class GoodsInvoiceCollectionView(ContractsView):
+    @read
+    def get(self, request):
+        rows = goods_invoice_svc.list_goods_invoices(
+            administrator_id=self.int_param("administrator_id"),
+            agreement_id=self.int_param("agreement_id"),
+            awaiting_payment=self.bool_param("awaiting_payment"),
+        )
+        return self.paginated(
+            rows,
+            lambda row: schemas.GoodsInvoiceRead.model_validate(
+                goods_invoice_svc.serialize_goods_invoice(row)),
+        )
+
+    @write("POST", status=201, admin=False)
+    def post(self, request):
+        try:
+            administrator_id = int(request.POST.get("administrator_id") or "")
+            agreement_id = int(request.POST.get("agreement_id") or "")
+            amount = Decimal(request.POST.get("amount") or "")
+        except (TypeError, ValueError, InvalidOperation):
+            return json_error("Укажите администратора, договор и корректную сумму", 422)
+        if amount <= 0:
+            return json_error("Сумма должна быть больше нуля", 422)
+        waybill = request.FILES.get("waybill")
+        if waybill is None:
+            return json_error("Файл накладной не передан (ожидается поле «waybill»)", 422)
+        try:
+            invoice = goods_invoice_svc.create_goods_invoice(
+                administrator_id=administrator_id, agreement_id=agreement_id, amount=amount,
+                waybill_data=waybill.read(), waybill_filename=waybill.name,
+                waybill_mime=waybill.content_type or "application/octet-stream",
+                created_by=request.token.user_id,
+            )
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(invoice, with_budget=True))
+
+
+class GoodsInvoiceDetailView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(
+                goods_invoice_svc.get_goods_invoice_or_404(invoice_id), with_budget=True))
+
+
+class GoodsInvoiceWaybillUrlView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        url = goods_invoice_svc.waybill_url(goods_invoice_svc.get_goods_invoice_or_404(invoice_id))
+        if url is None:
+            raise Http404("К записи не приложена накладная")
+        return {"url": url}
+
+
+class GoodsInvoicePaymentOrderView(ContractsView):
+    @write("POST", admin=False)
+    def post(self, request, invoice_id: int):
+        posting_number = (request.POST.get("posting_number") or "").strip()
+        if not posting_number:
+            return json_error("Укажите номер проводки", 422)
+        if len(posting_number) > 100:
+            return json_error("Номер проводки не длиннее 100 символов", 422)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return json_error("Файл не передан (ожидается поле «file»)", 422)
+        try:
+            invoice = goods_invoice_svc.record_payment(
+                invoice_id, posting_number=posting_number, data=upload.read(),
+                filename=upload.name, mime=upload.content_type or "application/octet-stream",
+                actor_id=request.token.user_id, is_elevated=request.token.is_elevated,
+            )
+        except PermissionError as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.GoodsInvoiceRead.model_validate(
+            goods_invoice_svc.serialize_goods_invoice(invoice))
+
+
+class GoodsInvoicePaymentOrderUrlView(ContractsView):
+    @read
+    def get(self, request, invoice_id: int):
+        url = goods_invoice_svc.payment_order_url(
+            goods_invoice_svc.get_goods_invoice_or_404(invoice_id))
+        if url is None:
+            raise Http404("К накладной не приложено платёжное поручение")
         return {"url": url}
 
 

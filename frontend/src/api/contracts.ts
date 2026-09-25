@@ -22,11 +22,14 @@ import type {
   CounterpartyFullCreatePayload,
   Country,
   Invoice,
+  LinkedRequest,
+  LinkedRequestDocuments,
   InvoiceStatus,
   AdvancePayment,
   AccountableFundsRequest,
   AdvanceReport,
   CompletionAct,
+  GoodsInvoice,
   ContractsWorkItem,
   ContractPayment,
   Program,
@@ -67,6 +70,8 @@ export interface AgreementListParams {
   program_id?: number;
   period_year?: number;
   status?: string;
+  /** По заявке конструктора «Запросы», по которой заведён документ. */
+  request_id?: number;
 }
 
 /** Те же фильтры, что у договоров (у бэкенда это тот же набор параметров). */
@@ -191,7 +196,8 @@ export const contractsApi = {
     budget_line_id: number;
     counterparty_id: number;
     amount: string;
-    payment_type: string;
+    /** Не передан — бэкенд выводит из аванса (предоплата/постоплата/поэтапно). */
+    payment_type?: string;
     direction?: string;
     kind?: string;
     contract_type?: string;
@@ -214,6 +220,9 @@ export const contractsApi = {
     currency?: string;
     signed_date?: string | null;
     status?: AgreementStatus;
+    /** Заявка «Запросов», по которой заключается договор (строка бюджета
+     *  должна совпадать — проверяет бэкенд). */
+    request_id?: number | null;
   }) => api.post<Agreement>(path('agreements'), data),
   updateAgreement: (id: number, data: Record<string, unknown>) =>
     api.patch<Agreement>(path(`agreements/${id}`), data),
@@ -259,6 +268,7 @@ export const contractsApi = {
     counterparty_id: number;
     amount: string;
     note?: string;
+    request_id?: number | null;
   }) => api.post<Invoice>(path('invoices'), data),
   updateInvoice: (id: number, data: Record<string, unknown>) =>
     api.patch<Invoice>(path(`invoices/${id}`), data),
@@ -355,4 +365,32 @@ export const contractsApi = {
   },
   getCompletionActUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/act-url`)),
   getCompletionActOrderUrl: (id: number) => api.get<{ url: string }>(path(`completion-acts/${id}/payment-order-url`)),
+
+  // ─── Заявки конструктора «Запросы» (прокси к apps.approvals) ───────────
+  /** Одобренные заявки со строкой бюджета — для выбора «по какой заявке». */
+  listLinkedRequests: () => api.get<LinkedRequest[]>(path('requests')),
+  getLinkedRequest: (id: number) => api.get<LinkedRequest>(path(`requests/${id}`)),
+  /** Договоры и счета, заведённые по заявке, — блок на её карточке. */
+  getLinkedRequestDocuments: (id: number) =>
+    api.get<LinkedRequestDocuments>(path(`requests/${id}/documents`)),
+
+  // ─── Товарные накладные ────────────────────────────────────────────────
+  listGoodsInvoices: (params?: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean }) =>
+    api.get<GoodsInvoice[]>(path('goods-invoices'), { params }),
+  listGoodsInvoicesPage: (params: { administrator_id?: number; agreement_id?: number; awaiting_payment?: boolean } & PaginationParams) =>
+    api.get<PaginatedResponse<GoodsInvoice>>(path('goods-invoices'), { params }),
+  getGoodsInvoice: (id: number) => api.get<GoodsInvoice>(path(`goods-invoices/${id}`)),
+  createGoodsInvoice: (administratorId: number, agreementId: number, amount: string, waybill: File) => {
+    const form = new FormData();
+    form.append('administrator_id', String(administratorId)); form.append('agreement_id', String(agreementId));
+    form.append('amount', amount); form.append('waybill', waybill);
+    return api.post<GoodsInvoice>(path('goods-invoices'), form);
+  },
+  submitGoodsInvoice: (id: number) => api.post<ApprovalProcess>(path(`goods-invoices/${id}/submit`)),
+  recordGoodsInvoice: (id: number, postingNumber: string, file: File) => {
+    const form = new FormData(); form.append('posting_number', postingNumber); form.append('file', file);
+    return api.post<GoodsInvoice>(path(`goods-invoices/${id}/payment-order`), form);
+  },
+  getGoodsInvoiceWaybillUrl: (id: number) => api.get<{ url: string }>(path(`goods-invoices/${id}/waybill-url`)),
+  getGoodsInvoiceOrderUrl: (id: number) => api.get<{ url: string }>(path(`goods-invoices/${id}/payment-order-url`)),
 };

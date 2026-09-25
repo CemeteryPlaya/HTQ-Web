@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, FileText, Plus, Receipt, Wallet } from 'lucide-react';
+import { Building2, FileText, Package, Plus, Receipt, Wallet } from 'lucide-react';
 
 import { contractsApi } from '@/api/contracts';
 import { ContractsShell } from '@/components/contracts/ContractsShell';
@@ -107,6 +107,10 @@ const ContractsOverview = () => {
     queryKey: ['contracts', 'completion-acts'],
     queryFn: () => contractsApi.listCompletionActs().then((response) => response.data),
   });
+  const { data: goodsInvoices, isLoading: goodsInvoicesLoading, isError: goodsInvoicesError } = useQuery({
+    queryKey: ['contracts', 'goods-invoices'],
+    queryFn: () => contractsApi.listGoodsInvoices().then((response) => response.data),
+  });
 
   // Totals are only meaningful within one currency; the overview deliberately
   // refuses to merge different currencies into a misleading single figure.
@@ -119,9 +123,10 @@ const ContractsOverview = () => {
     ...(advancePayments ?? []),
     ...(contractPayments ?? []),
     ...(completionActs ?? []),
+    ...(goodsInvoices ?? []),
   ].filter((payment) => payment.status === 'awaiting_accounting').length;
-  const paymentsLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading;
-  const paymentsError = advancePaymentsError || contractPaymentsError || completionActsError;
+  const paymentsLoading = advancePaymentsLoading || contractPaymentsLoading || completionActsLoading || goodsInvoicesLoading;
+  const paymentsError = advancePaymentsError || contractPaymentsError || completionActsError || goodsInvoicesError;
 
   return (
     <ContractsShell>
@@ -278,6 +283,15 @@ const ContractsOverview = () => {
             isLoading={completionActsLoading}
             to="/contracts/completion-acts"
             primaryAction={{ to: '/contracts/completion-acts/new', label: 'Создать' }}
+          />
+          <ModuleCard
+            icon={Package}
+            title="Товарные накладные"
+            description="Накладная с согласованием и последующим проведением бухгалтерией."
+            count={goodsInvoices?.length}
+            isLoading={goodsInvoicesLoading}
+            to="/contracts/goods-invoices"
+            primaryAction={{ to: '/contracts/goods-invoices/new', label: 'Создать' }}
           />
         </div>
       </section>

@@ -30,6 +30,10 @@ genuinely schemaless. Django's ``JSONField`` is ``jsonb`` on Postgres.
 from django.db import models
 from django.db.models.functions import Now
 
+# Сосед — только через interface (apps/core/tests/test_app_isolation.py).
+# Из signoff здесь берётся ровно один класс — абстрактная примесь.
+from apps.signoff import interface as signoff
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # Enumerations
@@ -228,8 +232,23 @@ class RequestFormTemplateVersion(models.Model):
 # Request instances
 # ─────────────────────────────────────────────────────────────────────────
 
-class RequestInstance(models.Model):
-    """A submitted form travelling through its workflow."""
+class RequestInstance(signoff.Approvable, models.Model):
+    """A submitted form travelling through its approval.
+
+    Согласует её ``apps.signoff`` — заявка зарегистрирована там десятым
+    предметным типом (``approval_hooks.py``), маршрут берётся по области
+    ``template:<id>``. Примесь ``Approvable`` добавляет ``approval_state`` —
+    ось СОГЛАСОВАНИЯ; ``status`` остаётся осью жизненного цикла заявки
+    (черновик / на рассмотрении / одобрена / отклонена / отменена /
+    возвращена) и двигается колбэками ``approval_hooks`` из транзакции
+    движка — та же пара осей, что у договора (``contracts/models.py``).
+
+    ``current_node_id`` и ``requires_admin_attention`` — наследие
+    собственного движка графов (``workflow_json``); новые заявки их не
+    заполняют, у старых они остаются историей.
+    """
+
+    SIGNOFF_SUBJECT_TYPE = "approvals.request"
 
     code = models.CharField(max_length=64, unique=True)
     template = models.ForeignKey(RequestFormTemplate, on_delete=models.CASCADE,
@@ -272,12 +291,13 @@ class RequestInstance(models.Model):
 
 
 class ApprovalAction(models.Model):
-    """One approver's slot on a workflow node — one row per assignee.
+    """One approver's slot on a workflow node — ИСТОРИЯ старого движка.
 
-    A row is created when the node opens (``action`` NULL = still waiting)
-    and stamped when that person acts. Keeping a row per assignee rather
-    than a single "current approver" is what makes parallel approval,
-    quorum rules and the audit trail all fall out of one table.
+    A row was created when a node of the legacy graph opened (``action``
+    NULL = still waiting) and stamped when that person acted. С переездом
+    согласования в ``apps.signoff`` новые строки не создаются: решения
+    живут в ``ApprovalTask``/``ApprovalEvent`` движка. Таблица остаётся,
+    чтобы у заявок, согласованных до переезда, не пропала лента решений.
     """
 
     request = models.ForeignKey(RequestInstance, on_delete=models.CASCADE,

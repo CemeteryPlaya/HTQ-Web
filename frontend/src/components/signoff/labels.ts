@@ -63,6 +63,8 @@ export const QUORUM_LABELS: Record<Quorum, string> = {
 export const APPROVER_KIND_LABELS: Record<ApproverKind, string> = {
   position: 'По HR-должности',
   initiator: 'Инициатор согласования',
+  users: 'Конкретные сотрудники',
+  subject: 'Назначает объект',
 };
 
 /** `[{value, label}]` → `{value: label}`. Enums приходят списком пар, а

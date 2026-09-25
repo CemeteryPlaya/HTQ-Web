@@ -3,6 +3,13 @@
 Самостоятельный справочник: карточка организации/ИП заводится один раз и
 живёт независимо от того, как устроены бюджеты. Договор просто на неё
 ссылается.
+
+Та же организация может работать у нас на объектах — тогда в модуле задач
+есть партнёр (``tasks.Contractor``) с ``counterparty_id`` этой карточки.
+Ссылка хранится ТАМ (партнёр — контрагент в роли исполнителя, а не
+наоборот), здесь — только подпись в ответе и заведение карточки «из
+партнёра». Модуль задач у компании может быть выключен, поэтому подпись
+деградирует, а не роняет реестр.
 """
 
 from __future__ import annotations
@@ -19,7 +26,30 @@ from apps.contracts.services.reference_service import (
     get_country_or_404,
     resolve_country_input,
 )
+from apps.core.services import ServiceDisabled
 from apps.signoff import interface as signoff
+from apps.tasks import interface as tasks
+from htqweb.fallback import fallback
+
+
+def attach_contractors(rows: list[Counterparty]) -> list[Counterparty]:
+    """Проставить каждой карточке связанного партнёра одним запросом.
+
+    Атрибутом на объект — по той же причине, что ``attach_projects``:
+    ``CounterpartyRead`` собирается из ORM-строки. Выключенный модуль задач
+    стоит бейджа, а не реестра: у компании без «Задач» контрагенты те же.
+    """
+    ids = [row.pk for row in rows]
+    try:
+        by_counterparty = tasks.get_contractors_by_counterparty(ids) if ids else {}
+    except ServiceDisabled as exc:
+        by_counterparty = fallback(
+            "contracts.counterparty.contractor_brief", {},
+            reason="модуль задач выключен — контрагенты без связанных партнёров",
+            expected=True, exc=exc)
+    for row in rows:
+        row.contractor = by_counterparty.get(row.pk)
+    return rows
 
 
 def list_counterparties(*, search: str | None = None, status: str | None = None,
@@ -70,7 +100,8 @@ def create_counterparty(*, bin_iin: str, name: str, country_id: int, vat: bool =
 def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = False,
                              contact_name: str = "", phone: str = "",
                              email: str = "", address: str = "",
-                             status: str | None = None) -> Counterparty:
+                             status: str | None = None,
+                             contractor_id: int | None = None) -> Counterparty:
     """Завести контрагента вместе со страной — одной транзакцией.
 
     ``country`` — это ``schemas.CountryInput``: либо ``id`` существующей
@@ -79,6 +110,12 @@ def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = Fa
     Транзакция здесь не формальность: самая частая ошибка при заведении —
     дубль БИН/ИИН, и без отката только что созданная страна осталась бы
     висеть после каждой такой неудачной попытки.
+
+    ``contractor_id`` — карточка заведена «из партнёра»: связь ставится в
+    той же транзакции. Не встала (у партнёра другой БИН/ИИН, он уже за
+    другим контрагентом) — откатывается и контрагент: человек нажимал
+    «завести из партнёра», и контрагент без связи был бы не тем, о чём
+    просили.
     """
     country_obj = resolve_country_input(country)
 
@@ -89,7 +126,14 @@ def create_counterparty_full(*, bin_iin: str, name: str, country, vat: bool = Fa
         fields["status"] = status
 
     with conflict_as(f"Контрагент с БИН/ИИН {bin_iin} уже есть в реестре"):
-        return Counterparty.objects.create(**fields)
+        row = Counterparty.objects.create(**fields)
+    if contractor_id is not None:
+        try:
+            row.contractor = tasks.link_contractor_to_counterparty(
+                contractor_id, row.pk)
+        except tasks.ContractorLinkConflict as exc:
+            raise ReferenceConflict(str(exc)) from exc
+    return row
 
 
 def update_counterparty(counterparty_id: int, **fields) -> Counterparty:
@@ -125,9 +169,19 @@ def submit_for_approval(counterparty_id: int, *, actor_id: int | None = None) ->
     )
 
 
+@transaction.atomic
 def delete_counterparty(counterparty_id: int) -> None:
     row = get_counterparty_or_404(counterparty_id)
     row.assert_editable()
     delete_protected(row,
                      "У контрагента есть договоры — переведите его в статус "
                      "inactive/blocked вместо удаления")
+    # Иначе у партнёра осталась бы ссылка в пустоту. Выключенный модуль
+    # задач удаление не блокирует: висячий id безвреден (партнёр покажет
+    # «контрагент не найден»), а запрет удалять из-за соседа — нет.
+    try:
+        tasks.unlink_counterparty(counterparty_id)
+    except ServiceDisabled as exc:
+        fallback("contracts.counterparty.unlink_contractor", None,
+                 reason="модуль задач выключен — ссылка партнёра не снята",
+                 expected=True, exc=exc, counterparty_id=counterparty_id)

@@ -542,15 +542,28 @@ Mounted at `/api/requests/`, even though the Django app label is
 `approvals` (`ApprovalsConfig.API_PREFIX = "api/requests/v1/"` —
 deliberate, see `apps/approvals/urls.py`'s docstring).
 
+**The approval engine here is `apps.signoff`, not this app.** `approvals`
+designs forms and keeps the register of submitted requests; deciding them is
+`signoff`'s job, exactly as it is for contracts. Consequences visible in the
+API: `RequestInstance` carries `approval_state` (the `signoff.Approvable`
+mixin) beside its own `status`; `POST /instances/{id}/submit/` returns a
+**signoff process card** (201), not the request; `/approve/`, `/reject/`,
+`/request-changes/`, `/cancel/`, `/recall/` and `/instances/batch-approve`
+are **gone** — use `/api/signoff/v1/tasks/{id}/decision`, `tasks/batch-decision`
+and `processes/{id}/{cancel,rework}`. Each template gets its own route in the
+scope `template:<id>`, so «Отпуск» and «Закуп» are approved by different
+people. `workflow_json` is no longer required when publishing a version and
+is not executed; `?box=inbox|done` is answered by signoff.
+
 | Endpoint                                                   | Method | Notes |
 |-------------------------------------------------------------|--------|-------|
-| `/api/requests/v1/instances/`                               | GET, POST |     |
-| `/api/requests/v1/instances/batch-approve`                  | POST   | Registered before the `<id>` routes |
-| `/api/requests/v1/instances/{id}/`                          | GET, PATCH | PATCH only while still a draft |
-| `/api/requests/v1/instances/{id}/submit/` … `/resubmit/`, `/approve/`, `/reject/`, `/request-changes/`, `/cancel/`, `/recall/` | POST | Workflow actions |
+| `/api/requests/v1/instances/`                               | GET, POST | `?box=inbox\|sent\|cc\|done` — inbox/done come from signoff |
+| `/api/requests/v1/instances/{id}/`                          | GET, PATCH | GET only for the **participants** — initiator, watcher, approver of any round, or a platform admin; anyone else gets **404** (403 would confirm the request exists). PATCH only while `approval_state` is `draft`/`rework` (the engine's lock, 409 with its reason) |
+| `/api/requests/v1/instances/{id}/submit/` and `/resubmit/` | POST | Validate the form (and its `budget_line_ref`s), then start a signoff process — **returns the process card (201)** |
+| `/api/requests/v1/instances/{id}/stage-values/`             | GET, PATCH | **Approver-filled fields** (see below). GET → `{keys, required_keys}`: what *this* user may fill in right now — non-empty only while a signoff stage with a `requirement_key` is active and waiting on them. PATCH `{values}` writes only those keys (foreign key or not your turn → 409 naming the reason), logs `stage_values_filled` |
 | `/api/requests/v1/templates/`                                | GET, POST | Form templates |
 | `/api/requests/v1/templates/{id}/`                            | GET, PATCH, DELETE |     |
-| `/api/requests/v1/templates/{id}/versions/`                   | POST   | Publish a version |
+| `/api/requests/v1/templates/{id}/versions/`                   | POST   | Publish a version — `schema_json` only; the route lives in signoff |
 | `/api/requests/v1/templates/{id}/versions/{version_id}`        | GET    | Read a version |
 | `/api/requests/v1/templates/{id}/activate/` / `/deactivate/`  | POST   |     |
 | `/api/requests/v1/templates/preview`                          | POST   | Registered before `{id}` routes |
@@ -565,8 +578,83 @@ deliberate, see `apps/approvals/urls.py`'s docstring).
 | `/api/requests/v1/reference-sources/{id}/rows/{row_id}`          | DELETE |     |
 | `/api/requests/v1/reference-sources/my-data-tables`              | GET    |     |
 | `/api/requests/v1/reference-sources/by-slug/{slug}/options`      | GET    |     |
-| `/api/requests/v1/stats/{overview,by-project,by-template,by-actor,heatmap}` | GET |  |
+| `/api/requests/v1/stats/mine`                                | GET | **Personal analytics — the caller's own requests only.** How many they filed (drafts counted apart, excluded from sums), for how much (`total_amount`, whose currency comes from the `contributes_to_total` money field's schema), a status and template breakdown, and **what they ordered**: line items rolled up out of every *repeatable* group — «what» is the row's first text column, «how much» the group's `summarize_keys` (or its first numeric column), «in what» its first dropdown; units are part of the grouping key, so «5 шт» and «3 кг» never add up. Read per the form **version** each request was filled on. There is deliberately **no parameter naming a user** — that is the whole access control. `?since=YYYY-MM-DD` narrows by submit date |
+| `/api/requests/v1/stats/{overview,by-project,by-template,by-actor,heatmap}` | GET | **admin.** Company-wide cuts. These used to have no gate at all — the page was hidden by role in the SPA, but the endpoints answered anyone, `by-actor` included (who filed how much, across the company) |
 | `/api/requests/v1/stream`                                      | GET    | SSE, see below |
+
+### Approver-filled fields — `filled_by: "approver"`
+
+A schema field may carry `"filled_by": "approver"`. The initiator never sees
+it and `submit` does not require it, however `required` it is: it is filled
+in *during* approval by the approver whose working stage is running — the
+buyer's supplier and agreed amount on a purchase request, which the initiator
+cannot know. `stage-values/` is the door; who may use it is decided by
+signoff (`pending_requirement_keys`: pending task on an **active** stage that
+has a `requirement_key`), so the CFO's stage — no requirement — cannot edit
+what the buyer wrote. A stage enforces the field through the engine:
+`requirement_key: "field:<key>"` makes `approve` a 409 («На этапе «…»
+сначала нужно: заполнить «Поставщик» в заявке») until the field is non-blank
+(`approval_hooks._check_requirement`). Reject and rework are not gated.
+
+A numeric field may also carry `must_equal: "<key>"` or
+`must_equal: "<group>.<key>"` — its value must equal that field's. The
+purchase template uses it for the one check that matters: the invoice is
+issued for exactly the amount that was agreed, or the «Счёт на оплату» stage
+will not close (409, naming both fields and both numbers). Checked wherever
+`required` is: at submit for initiator fields, at the stage for approver
+fields; only when **both** values are present (empty is `required`'s
+business); compared as numbers, since JSON brings amounts as both `1000` and
+`"1000.00"`. A rule that could never fire — a non-numeric field, a missing
+target, a field pointing at itself, or a target inside a repeatable group —
+is refused when the form version is published, not when the buyer hits it.
+
+### Widget `supplier_quotes` — the buyer's comparison sheet
+
+The table a buyer otherwise keeps in Excel: **rows** are the lines of a
+repeatable group (`items_field`), **columns** are suppliers the buyer adds,
+each cell a **unit** price. The value is
+`{suppliers: [{name, note, prices: []}], chosen}`; on every save the server
+appends the derived `totals`, `total` and `supplier_name`
+(`approvals/services/quotes.py`) — the chosen supplier's total is
+Σ price × quantity (`quantity_key`, one per row when absent). The client
+never sends those: money is approved against that number, so exactly one
+place may compute it, and a client-sent `total` is overwritten.
+
+`<key>.total` is then an ordinary money path (`FormSchema.paths`), so
+`must_equal` and `contributes_to_total` reach it without learning about the
+widget — that is how «invoice equals the chosen quote» is expressed. A stage
+requiring the table (`requirement_key: "field:<key>"`) gets the table's own
+answer about what is missing — one named supplier, prices for every line,
+the chosen one marked — rather than a generic "fill the field".
+
+A working stage usually wants one **block** — a non-repeatable `group`
+(`repeatable: false`, value is an object) — so the panel shows exactly that
+step's fields and nothing else; for a block, «filled» means its `required`
+sub-fields are non-blank. `GET stage-values/` also returns `task_id`,
+`stage_name`, `requires_attachment`, `requires_comment` and `file_id`, so the
+panel can attach the PDF (`tasks/{id}/attachment`) and close the step
+(`tasks/{id}/decision`) in one click — the engine still runs every gate.
+
+The supplier on a purchase request is deliberately **not** a `contracts`
+counterparty: a one-off purchase must not drag a registry card (BIN,
+approval) behind it — a block of name (required), BIN/IIN, contact.
+
+### Form widget `budget_line_ref` — the one door into `apps.contracts`
+
+A template field of type `budget_line_ref` («Строка бюджета (администратор →
+программа)») stores a single `budget_line_id` in `form_values_json`. The
+frontend control reads `GET /api/contracts/v1/budget-lines` directly (same
+list the agreement form uses, `budget_status == active` only) and renders the
+«Администратор → Программа» cascade; the backend never sees the cascade, only
+the id. On **submit** every filled ref is checked in one batch through
+`apps.contracts.interface.get_budget_lines_brief` — unknown line, closed
+budget or inactive administrator → 422 naming the field path (`rows.line` for
+a widget inside a repeatable group); `ServiceDisabled` is *not* swallowed
+there, so a form that carries the widget answers 503 `service_disabled` while
+`contracts` is off, and a form without it never touches `contracts` at all.
+The template's data table (`Управление данными`) shows the line as
+«Администратор — Программа (год, валюта)», degrading to «Строка бюджета #n»
+when `contracts` can't answer (`apps/approvals/services/budget_line_refs.py`).
 
 ### SSE — `GET /api/requests/v1/stream`
 
@@ -869,6 +957,18 @@ would mean approvers signed off on a document that is no longer in the card.
 Every path is registered in **both** the slashed and bare spelling
 (`APPEND_SLASH = False`). No frontend consumes this yet.
 
+**Purchase requests → documents.** `Agreement` and `Invoice` carry an optional
+`request_id` — the approved request of the form builder («Запросы») they
+fulfil, a plain integer (no cross-app FK). It is accepted on create and PATCH
+and enforced by `services/request_link.py`: the request must exist, be
+`approved`, carry a `budget_line_ref` value, and that value must equal the
+document's `budget_line_id` — otherwise 409 naming the request and the reason.
+Moving a linked document to another budget line is refused the same way. A
+successful link writes a `document_linked` event into the request's activity
+feed through `apps.approvals.interface.log_linked_document`. Documents without
+`request_id` never touch `approvals`; documents *with* one answer 503 while it
+is disabled. `?request_id=` filters `GET /agreements` and `GET /invoices`.
+
 | Endpoint                                          | Method | Notes                          |
 |---------------------------------------------------|--------|--------------------------------|
 | `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
@@ -893,6 +993,9 @@ Every path is registered in **both** the slashed and bare spelling
 | `/api/contracts/v1/agreements/{id}/status`       | POST   | Manual status change — validates the transition. Approval drives the same machine automatically |
 | `/api/contracts/v1/agreements/{id}/file`         | POST   | multipart, field `file` → stored via `apps.media_files.interface.store_file` |
 | `/api/contracts/v1/agreements/{id}/file-url`     | GET    | Signed URL for the stored scan |
+| `/api/contracts/v1/requests`                     | GET    | Approved requests of the form builder (`apps.approvals`) that carry a budget line — the picker for «по какой заявке». Proxy over `apps.approvals.interface.list_approved_requests`; 503 while `approvals` is off |
+| `/api/contracts/v1/requests/{id}`                | GET    | Request brief (`code`, `title`, `status`, `budget_line_id`, …) via `get_request_brief` |
+| `/api/contracts/v1/requests/{id}/documents`      | GET    | `{agreements, invoices}` created for that request — the «Документы по заявке» block on the request page |
 | `/api/contracts/v1/advance-payments`             | GET, POST | Предоплата по договору; создание разрешено только когда `agreement.approval_state=approved` |
 | `/api/contracts/v1/advance-payments/{id}`        | GET    | Карточка предоплаты |
 | `/api/contracts/v1/advance-payments/{id}/submit` | POST   | **→ approval.** Возвращает карточку процесса (201) |
@@ -1055,6 +1158,38 @@ is a budget quietly reaching final sign-off without financial control.
 Stages are **snapshotted onto the process at start**, so editing a route —
 or the subject — never disturbs approvals already in flight.
 
+**Scopes and approver kinds (added for the form builder).** A route may be
+limited to a *scope* inside its subject type (`ApprovalRoute.scope`, `""` =
+the whole type — how contracts still works). The domain app names the scope
+of an object (`Subject.scope_of`) and lists the scopes that exist
+(`Subject.scopes`); the form builder uses `template:<id>`, so «Отпуск» and
+«Закуп» get different routes for the same `RequestInstance` type. The active
+route is unique per `(subject_type, scope)`; `GET /routes/{id}` returns the
+`fields` and `approver_fields` of *its* scope for the editor. Besides
+`position` and `initiator`, a stage can now name approvers directly
+(`approver_kind: "users"` + `user_ids`, checked active at configuration) or
+ask the object itself (`"subject"` + `approver_key` — one of the keys the
+app declared in `Subject.approver_fields`; the engine calls
+`Subject.approvers(subject_id, key)` at start). A stage carries exactly the
+setting of its kind; anything else is 409 on save. `Subject.on_event` fires
+after commit (`stage_activated`, `task_decided`, and the final state) so the
+domain can push SSE or write its own feed without knowing engine internals.
+
+A stage has three gates on `approve`, none on reject/rework:
+`requires_attachment` (a PDF on the task), `requires_comment` (a non-blank
+comment) and **`requirement_key`** — something must be *done on the object*
+before the stage closes (a field filled in, a scan attached). The engine
+knows only the key: `Subject.requirement_fields(scope)` lists what an app
+can be asked for (`GET /subjects` and `GET /routes/{id}` expose them as
+`requirement_fields`; an unknown key is 409 on save), and
+`Subject.check_requirement(subject_id, key)` answers `None` (satisfied) or a
+human sentence that becomes the 409 body («На этапе «Поиск поставщика»
+сначала нужно: …»). The key is snapshotted into the process stage; process
+stages and inbox rows carry `requirement_label` so the person sees it before
+clicking. `signoff.interface.pending_requirement_keys(user_id, subject_type,
+subject_id)` tells a domain whose working stage is running right now — that
+is how `approvals` decides who may fill approver-filled fields.
+
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
 | `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and every state enum — process, stage, task, and the subject's own `approval_state` |
@@ -1069,7 +1204,8 @@ or the subject — never disturbs approvals already in flight.
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
 | `/api/signoff/v1/processes/{id}/rework`     | POST   | jwt   | `{comment?}` — return an **already decided** object for rework, the only way to unlock an `approved`/`rejected` row for editing. **Approver of that process or admin** (initiator deliberately excluded — that would override someone else's decision); 409 while the round is still running (use the `rework` decision or cancel instead), 409 if the object is already open. The process moves to state `rework`, keeps its original `finished_at`, and the rework is journalled as a `reopened` event |
-| `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you" |
+| `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks; per-task `{task_id, ok, error?}`, no shared transaction |
+| `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you". Each row carries `stage_order`/`stage_count` ("step 2 of 4") so a user who holds several consecutive stages — the buyer's checklist on a purchase request — can tell their tasks on one subject apart |
 | `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
 | `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
 

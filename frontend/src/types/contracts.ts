@@ -158,6 +158,9 @@ export interface Counterparty {
   status: CounterpartyStatus;
   /** Ось согласования — отдельно от `status`. См. Budget.approval_state. */
   approval_state: ApprovalState;
+  /** Та же организация в модуле задач — партнёр на объектах, если связан.
+   *  `null` и при выключенном модуле задач. */
+  contractor?: { id: number; name: string; status: string } | null;
   created_at: string;
   updated_at: string;
 }
@@ -226,9 +229,12 @@ export interface Agreement {
   retention_rate: string;
   retention_amount: string | null;
   start_date: string | null;
+  /** «Срок действия по»: после него новые оплаты по договору не заводятся. */
   end_date: string | null;
   term_comment: string;
   amount: string;
+  /** Позиции договора (ТЗ 9.2); у старых договоров может быть пусто. */
+  items?: AgreementItem[];
   /** Единственная предоплата по договору, если она создана. */
   advance_payment_id: number | null;
   /** Закрытая предоплата; исходную сумму договора не меняет. */
@@ -241,6 +247,7 @@ export interface Agreement {
   remaining_amount: string | null;
   currency: string;
   file_id: string | null;
+  /** «Дата договора» — по документу; входит в уникальность договора. */
   signed_date: string | null;
   status: AgreementStatus;
   /**
@@ -251,6 +258,9 @@ export interface Agreement {
    * и расторгнут по существу.
    */
   approval_state: ApprovalState;
+  /** Заявка конструктора «Запросы», по которой заключён договор; `null` —
+   *  договор без заявки. Карточка заявки — `contractsApi.getLinkedRequest`. */
+  request_id: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -303,9 +313,70 @@ export interface Invoice {
   status: InvoiceStatus;
   /** Ось согласования: отдельна от доменного статуса счёта. */
   approval_state: ApprovalState;
+  /** Заявка конструктора, по которой выставлен счёт (как у договора). */
+  request_id: number | null;
   created_by: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Заявка конструктора «Запросы» глазами договорного контура — ровно то, что
+ * отдаёт `apps.approvals.interface.get_request_brief` через прокси
+ * `/api/contracts/v1/requests`. Договор или счёт по заявке заводятся только
+ * на её `budget_line_id` — иначе 409 (`services/request_link.py`).
+ */
+export interface LinkedRequest {
+  id: number;
+  code: string;
+  title: string;
+  status: string;
+  initiator_id: number;
+  template_id: number;
+  template_name: string;
+  budget_line_id: number | null;
+  submitted_at: string | null;
+  finalized_at: string | null;
+}
+
+/** Позиция договора. `request_item_key` — строка заявки («items:3»); пусто —
+ *  позиция вписана вручную (договор без заявки). */
+export interface AgreementItem {
+  id: number;
+  line_no: number;
+  request_item_key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  /** `null` — у открытого договора суммы нет. */
+  amount: string | null;
+}
+
+/** Позиция в запросе на создание / правку договора. */
+export interface AgreementItemInput {
+  request_item_key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  amount: string | null;
+}
+
+/** Позиция заявки с остатком — строка «Плана закупок» в форме договора. */
+export interface LinkedRequestItem {
+  key: string;
+  name: string;
+  unit: string;
+  quantity: string;
+  /** Уже расписано по другим договорам этой заявки (кроме расторгнутых). */
+  contracted: string;
+  remaining: string;
+  /** Сумма из заявки, если шаблон её спрашивает; иначе `null`. */
+  amount: string | null;
+}
+
+export interface LinkedRequestDocuments {
+  agreements: Agreement[];
+  invoices: Invoice[];
 }
 
 /** Предоплата, оформляемая по уже согласованному договору. */
@@ -429,6 +500,30 @@ export interface CompletionAct {
   budget_overrun?: string | null;
 }
 
+export interface GoodsInvoice {
+  id: number;
+  administrator_id: number;
+  administrator_name: string;
+  agreement_id: number;
+  agreement_number: string;
+  agreement_name: string;
+  counterparty_name: string;
+  amount: string;
+  currency: string;
+  waybill_file_id: string | null;
+  status: 'draft' | 'on_review' | 'awaiting_accounting' | 'closed';
+  approval_state: ApprovalState;
+  payment_order_file_id: string | null;
+  posting_number: string;
+  paid_by: number | null;
+  paid_at: string | null;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  /** См. `AdvancePayment.budget_overrun`. */
+  budget_overrun?: string | null;
+}
+
 /** A current action in the contracts-only personal queue. */
 export interface ContractsWorkItem {
   document_type: string;
@@ -502,6 +597,8 @@ export interface CounterpartyFullCreatePayload {
   email: string;
   address: string;
   status?: CounterpartyStatus;
+  /** Карточка заведена «из партнёра» — связь ставится той же транзакцией. */
+  contractor_id?: number | null;
 }
 
 /** Одна строка заявки: программа и её собственная сумма. */

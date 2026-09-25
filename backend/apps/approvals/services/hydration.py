@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
+from apps.contracts import interface as contracts_interface
 from apps.core.services import ServiceDisabled
 from apps.hr import interface as hr_interface
 from apps.users import interface as users_interface
@@ -59,6 +60,21 @@ def department_briefs(department_ids: Iterable[int | None]) -> dict[int, dict]:
     rows = _safe(lambda: hr_interface.get_departments_brief(ids),
                  "hr.get_departments_brief", [])
     return {row["id"]: row for row in rows if row.get("id") is not None}
+
+
+def budget_line_briefs(line_ids: Iterable[int | None]) -> dict[int, dict]:
+    """Строки бюджета для подписей виджета ``budget_line_ref``.
+
+    Деградирует, как и остальные: это подпись в таблице данных, а не
+    проверка. Проверка при отправке живёт в ``budget_line_refs`` и
+    ``ServiceDisabled`` НЕ глушит — см. докстринг там.
+    """
+    ids = sorted({int(lid) for lid in line_ids if lid is not None})
+    if not ids:
+        return {}
+    rows = _safe(lambda: contracts_interface.get_budget_lines_brief(ids),
+                 "contracts.get_budget_lines_brief", [])
+    return {row["id"]: row for row in rows}
 
 
 def user_name(briefs: dict[int, dict], user_id: int | None) -> str | None:

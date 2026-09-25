@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from apps.contracts.models import (
     AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus, CompletionAct, ContractPayment,
+    GoodsInvoice,
 )
 from apps.contracts.services import budget_calc
 from apps.contracts.services.reference_service import conflict_as
@@ -86,7 +87,10 @@ def total_paid_amount_for_agreement(agreement_id: int) -> Decimal:
     acts = (CompletionAct.objects
             .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
             .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments + acts
+    invoices = (GoodsInvoice.objects
+               .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+               .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts + invoices
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:
@@ -140,6 +144,9 @@ def list_advance_payments(*, agreement_id: int | None = None,
 @transaction.atomic
 def create_advance_payment(*, agreement_id: int, amount, created_by: int | None = None):
     agreement = _approved_agreement(agreement_id)
+    expired = agreement.term_expired_message()
+    if expired:
+        raise AdvancePaymentRuleViolation(expired)
     if AdvancePayment.objects.filter(agreement_id=agreement.pk).exists():
         raise AdvancePaymentRuleViolation(
             f"По договору {agreement.number} уже создана предоплата"
@@ -158,7 +165,8 @@ def submit_for_approval(payment_id: int, *, actor_id: int | None = None) -> dict
     _approved_agreement(payment.agreement_id)
     if payment.status != AdvancePaymentStatus.DRAFT:
         raise AdvancePaymentRuleViolation(
-            "На согласование можно отправить только предоплату в статусе «Черновик»"
+            f"На согласование отправляется черновик; предоплата в статусе "
+            f"«{payment.get_status_display()}»"
         )
     if payment.approval_state not in signoff.ApprovalState.editable():
         payment.assert_editable()

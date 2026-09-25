@@ -16,8 +16,20 @@ from apps.approvals.models import (
     RequestFormTemplate, RequestFormTemplateVersion, RequestInstance,
     RequestStatus,
 )
+# Тесты из проверки изоляции исключены: маршрут заявки живёт в signoff, и
+# заводить его напрямую — единственный способ не гонять HTTP ради каждого
+# теста; согласующие — настоящие пользователи, потому что движок проверяет
+# их активность через apps.users.interface.
+from apps.signoff.models import (
+    ApprovalRoute, ApprovalRouteStage, ApprovalTask, ApproverKind, Quorum,
+    StageState, TaskState,
+)
+from apps.users.models import User, UserStatus
 
 BASE = "/api/requests/v1"
+SIGNOFF = "/api/signoff/v1"
+SUBJECT = RequestInstance.SIGNOFF_SUBJECT_TYPE
+APPROVER = 11
 
 COMPANY = "t-approvals-gate"
 
@@ -46,7 +58,8 @@ def auth(tok: str | None = None) -> dict:
     # (all-mode), «посторонний» 42 (стрелки cancel/act), 77 и 5 (чужой /
     # приглашённый читатель data-table в test_reference_api.py) — иначе 403
     # даёт гейт, а не проверка, которую заявляет тест. 9 — admin_token().
-    gate_company(COMPANY, {
+    tok = tok or token()
+    grants = {
         7: {"approvals": "write"},
         9: {"approvals": "full"},
         11: {"approvals": "write"},
@@ -54,8 +67,16 @@ def auth(tok: str | None = None) -> dict:
         42: {"approvals": "write"},
         77: {"approvals": "write"},
         5: {"approvals": "write"},
-    })
-    return {"HTTP_AUTHORIZATION": f"Bearer {tok or token()}",
+    }
+    # Предъявитель токена, которого нет в списке выше, — тоже рядовой
+    # сотрудник: тесты единого движка (слияние pre-production) ходят от id,
+    # заведённых по ходу теста (учётка = pk должности, инициатор 900001,
+    # ME/OTHER личной статистики), и 403 от гейта подменил бы проверку,
+    # ради которой они написаны. Гейт модуля проверяют test_gate_roles.py.
+    user_id = pyjwt.decode(tok, options={"verify_signature": False})["user_id"]
+    grants.setdefault(user_id, {"approvals": "write"})
+    gate_company(COMPANY, grants)
+    return {"HTTP_AUTHORIZATION": f"Bearer {tok}",
             "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
@@ -93,10 +114,42 @@ def simple_schema() -> dict:
     return {"fields": [{"key": "amount", "type": "number", "label": "Сумма"}]}
 
 
+def ensure_user(user_id: int, *, active: bool = True) -> User:
+    """Учётная запись с ЗАДАННЫМ id — тесты адресуют согласующих числами
+    (``APPROVER = 11``), а signoff требует, чтобы за числом стоял активный
+    пользователь."""
+    user, _ = User.objects.get_or_create(
+        pk=user_id,
+        defaults={"username": f"user{user_id}", "email": f"user{user_id}@htq.test",
+                  "password": "x",
+                  "status": UserStatus.ACTIVE if active else UserStatus.SUSPENDED},
+    )
+    return user
+
+
+def route_for_template(template: RequestFormTemplate, *approver_ids: int,
+                       quorum: str = Quorum.ALL, name: str = "Согласование") -> ApprovalRoute:
+    """Маршрут signoff в области шаблона: один этап, согласующие поимённо."""
+    ids = list(approver_ids) or [APPROVER]
+    for user_id in ids:
+        ensure_user(user_id)
+    route = ApprovalRoute.objects.create(
+        subject_type=SUBJECT, scope=f"template:{template.pk}", name=name)
+    ApprovalRouteStage.objects.create(
+        route=route, order=1, name=name, quorum=quorum,
+        approver_kind=ApproverKind.USERS, user_ids=ids)
+    return route
+
+
 def make_template(*, slug: str = "otpusk", publish: bool = True,
                   workflow: dict | None = None, schema: dict | None = None,
                   config: dict | None = None,
-                  project=None) -> RequestFormTemplate:
+                  project=None, route: bool = True,
+                  approvers: tuple[int, ...] = (APPROVER,),
+                  quorum: str = Quorum.ALL) -> RequestFormTemplate:
+    """Шаблон с опубликованной версией и — по умолчанию — маршрутом signoff
+    на одного согласующего ``APPROVER``. ``route=False`` — шаблон без
+    маршрута (отправка даст 409 «не настроен маршрут»)."""
     template = RequestFormTemplate.objects.create(
         name="Отпуск", slug=slug, project=project,
         config_json=config or {},
@@ -105,11 +158,30 @@ def make_template(*, slug: str = "otpusk", publish: bool = True,
         version = RequestFormTemplateVersion.objects.create(
             template=template, version=1,
             schema_json=schema or simple_schema(),
-            workflow_json=workflow or simple_workflow(),
+            workflow_json=workflow or {},
         )
         template.current_version_id = version.id
         template.save(update_fields=["current_version_id"])
+    if route:
+        route_for_template(template, *approvers, quorum=quorum)
     return template
+
+
+def pending_task(instance: RequestInstance, user_id: int) -> ApprovalTask:
+    """Открытый запрос signoff к согласующему по этой заявке."""
+    return ApprovalTask.objects.get(
+        stage__process__subject_type=SUBJECT,
+        stage__process__subject_id=instance.pk,
+        stage__state=StageState.ACTIVE, user_id=user_id, state=TaskState.PENDING)
+
+
+def decide(client: Client, instance: RequestInstance, user_id: int,
+           decision: str = "approve", comment: str = ""):
+    """Решение согласующего через HTTP signoff — так, как ходит фронтенд."""
+    task = pending_task(instance, user_id)
+    return post_json(client, f"{SIGNOFF}/tasks/{task.pk}/decision",
+                     {"decision": decision, "comment": comment},
+                     **auth(token(user_id=user_id, sub=str(user_id))))
 
 
 def make_instance(template: RequestFormTemplate, *, initiator_id: int = 7,

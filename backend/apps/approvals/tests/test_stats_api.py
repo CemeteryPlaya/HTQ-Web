@@ -13,7 +13,11 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
-from .helpers import BASE, admin_token, auth, post_json, simple_workflow, token
+from apps.approvals.models import RequestFormTemplate, RequestInstance
+
+from .helpers import (
+    APPROVER, BASE, admin_token, auth, decide, post_json, route_for_template, token,
+)
 
 # 21:30 UTC — в Алматы уже 02:30 следующего дня: «сегодня» в поясе платформы
 # и в UTC здесь разные дни.
@@ -23,10 +27,6 @@ _SCHEMA = {"fields": [
     {"type": "money", "key": "amount", "label": "Amount", "required": True,
      "contributes_to_total": True},
 ]}
-_WF_AUTO_APPROVE = {  # routes straight to end_approved -- no approval node
-    "nodes": [{"id": "s", "type": "start"}, {"id": "ok", "type": "end_approved"}],
-    "edges": [{"from": "s", "to": "ok"}],
-}
 
 
 def _setup(client: Client, project_name: str):
@@ -37,8 +37,10 @@ def _setup(client: Client, project_name: str):
                     {"name": f"Tpl-{project_name}", "project_id": pid},
                     **auth(admin_token())).json()["id"]
     post_json(client, f"{BASE}/templates/{tid}/versions/",
-             {"schema_json": _SCHEMA, "workflow_json": _WF_AUTO_APPROVE},
-             **auth(admin_token()))
+             {"schema_json": _SCHEMA}, **auth(admin_token()))
+    # Автоодобрения без единого этапа у signoff нет: маршрут из одного
+    # согласующего, который сразу и решает.
+    route_for_template(RequestFormTemplate.objects.get(pk=tid), APPROVER)
     return pid, tid
 
 
@@ -47,7 +49,9 @@ def _submit_approved(client: Client, tid: int, amount: float):
                   {"template_id": tid, "form_values": {"amount": amount}}, **auth())
     iid = r.json()["id"]
     r = post_json(client, f"{BASE}/instances/{iid}/submit/", {}, **auth())
-    assert r.json()["status"] == "approved"
+    assert r.json()["state"] == "pending", r.content
+    decide(client, RequestInstance.objects.get(pk=iid), APPROVER)
+    assert RequestInstance.objects.get(pk=iid).status == "approved"
 
 
 # ── auth ────────────────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ def test_overview_counts_finalized():
 
 @pytest.mark.django_db
 def test_overview_invalid_date_is_422():
-    resp = Client().get(f"{BASE}/stats/overview?from=not-a-date", **auth())
+    resp = Client().get(f"{BASE}/stats/overview?from=not-a-date", **auth(admin_token()))
     assert resp.status_code == 422
 
 
@@ -100,14 +104,14 @@ def test_by_project_plan_vs_fact():
 
 @pytest.mark.django_db
 def test_by_project_unknown_returns_null_project():
-    resp = Client().get(f"{BASE}/stats/by-project?project_id=999999", **auth())
+    resp = Client().get(f"{BASE}/stats/by-project?project_id=999999", **auth(admin_token()))
     assert resp.status_code == 200
     assert resp.json() == {"project": None}
 
 
 @pytest.mark.django_db
 def test_by_project_missing_param_is_422():
-    resp = Client().get(f"{BASE}/stats/by-project", **auth())
+    resp = Client().get(f"{BASE}/stats/by-project", **auth(admin_token()))
     assert resp.status_code == 422
 
 
@@ -151,17 +155,16 @@ def test_by_actor_approver_role():
     tid = post_json(client, f"{BASE}/templates/", {"name": "ApproverFlow"},
                     **auth(admin_token())).json()["id"]
     schema = {"fields": [{"key": "amount", "type": "number", "label": "Сумма"}]}
-    wf = simple_workflow(approver_id=11)
     post_json(client, f"{BASE}/templates/{tid}/versions/",
-             {"schema_json": schema, "workflow_json": wf}, **auth(admin_token()))
+             {"schema_json": schema}, **auth(admin_token()))
+    route_for_template(RequestFormTemplate.objects.get(pk=tid), 11)
 
     iid = post_json(client, f"{BASE}/instances/",
                     {"template_id": tid, "form_values": {"amount": 5}},
                     **auth()).json()["id"]
     post_json(client, f"{BASE}/instances/{iid}/submit/", {}, **auth())
-    resp = post_json(client, f"{BASE}/instances/{iid}/approve/", {"comment": ""},
-                     **auth(token(user_id=11, sub="11")))
-    assert resp.json()["status"] == "approved"
+    resp = decide(client, RequestInstance.objects.get(pk=iid), 11)
+    assert resp.json()["state"] == "approved"
 
     resp = client.get(f"{BASE}/stats/by-actor?role=approver", **auth(admin_token()))
     assert resp.status_code == 200
@@ -170,7 +173,7 @@ def test_by_actor_approver_role():
 
 @pytest.mark.django_db
 def test_by_actor_invalid_role_is_422():
-    resp = Client().get(f"{BASE}/stats/by-actor?role=bogus", **auth())
+    resp = Client().get(f"{BASE}/stats/by-actor?role=bogus", **auth(admin_token()))
     assert resp.status_code == 422
 
 

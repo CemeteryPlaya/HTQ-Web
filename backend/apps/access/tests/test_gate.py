@@ -1653,7 +1653,13 @@ FORMER_ADMIN_HANDLES = {
             "_update_home_section", "home_sections_reorder", "home_items_collection",
             "home_items_reorder", "_update_home_item", "_delete_home_item"},
     "approvals": {"_create_project", "_delete_project", "create_source",
-                  "update_source", "delete_source", "add_row", "delete_row"},
+                  "update_source", "delete_source", "add_row", "delete_row",
+                  # Общие разрезы статистики: admin=True пришёл из
+                  # pre-production («кто сколько подал» по всей компании
+                  # отвечал любому) уже после блока L — при слиянии встали
+                  # под approvals:admin, как остальные бывшие admin=True.
+                  "stats_overview", "stats_by_project", "stats_by_template",
+                  "stats_by_actor", "stats_heatmap"},
 }
 
 _LEVEL_RANK = {"none": 0, "read": 1, "write": 2, "admin": 3}

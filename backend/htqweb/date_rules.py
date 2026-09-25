@@ -54,6 +54,9 @@ DATE_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("from_date", "to_date", "Дата начала участия позже даты окончания"),
     ("valid_from", "valid_to", MESSAGE),
     ("date_from", "date_to", MESSAGE),
+    # Договор (apps.contracts): «Срок действия по» не раньше даты договора.
+    ("signed_date", "end_date",
+     "Срок действия договора раньше даты договора"),
 )
 
 

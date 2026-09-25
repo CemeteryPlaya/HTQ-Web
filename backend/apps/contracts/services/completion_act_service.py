@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from apps.contracts.models import (
     Administrator, AdvancePayment, AdvancePaymentStatus, Agreement, AgreementStatus,
-    CompletionAct, ContractPayment,
+    CompletionAct, ContractPayment, GoodsInvoice,
 )
 from apps.contracts.services import budget_calc
 from apps.media_files import interface as media
@@ -75,7 +75,10 @@ def paid_amount_for_agreement(agreement_id: int) -> Decimal:
     acts = (CompletionAct.objects
             .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
             .aggregate(total=Sum("amount"))["total"] or ZERO)
-    return advance + payments + acts
+    invoices = (GoodsInvoice.objects
+               .filter(agreement_id=agreement_id, status=AdvancePaymentStatus.CLOSED)
+               .aggregate(total=Sum("amount"))["total"] or ZERO)
+    return advance + payments + acts + invoices
 
 
 def check_agreement_capacity(agreement: Agreement, amount) -> None:
@@ -155,7 +158,9 @@ def submit_for_approval(act_id: int, *, actor_id: int | None = None) -> dict:
     act = get_completion_act_or_404(act_id, lock=True)
     agreement = _eligible_agreement(act.agreement_id)
     if act.status != AdvancePaymentStatus.DRAFT:
-        raise CompletionActRuleViolation("На согласование можно отправить только черновик акта")
+        raise CompletionActRuleViolation(
+            f"На согласование отправляется черновик; акт в статусе "
+            f"«{act.get_status_display()}»")
     check_agreement_capacity(agreement, act.amount)
     if act.approval_state not in signoff.ApprovalState.editable():
         act.assert_editable()

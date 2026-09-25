@@ -12,8 +12,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ACCESS_TOKEN_KEY } from '@/lib/auth/profileStorage';
 import type { AccessMe } from '@/types/access';
 
 import { useHRLevel } from './useHRLevel';
@@ -44,6 +45,13 @@ const baseMe = (overrides: Partial<AccessMe>): AccessMe => ({
 
 beforeEach(() => {
   getMe.mockReset();
+  // usePermissions без токена права не спрашивает вовсе (аноним на лендинге),
+  // поэтому тестам вошедшего нужен токен — как в usePermissions.test.tsx.
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, 'access-token');
+});
+
+afterEach(() => {
+  window.localStorage.clear();
 });
 
 describe('useHRLevel (только hasPerm для contracts)', () => {

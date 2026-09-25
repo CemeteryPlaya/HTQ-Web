@@ -17,6 +17,7 @@ from apps.contracts.models import (
     Administrator,
     AdvancePayment,
     Agreement,
+    AgreementItem,
     Budget,
     BudgetLine,
     Counterparty,
@@ -120,14 +121,30 @@ def make_counterparty(*, country: Country | None = None, bin_iin: str = "1234567
 
 def make_agreement(*, line: BudgetLine, counterparty: Counterparty | None = None,
                    number: str = "Д-001", amount="400000.00",
-                   status: str = "signed", **over) -> Agreement:
+                   status: str = "signed", with_item: bool = True,
+                   **over) -> Agreement:
+    """Договор с ОДНОЙ позицией на всю сумму.
+
+    Позиция по умолчанию есть, потому что без неё договор не уходит на
+    согласование (``agreement_items.assert_ready_for_approval``), а тестам
+    про бюджет, оплаты и маршруты позиции безразличны. ``with_item=False``
+    — для тестов про сами позиции.
+    """
     budget = line.budget
-    return Agreement.objects.create(
+    agreement = Agreement.objects.create(
         number=number, name="Поставка ноутбуков", budget_line=line,
         counterparty=counterparty or make_counterparty(country=budget.administrator.country),
         amount=Decimal(amount), payment_type="postpayment",
         currency=budget.currency, status=status, **over,
     )
+    if with_item:
+        AgreementItem.objects.create(
+            agreement=agreement, line_no=1, name="Ноутбук", unit="шт",
+            quantity=Decimal("1"),
+            amount=agreement.amount if agreement.has_fixed_amount and agreement.amount > 0
+            else None,
+        )
+    return agreement
 
 
 def make_invoice(*, line: BudgetLine, counterparty: Counterparty | None = None,

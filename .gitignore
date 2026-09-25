@@ -108,6 +108,9 @@ requirementsNDPP.txt
 # Локальные скрипты с боевыми доступами (тот же случай, что .env выше).
 db-vps.ps1
 .playwright-mcp
+# Бэкапы .env — внутри те же секреты, что и в самом .env
+.env.bak-*
+.env.bak
 memory.md
 prod-hotfix.patch
 prod-hotfix.patch

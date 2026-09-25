@@ -138,7 +138,9 @@ with warnings.catch_warnings():
 
     class VersionPublish(BaseModel):
         schema_json: dict
-        workflow_json: dict
+        # Маршрут живёт в signoff (по области шаблона), а не в версии:
+        # поле оставлено необязательным ради старых клиентов и истории.
+        workflow_json: dict = Field(default_factory=dict)
 
     class VersionResponse(BaseModel):
         id: int
@@ -153,7 +155,7 @@ with warnings.catch_warnings():
 
     class PreviewRequest(BaseModel):
         schema_json: dict
-        workflow_json: dict
+        workflow_json: dict = Field(default_factory=dict)
 
 
 class PreviewResponse(BaseModel):
@@ -177,13 +179,52 @@ class InstanceUpdate(BaseModel):
     form_values: dict | None = None
 
 
-class ActionRequest(BaseModel):
-    comment: str = Field("", max_length=4000)
+class MyStatsItem(BaseModel):
+    """Позиция из повторяемых групп: что, в чём и сколько."""
+    name: str
+    unit: str = ""
+    quantity: str
+    requests: int
 
 
-class BatchActionRequest(BaseModel):
-    ids: list[int]
-    comment: str = ""
+class MyStatsTemplate(BaseModel):
+    template_id: int | None = None
+    name: str = ""
+    count: int
+    amount: str
+
+
+class MyStatsRead(BaseModel):
+    """Личная сводка. Пользователь в ответе не назван намеренно: вьюха
+    отдаёт статистику ТОЛЬКО вызывающего, и параметра «чья» здесь нет."""
+    submitted: int
+    drafts: int
+    amount: str
+    currency: str = ""
+    by_status: dict[str, dict] = Field(default_factory=dict)
+    by_template: list[MyStatsTemplate] = Field(default_factory=list)
+    items: list[MyStatsItem] = Field(default_factory=list)
+
+
+class StageValuesRead(BaseModel):
+    """Рабочий шаг пользователя по заявке: что заполнить и чем закрыть."""
+    keys: list[str]
+    required_keys: list[str]
+    # Задача signoff на его активном этапе — чтобы закрыть шаг из панели —
+    # и чего этап ждёт от решения (документ, пояснение).
+    task_id: int | None = None
+    stage_name: str = ""
+    requires_attachment: bool = False
+    requires_comment: bool = False
+    file_id: str | None = None
+    # Подписанная ссылка и имя приложенного документа: человек должен
+    # увидеть, ЧТО приложено, а не только что оно есть.
+    file_url: str | None = None
+    file_name: str = ""
+
+
+class StageValuesUpdate(BaseModel):
+    values: dict
 
 
 class InstanceResponse(BaseModel):
@@ -195,6 +236,9 @@ class InstanceResponse(BaseModel):
     initiator_id: int
     title: str
     status: str
+    # Ось согласования (примесь signoff.Approvable): draft/pending/approved/
+    # rejected/rework. ``status`` — доменная ось заявки; см. модель.
+    approval_state: str = "draft"
     current_node_id: str | None = None
     form_values_json: dict
     total_amount: Decimal | None = None

@@ -1,7 +1,10 @@
-/** /requests/templates/:id/editor — Lark-style 4-step template builder:
- *  1 Basic Info · 2 Form Design · 3 Process Design · 4 More, with Preview +
- *  Publish. Basic Info autosaves (debounced) to the template; Form/Process are
- *  published as an immutable version. */
+/** /requests/templates/:id/editor — 4-step template builder:
+ *  1 Basic Info · 2 Form Design · 3 Маршрут · 4 More, with Preview + Publish.
+ *  Basic Info autosaves (debounced) to the template; the FORM is published as
+ *  an immutable version.
+ *
+ *  Маршрут согласования версией не публикуется: он живёт в `apps.signoff`, в
+ *  области этого шаблона, и правится независимо (см. TemplateRoutePanel). */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, Eye, Loader2 } from 'lucide-react';
@@ -24,16 +27,12 @@ import { BasicInfoStep, type BasicInfoValue } from '@/features/requests/componen
 import { FormBuilder } from '@/features/requests/components/FormBuilder';
 import { MoreStep } from '@/features/requests/components/MoreStep';
 import { FormRenderer } from '@/features/requests/components/FormRenderer';
-import { WorkflowBuilder } from '@/features/requests/components/WorkflowBuilder';
+import { TemplateRoutePanel } from '@/features/requests/components/TemplateRoutePanel';
 import { QK, useTemplate, useTemplateVersion } from '@/features/requests/hooks';
-import type { FormSchema, WorkflowGraph } from '@/features/requests/types';
+import type { FormSchema } from '@/features/requests/types';
 import { useTranslation } from 'react-i18next';
 
 const EMPTY_SCHEMA: FormSchema = { fields: [] };
-const EMPTY_WF: WorkflowGraph = {
-  nodes: [{ id: 'n_start', type: 'start' }, { id: 'n_end', type: 'end_approved' }],
-  edges: [{ from: 'n_start', to: 'n_end' }],
-};
 
 const STEPS = [
   { key: 'basic', labelKey: 'requests.editor.tabBasic' },
@@ -56,7 +55,6 @@ export default function TemplateEditorPage() {
   const [step, setStep] = useState<StepKey>('basic');
   const [basic, setBasic] = useState<BasicInfoValue | null>(null);
   const [schema, setSchema] = useState<FormSchema>(EMPTY_SCHEMA);
-  const [workflow, setWorkflow] = useState<WorkflowGraph>(EMPTY_WF);
   const [preview, setPreview] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
 
@@ -77,11 +75,10 @@ export default function TemplateEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tpl.data?.id]);
 
-  // Hydrate form + workflow from the published version.
+  // Hydrate the form from the published version (маршрут — в signoff).
   useEffect(() => {
     if (currentVersion.data) {
       setSchema(currentVersion.data.schema_json ?? EMPTY_SCHEMA);
-      setWorkflow(currentVersion.data.workflow_json ?? EMPTY_WF);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentVersion.data?.id]);
@@ -114,7 +111,7 @@ export default function TemplateEditorPage() {
 
   const qc = useQueryClient();
   const publish = useMutation({
-    mutationFn: () => requestsApi.templates.publishVersion(templateId, schema, workflow),
+    mutationFn: () => requestsApi.templates.publishVersion(templateId, schema),
     onSuccess: (v) => {
       qc.invalidateQueries({ queryKey: QK.template(templateId) });
       toast.success(t('requests.editor.published', { version: v.version }));
@@ -179,7 +176,9 @@ export default function TemplateEditorPage() {
         <CardContent className="py-6">
           {step === 'basic' && <BasicInfoStep value={basic} onChange={patchBasic} createdBy={tpl.data.created_by} />}
           {step === 'form' && <FormBuilder schema={schema} onChange={setSchema} />}
-          {step === 'process' && <WorkflowBuilder graph={workflow} onChange={setWorkflow} />}
+          {step === 'process' && (
+            <TemplateRoutePanel templateId={templateId} templateName={basic.name} />
+          )}
           {step === 'more' && (
             <MoreStep
               value={basic.config.settings ?? {}}

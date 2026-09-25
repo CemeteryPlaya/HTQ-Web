@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 import { accessApi } from '@/api/access';
+import { getAccessToken } from '@/lib/auth/profileStorage';
 import {
   depthFor,
   hasDepth,
@@ -91,9 +92,15 @@ const EMPTY: PermissionMap = {};
 const EMPTY_DEPTH: DepthMap = {};
 
 export function usePermissions(): Permissions {
+  // Без токена запрос не уходит: у анонима прав нет по определению, а
+  // `/access/v1/me` ответил бы 401, который клиент трактует как «сессия
+  // протухла» и уводит на /login. Хук стоит в Header, то есть и на публичном
+  // лендинге, — гость на главной оказывался на форме входа.
+  const isLoggedIn = Boolean(getAccessToken());
   const { data, isLoading, isError, refetch } = useQuery<AccessMe>({
     queryKey: ['access', 'me'],
     queryFn: () => accessApi.getMe(),
+    enabled: isLoggedIn,
     // Тот же горизонт, что у useHRLevel: права меняются редко, а запрос
     // висит на каждой защищённой странице.
     staleTime: 5 * 60 * 1000,

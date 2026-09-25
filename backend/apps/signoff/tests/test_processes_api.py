@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from apps.signoff.models import ApprovalState, ProcessState, Quorum
+from apps.signoff.models import (
+    ApprovalState, ApprovalTask, ProcessState, Quorum, StageState, TaskState,
+)
 from apps.signoff.services import engine
 from apps.signoff.tests.helpers import (
     BASE,
@@ -202,6 +204,39 @@ def test_inbox_shows_only_what_awaits_the_caller_right_now(client):
     # У второго очередь ещё не наступила — запрос в БД есть, но показывать
     # его как «ждёт вас» нельзя: до него может и не дойти.
     assert client.get(f"{BASE}/tasks/mine", **auth(user_token(b))).json() == []
+
+
+def test_inbox_tells_where_the_step_sits_in_the_route(client):
+    """Один человек на трёх этапах подряд — чек-лист закупщика. Без «этап 2
+    из 4» его три задачи по одной заявке неотличимы друг от друга, и не
+    видно, что дело движется."""
+    buyer, cfo = make_user("buyer"), make_user("cfo")
+    doc = make_doc("Закуп кабеля")
+    make_route([
+        (1, "Поиск поставщика", Quorum.ALL, [buyer.pk]),
+        (2, "Условия", Quorum.ALL, [buyer.pk]),
+        (3, "Счёт", Quorum.ALL, [buyer.pk]),
+        (4, "CFO", Quorum.ALL, [cfo.pk]),
+    ])
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+
+    def where():
+        (row,) = client.get(f"{BASE}/tasks/mine", **auth(user_token(buyer))).json()
+        return row["stage_order"], row["stage_count"], row["stage_name"]
+
+    def step_done():
+        # Запросы на ВСЕ этапы заведены при запуске; открыт для решения
+        # только тот, чей этап активен — его и закрываем.
+        task = ApprovalTask.objects.get(stage__process=process, user_id=buyer.pk,
+                                        state=TaskState.PENDING,
+                                        stage__state=StageState.ACTIVE)
+        engine.act(task_id=task.pk, actor_id=buyer.pk, decision=engine.APPROVE)
+
+    assert where() == (1, 4, "Поиск поставщика")
+    step_done()
+    assert where() == (2, 4, "Условия")
+    step_done()
+    assert where() == (3, 4, "Счёт")
 
 
 def test_inbox_empties_once_the_stage_is_decided(client):

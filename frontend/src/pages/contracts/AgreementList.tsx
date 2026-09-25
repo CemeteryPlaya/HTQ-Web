@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { formatAmount } from '@/components/contracts/format';
 import { contractsApi } from '@/api/contracts';
@@ -63,8 +64,10 @@ const AgreementList = () => {
   // добавлении статуса список молча показывал бы сырой код.
   const statusLabel = (value: AgreementStatus) =>
     enums?.agreement_status.find((option) => option.value === value)?.label ?? value;
+  // «Тип оплаты» у заказчика — «стандартный / открытый» (`contract_type`), а
+  // не предоплата/постоплата: та выводится из аванса и в реестр не идёт.
   const paymentLabel = (value: string) =>
-    enums?.payment_type.find((option) => option.value === value)?.label ?? value;
+    enums?.contract_type?.find((option) => option.value === value)?.label ?? value;
   const rows = data?.items ?? [];
   const pagination = data?.pagination;
   const hasSearch = search.trim().length > 0;
@@ -154,7 +157,7 @@ const AgreementList = () => {
                     {formatAmount(row.amount)} {row.currency}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {paymentLabel(row.payment_type)}
+                    {paymentLabel(row.contract_type)}
                   </TableCell>
                   <TableCell>
                     <Badge variant={STATUS_VARIANTS[row.status]}>
@@ -167,6 +170,11 @@ const AgreementList = () => {
                       subjectId={row.id}
                       state={row.approval_state}
                       submit={contractsApi.submitAgreement}
+                      blockedReason={draftOnlySubmitBlock(
+                        row.status,
+                        statusLabel(row.status),
+                        'договор',
+                      )}
                       // Отправка переводит договор в on_review, а он уже
                       // занимает бюджет — остаток бюджетных строк меняется
                       // тем же действием.

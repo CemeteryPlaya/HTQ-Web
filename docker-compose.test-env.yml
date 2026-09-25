@@ -51,7 +51,9 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.dev
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
-  # Доверенные origin'ы для CSRF в django-admin: адреса стенда через запятую.
+  # Домены, с которых принимается форма входа в /django-admin/ (со схемой,
+  # через запятую). За Cloudflare/nginx запрос доезжает до Django по http, а
+  # Origin у браузера https — без этого списка админка отдаёт 403 CSRF.
   # PUBLIC_BASE_URL сюда НЕ добавлять — он объявлен ниже пустым литералом, и
   # причина там же; повторный ключ в YAML роняет парсинг всего файла.
   # См. «CSRF за прокси» в backend/htqweb/settings/base.py.
@@ -312,6 +314,15 @@ services:
       # то есть на сам контейнер фронта, и сигналинг конференции не
       # находит SFU. Имя сервиса резолвится в docker-сети.
       VITE_SFU_WS_TARGET: "ws://sfu:4443"
+      # Та же ловушка, что у SFU строкой выше, и её тоже не видно по симптому:
+      # без этих двух Vite берёт дефолты из vite.config.ts — 127.0.0.1:3002 и
+      # 127.0.0.1:9090, — а внутри контейнера фронта 127.0.0.1 это САМ фронт.
+      # /grafana и /prometheus отдают 502, в логах Vite «ECONNREFUSED
+      # 127.0.0.1:9090». Адресуем по именам сервисов и КОНТЕЙНЕРНЫМ портам:
+      # host-порты (3002 у Grafana) в docker-сети не при чём. Перебивает и
+      # frontend/.env — process.env в loadEnv применяется последним.
+      VITE_GRAFANA_TARGET: "http://grafana:3000"
+      VITE_PROMETHEUS_TARGET: "http://prometheus:9090"
     depends_on:
       backend-web:
         condition: service_healthy

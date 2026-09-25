@@ -13,10 +13,11 @@
 ``float``-арифметике теряет копейки, а на них сходятся сверки.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Optional
 
+from django.utils import timezone
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -24,6 +25,7 @@ from pydantic import (
     EmailStr,
     Field,
     TypeAdapter,
+    field_validator,
     model_validator,
 )
 
@@ -464,6 +466,19 @@ class CounterpartyFullCreate(BaseModel):
     email: BlankableEmail = Field("", max_length=254)
     address: str = ""
     status: Optional[CounterpartyStatus] = None
+    # Карточка заведена «из партнёра» (``apps.tasks``): реквизиты форма
+    # подтянула оттуда, а здесь — чтобы связать пару в той же транзакции.
+    # Сорвётся связь — не будет и контрагента, а не полдела.
+    contractor_id: Optional[int] = None
+
+
+class CounterpartyContractorRef(BaseModel):
+    """Партнёр из модуля задач, связанный с контрагентом, — для бейджа
+    «работает на объектах» со ссылкой на карточку партнёра."""
+
+    id: int
+    name: str
+    status: str
 
 
 class CounterpartyRead(BaseModel):
@@ -486,11 +501,65 @@ class CounterpartyRead(BaseModel):
     address: str
     status: str
     approval_state: str
+    #: Та же организация в модуле задач (партнёр на объектах), если связана.
+    #: Кладётся атрибутом ``counterparty_service.attach_contractors``.
+    contractor: Optional[CounterpartyContractorRef] = None
     created_at: datetime
     updated_at: datetime
 
 
 # ── Agreement ───────────────────────────────────────────────────────────
+
+#: Границы «Даты договора» из ТЗ 9.2: не раньше 2020 года (старше в системе
+#: заводить нечего — это опечатка в годе) и не дальше месяца вперёд
+#: (договор, датированный будущим, заводят заранее, но не на год).
+CONTRACT_DATE_MIN = date(2020, 1, 1)
+CONTRACT_DATE_AHEAD = timedelta(days=30)
+
+
+def _check_contract_date(value: date | None) -> date | None:
+    if value is None:
+        return value
+    if value < CONTRACT_DATE_MIN:
+        raise ValueError(
+            f"Дата договора не может быть раньше {CONTRACT_DATE_MIN:%d.%m.%Y}")
+    latest = timezone.localdate() + CONTRACT_DATE_AHEAD
+    if value > latest:
+        raise ValueError(
+            f"Дата договора не может быть позже {latest:%d.%m.%Y} "
+            f"(сегодня + {CONTRACT_DATE_AHEAD.days} дней)")
+    return value
+
+
+class AgreementItemInput(BaseModel):
+    """Позиция договора во входе формы. ``request_item_key`` — строка
+    заявки, по которой заключён договор (наименование и единицу сервер
+    возьмёт из неё); пусто — позиция вписана вручную."""
+
+    request_item_key: str = Field("", max_length=100)
+    name: str = Field("", max_length=500)
+    unit: str = Field("", max_length=50)
+    quantity: Decimal = Field(..., gt=0, max_digits=15, decimal_places=3)
+    # Пусто — только у открытого договора; у стандартного сервис требует
+    # сумму каждой позиции (BR-033).
+    amount: Optional[Decimal] = Field(None, gt=0, max_digits=18, decimal_places=2)
+
+    @model_validator(mode="after")
+    def _named(self) -> "AgreementItemInput":
+        if not self.request_item_key and not self.name.strip():
+            raise ValueError("Укажите наименование позиции")
+        return self
+
+
+class AgreementItemRead(BaseModel):
+    id: int
+    line_no: int
+    request_item_key: str
+    name: str
+    unit: str
+    quantity: Decimal
+    amount: Optional[Decimal]
+
 
 class AgreementCreate(OrderedDates):
     # Ссылка на СТРОКУ бюджета, а не на бюджет: деньги выделены программе.
@@ -502,7 +571,10 @@ class AgreementCreate(OrderedDates):
     # Доля аванса — 0..1, а НЕ проценты: та же граница, что и в
     # CheckConstraint модели, чтобы «70» вместо «0.7» не доходило до БД.
     advance_share: Decimal = Field(Decimal("0"), ge=0, le=1)
-    payment_type: PaymentType = PaymentType.POSTPAYMENT
+    # Не передан — выводится из аванса
+    # (``agreement_service.payment_type_from_advance``): форма его больше не
+    # спрашивает, «тип оплаты» для людей — это ``contract_type``.
+    payment_type: Optional[PaymentType] = None
     direction: AgreementDirection = AgreementDirection.EXPENSE
     kind: AgreementKind = AgreementKind.WORKS_SERVICES
     contract_type: AgreementType = AgreementType.STANDARD
@@ -523,8 +595,19 @@ class AgreementCreate(OrderedDates):
     end_date: Optional[date] = None
     term_comment: str = Field("", max_length=255)
     currency: str = Field("KZT", min_length=3, max_length=3)
-    signed_date: Optional[date] = None
+    # «Дата договора» (по документу). Обязательна, но не прислана — сегодня,
+    # как в ТЗ «по умолчанию»: без неё не проверить уникальность договора.
+    signed_date: date = Field(default_factory=timezone.localdate)
     status: Optional[AgreementStatus] = None
+    # Заявка конструктора «Запросы», по которой заключается договор.
+    # Проверяется на сервере: одобрена и под ту же строку бюджета
+    # (``services/request_link.py``).
+    request_id: Optional[int] = None
+    # Позиции. Могут прийти пустыми — черновик сохраняется и без них; на
+    # согласование договор без позиций не уйдёт (``agreement_items``).
+    items: list[AgreementItemInput] = Field(default_factory=list, max_length=200)
+
+    _contract_date = field_validator("signed_date")(_check_contract_date)
 
 
 class AgreementUpdate(OrderedDates):
@@ -561,6 +644,11 @@ class AgreementUpdate(OrderedDates):
     term_comment: Optional[str] = Field(None, max_length=255)
     currency: Optional[str] = Field(None, min_length=3, max_length=3)
     signed_date: Optional[date] = None
+    request_id: Optional[int] = None
+    # Полный новый список позиций; не прислан — позиции не трогаются.
+    items: Optional[list[AgreementItemInput]] = Field(None, max_length=200)
+
+    _contract_date = field_validator("signed_date")(_check_contract_date)
 
 
 class AgreementStatusChange(BaseModel):
@@ -623,6 +711,12 @@ class AgreementRead(BaseModel):
     signed_date: Optional[date]
     status: str
     approval_state: str
+    # Заявка конструктора, по которой заключён договор; ``None`` — договор
+    # заведён без заявки. Карточку заявки фронтенд берёт отдельно
+    # (``GET /contracts/requests/{id}``), чтобы список не ходил в approvals
+    # на каждую строку.
+    request_id: Optional[int] = None
+    items: list[AgreementItemRead] = []
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
@@ -640,6 +734,8 @@ class InvoiceCreate(BaseModel):
     budget_line_id: int
     counterparty_id: int
     amount: Decimal = Field(..., gt=0)
+    # Заявка конструктора, по которой выставляется счёт (как у договора).
+    request_id: Optional[int] = None
     # Дата самого счёта (не записи в платформу) — нужна отчёту о движении
     # денег. Необязательна, как и в книге заказчика.
     document_date: Optional[date] = None
@@ -655,11 +751,46 @@ class InvoiceUpdate(BaseModel):
     budget_line_id: Optional[int] = None
     counterparty_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
+    request_id: Optional[int] = None
     document_date: Optional[date] = None
 
 
 class InvoiceStatusChange(BaseModel):
     status: InvoiceStatus
+
+
+class LinkedRequestRead(BaseModel):
+    """Карточка заявки конструктора «Запросы» — ровно то, что отдаёт
+    ``apps.approvals.interface.get_request_brief``."""
+
+    id: int
+    code: str
+    title: str
+    status: str
+    initiator_id: int
+    template_id: int
+    template_name: str
+    budget_line_id: Optional[int]
+    submitted_at: Optional[datetime]
+    finalized_at: Optional[datetime]
+
+
+class LinkedRequestItemRead(BaseModel):
+    """Позиция заявки с остатком к законтрактованию — строка «Плана закупок»
+    в форме договора (``agreement_items.request_items``)."""
+
+    key: str
+    name: str
+    unit: str
+    quantity: Decimal
+    contracted: Decimal
+    remaining: Decimal
+    amount: Optional[Decimal]
+
+
+class LinkedRequestDocumentsRead(BaseModel):
+    agreements: list["AgreementRead"]
+    invoices: list["InvoiceRead"]
 
 
 class InvoiceRead(BaseModel):
@@ -686,6 +817,7 @@ class InvoiceRead(BaseModel):
     file_id: Optional[str]
     status: str
     approval_state: str
+    request_id: Optional[int] = None
     document_date: Optional[date]
     created_by: Optional[int]
     created_at: datetime
@@ -809,6 +941,30 @@ class CompletionActRead(BaseModel):
     amount: Decimal
     currency: str
     act_file_id: Optional[str]
+    status: str
+    approval_state: str
+    payment_order_file_id: Optional[str]
+    posting_number: str
+    paid_by: Optional[int]
+    paid_at: Optional[datetime]
+    created_by: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+    # См. ``AdvancePaymentRead.budget_overrun``.
+    budget_overrun: Optional[Decimal] = None
+
+
+class GoodsInvoiceRead(BaseModel):
+    id: int
+    administrator_id: int
+    administrator_name: str
+    agreement_id: int
+    agreement_number: str
+    agreement_name: str
+    counterparty_name: str
+    amount: Decimal
+    currency: str
+    waybill_file_id: Optional[str]
     status: str
     approval_state: str
     payment_order_file_id: Optional[str]

@@ -67,8 +67,12 @@ export const ServicesSection = () => {
           </p>
         </div>
 
-        {/* Services Tabs / Swipe Track */}
-        <div className="flex lg:grid lg:grid-cols-5 gap-3 sm:gap-4 overflow-x-auto snap-x scrollbar-none pb-3 lg:pb-0 mb-8 lg:mb-12">
+        {/* Services Tabs / Swipe Track.
+            overflow-x-auto нужен только мобильному свайпу: на lg это сетка, и
+            прокрутка там обрезала активную карточку (lg:scale-105 + ring-2 +
+            тень) — у крайних вкладок внешний край выходил плоским. На мобильном
+            обрезку кольца компенсирует внутренний отступ p-1 с обратным -m-1. */}
+        <div className="flex lg:grid lg:grid-cols-5 gap-3 sm:gap-4 overflow-x-auto lg:overflow-visible snap-x scrollbar-none px-1 -mx-1 pt-1 -mt-1 pb-3 mb-8 lg:px-0 lg:mx-0 lg:pt-0 lg:mt-0 lg:pb-0 lg:mb-12">
           {displayedServices.map((service, index) => {
             const Icon = iconMap[service.iconName];
             return (

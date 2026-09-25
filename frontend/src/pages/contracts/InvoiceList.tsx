@@ -21,6 +21,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatAmount } from '@/components/contracts/format';
+import { draftOnlySubmitBlock } from '@/components/contracts/submitBlock';
 import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { contractsApi } from '@/api/contracts';
 import type { InvoiceStatus } from '@/types/contracts';
@@ -155,6 +156,11 @@ const InvoiceList = () => {
                       subjectId={row.id}
                       state={row.approval_state}
                       submit={contractsApi.submitInvoice}
+                      blockedReason={draftOnlySubmitBlock(
+                        row.status,
+                        statusLabel(row.status),
+                        'счёт',
+                      )}
                       // На момент отправки счёт ещё не уменьшает остаток;
                       // после решения карточка согласования обновит бюджет.
                       invalidate={[['contracts', 'invoices']]}

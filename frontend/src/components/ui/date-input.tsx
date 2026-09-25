@@ -95,6 +95,10 @@ export const DateInput: React.FC<DateInputProps> = ({
   disabled,
   readOnly,
   id,
+  // Границы — только для календаря: текстовое поле их не понимает, а
+  // проверку набранного руками всё равно делает форма.
+  min,
+  max,
   ...rest
 }) => {
   const [text, setText] = React.useState(() => fromIsoDate(value));
@@ -145,6 +149,8 @@ export const DateInput: React.FC<DateInputProps> = ({
         aria-hidden
         className="pointer-events-none absolute h-0 w-0 opacity-0"
         value={value}
+        min={min}
+        max={max}
         onChange={(event) => apply(fromIsoDate(event.target.value))}
       />
       <button
