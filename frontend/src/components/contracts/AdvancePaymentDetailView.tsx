@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { FileCheck2 } from 'lucide-react';
 
 import { contractsApi } from '@/api/contracts';
+import { BudgetOverrunNotice } from '@/components/contracts/BudgetOverrunNotice';
 import { DetailSkeleton, Field } from '@/components/contracts/detail';
 import { formatMoment, formatMoney } from '@/components/contracts/format';
 import { Badge } from '@/components/ui/badge';
@@ -58,6 +59,7 @@ export default function AdvancePaymentDetailView({ id }: Props) {
             {formatMoney(payment.amount, payment.currency)}
           </p>
         </section>
+        <BudgetOverrunNotice overrun={payment.budget_overrun} currency={payment.currency} />
         <section>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             По договору

@@ -436,3 +436,27 @@ def test_blank_trailing_rows_are_ignored(tmp_path):
 
     assert report.rows_read == 1
     assert Agreement.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_same_code_under_two_administrators_is_two_programs(tmp_path):
+    # Коды программ у финансистов свои у каждого проекта: 112 у офиса —
+    # «Строительство МСЭС», у ВАрваринского — «ЦПУ». Ключ по одному коду
+    # слил бы их в одну программу.
+    path = build_book(tmp_path, budget_rows=[
+        ["Офис", "112 Строительство МСЭС Б.Момышулы", 1000, "KZT"],
+        ["ВАрваринское", "112 Центральный пункт управления", 2000, "KZT"],
+    ], registry_rows=[
+        registry_row(admin="Офис", code="112", program="МСЭС", number="A", lark="1"),
+        registry_row(admin="ВАрваринское", code="112", program="ЦПУ", number="B", lark="2"),
+    ])
+
+    cf.run_import(path)
+
+    assert Program.objects.filter(code="112").count() == 2
+    lines = {a.budget_line.budget.administrator.project_name: a.budget_line
+             for a in Agreement.objects.select_related("budget_line__program",
+                                                      "budget_line__budget__administrator")}
+    assert lines["Офис"].program.name == "Строительство МСЭС Б.Момышулы"
+    assert lines["ВАрваринское"].program.name == "Центральный пункт управления"
+    assert lines["ВАрваринское"].amount == Decimal("2000.00")

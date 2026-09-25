@@ -217,8 +217,14 @@ const AgreementEditForm = ({ agreement, lines, counterparties, enums }: FormProp
 
   const selectedLine = lines.find((row) => String(row.id) === lineId);
 
+  // Занимает ли договор бюджет СВОЕЙ СУММОЙ в текущем статусе. Статус на этой
+  // форме не меняется, поэтому берётся как есть. Открытый договор суммой
+  // бюджет не занимает никогда — его расход считается оплатами (как и в
+  // `budget_calc` на бэкенде), — поэтому ни «своей суммы в законтрактованном»,
+  // ни проверки суммы против остатка у него нет.
   const committingStatuses = enums.committing_statuses;
-  const willCommit = committingStatuses.includes(agreement.status);
+  const willCommit =
+    committingStatuses.includes(agreement.status) && agreement.contract_type !== 'framework';
 
   const ownOnLine =
     willCommit && String(agreement.budget_line_id) === lineId

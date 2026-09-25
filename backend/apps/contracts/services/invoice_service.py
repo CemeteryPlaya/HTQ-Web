@@ -232,6 +232,7 @@ def serialize_invoice(invoice: Invoice) -> dict:
         "file_id": invoice.file_id,
         "status": invoice.status,
         "approval_state": invoice.approval_state,
+        "document_date": invoice.document_date,
         "created_by": invoice.created_by,
         "created_at": invoice.created_at,
         "updated_at": invoice.updated_at,
@@ -240,7 +241,8 @@ def serialize_invoice(invoice: Invoice) -> dict:
 
 @transaction.atomic
 def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
-                   amount, note: str = "", created_by: int | None = None) -> Invoice:
+                   amount, note: str = "", document_date=None,
+                   created_by: int | None = None) -> Invoice:
     line = _lock_line(budget_line_id)
     counterparty = get_counterparty_or_404(counterparty_id)
     _validate_context(line, counterparty)
@@ -257,7 +259,8 @@ def create_invoice(*, name: str, budget_line_id: int, counterparty_id: int,
     return Invoice.objects.create(
         name=name, note=note, budget_line=line, counterparty=counterparty,
         amount=amount, currency=line.budget.currency,
-        status=InvoiceStatus.DRAFT, created_by=created_by,
+        status=InvoiceStatus.DRAFT, document_date=document_date,
+        created_by=created_by,
     )
 
 
