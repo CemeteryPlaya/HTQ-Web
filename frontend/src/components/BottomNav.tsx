@@ -39,6 +39,8 @@ export const BottomNav = () => {
         isHr: permissions.atLeast('hr', 'read'),
         hasTasks: permissions.atLeast('tasks', 'read'),
         hasDepartment: Boolean(activeProfile.department),
+        hasMessenger: permissions.atLeast('messenger', 'read'),
+        hasMail: permissions.atLeast('mail', 'read'),
     });
 
     // Профиль — не раздел навигации, а точка входа в личный кабинет, поэтому

@@ -38,6 +38,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.cms.models import ConferenceInvite
+from apps.tasks import interface as tasks_interface
 from htqweb.authn.jwt import issue_guest_token
 
 log = logging.getLogger(__name__)
@@ -165,6 +166,90 @@ def issue_guest_access(invite: ConferenceInvite, *, display_name: str) -> dict:
         # без него интерфейс откатился бы на язык браузера при входе в комнату.
         "locale": normalize_locale(invite.locale),
     }
+
+
+def _manages_all_invites(token, resolution=None) -> bool:
+    """Суперпользователь или ``cms:admin`` — управляет любыми ссылками.
+
+    ``resolution`` — роли, уже посчитанные гейтом ``api_view`` для этого
+    запроса (``request.access_resolution``); ``None`` — посчитать самим.
+    """
+    from apps.access import interface as access
+    from htqweb.tenancy.context import current_company_or_none
+
+    if token.is_superuser:
+        return True
+    return access.permission_level(token, "cms", current_company_or_none(),
+                                   resolution=resolution) == "admin"
+
+
+def _is_meeting_organizer(token, room_id: str) -> bool:
+    """Вызывающий — ``creator_id`` календарного события комнаты.
+
+    Выключенный у компании ``tasks`` не роняет проверку: условие просто
+    ложно (одна запись FALLBACK на вызов, поэтому список зовёт её один раз).
+    """
+    from apps.core.services import ServiceDisabled
+    from htqweb.fallback import fallback
+
+    try:
+        event = tasks_interface.get_conference_event_for_room(room_id)
+    except ServiceDisabled as exc:
+        # Предусмотренная деградация (как conference.access.calendar_unavailable):
+        # календарь выключен — организатора не узнать, остаются автор ссылки
+        # и cms:admin. expected=True — strict режим её не роняет.
+        event = fallback("cms.invites.calendar_unavailable", None,
+                         reason="календарь недоступен — организатор встречи не определён",
+                         expected=True, exc=exc)
+    return bool(event) and event.get("creator_id") == token.user_id
+
+
+def may_manage_invites(token, room_id: str, invite: ConferenceInvite | None = None, *,
+                       resolution=None) -> bool:
+    """Управлять ссылками встречи: организатор события, автор ссылки или cms:admin.
+
+    Блок L, спека §7. До этой проверки список ссылок комнаты (с токенами
+    входа), отзыв и рассылка были доступны любому вошедшему. Организатор —
+    creator_id календарного события комнаты; комнаты без события (кнопка
+    «Создать комнату») обслуживает автор ссылки. Выключенный у компании
+    tasks не роняет проверку: условие организатора просто ложно.
+
+    Для одной ссылки (отзыв, рассылка). Список ссылок комнаты фильтруется
+    ``manageable_invites`` — там права и календарь считаются один раз на
+    запрос, а не на каждую ссылку.
+    """
+    if _manages_all_invites(token, resolution):
+        return True
+    if token.user_id is None:
+        # Без user_id не с чем сравнивать автора и организатора: ссылка
+        # без автора (``created_by_id=None``) не должна совпасть с «никем».
+        return False
+    if invite is not None and invite.created_by_id == token.user_id:
+        return True
+    return _is_meeting_organizer(token, room_id)
+
+
+def manageable_invites(token, room_id: str, invites, *, resolution=None) -> list[ConferenceInvite]:
+    """Ссылки комнаты ``room_id``, которыми вызывающий вправе управлять.
+
+    Те же правила, что ``may_manage_invites``, но для списка ОДНОЙ комнаты:
+    уровень ``cms`` и календарное событие комнаты — общие для всех ссылок, и
+    считать их на каждую строку значило бы N расчётов ролей, N походов в
+    календарь и (при выключенном ``tasks``) N записей FALLBACK (финальное
+    ревью блока L, M-5). Календарь спрашивается, только если в списке есть
+    чужая ссылка — свои автор видит и без него. Порядок строк сохраняется.
+    """
+    invites = list(invites)
+    if not invites:
+        return []
+    if _manages_all_invites(token, resolution):
+        return invites
+    if token.user_id is None:
+        return []
+    own = [inv for inv in invites if inv.created_by_id == token.user_id]
+    if len(own) == len(invites):
+        return invites
+    return invites if _is_meeting_organizer(token, room_id) else own
 
 
 def revoke(invite_id: int) -> ConferenceInvite:

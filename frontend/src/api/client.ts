@@ -21,6 +21,7 @@ import {
 import { apiPath } from '@/api/endpoints';
 import { emitServiceDisabled } from '@/lib/serviceUnavailableBus';
 import i18next from '@/i18n';
+import { toast } from 'sonner';
 
 // ---------------------------------------------------------------------------
 // Конфигурация
@@ -44,6 +45,12 @@ const AUTH_ENDPOINTS = [
   apiPath('users', 'token/'),
   apiPath('users', 'register/'),
 ];
+
+/**
+ * Метка на ошибке 403 `company_archived`: тост уже показан интерцептором
+ * ниже. `reportApiError` (`lib/apiError.ts`) проверяет её и не дублирует тост.
+ */
+type ArchivedReportedError = { archivedReported: true };
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -121,6 +128,26 @@ async function doTokenRefresh(): Promise<string> {
   setAuthTokens({ access: nextAccess, refresh: res?.data?.refresh });
   client.defaults.headers.common['Authorization'] = `Bearer ${nextAccess}`;
   return nextAccess;
+}
+
+/**
+ * Обменять refresh-токен на новый access — ОДИН запрос на всех: если обмен уже
+ * идёт (параллельные 401 интерцептора или восстановление сессии в
+ * RequireAuth), вызывающий ждёт тот же промис, а не шлёт второй.
+ *
+ * Это единственная точка обмена в приложении; интерцептор ниже и
+ * `lib/auth/sessionRestore.ts` ходят через неё.
+ */
+export function refreshAccessToken(): Promise<string> {
+  if (_isRefreshing && _refreshPromise) {
+    return _refreshPromise;
+  }
+  _isRefreshing = true;
+  _refreshPromise = doTokenRefresh().finally(() => {
+    _isRefreshing = false;
+    _refreshPromise = null;
+  });
+  return _refreshPromise;
 }
 
 /**
@@ -249,14 +276,8 @@ client.interceptors.response.use(
       }
 
       // Запускаем единственный refresh-запрос
-      _isRefreshing = true;
-      _refreshPromise = doTokenRefresh().finally(() => {
-        _isRefreshing = false;
-        _refreshPromise = null;
-      });
-
       try {
-        const newToken = await _refreshPromise;
+        const newToken = await refreshAccessToken();
         const retryConfig = {
           ...config,
           headers: { ...config.headers, Authorization: `Bearer ${newToken}` },
@@ -266,6 +287,21 @@ client.interceptors.response.use(
         console.error('[api] Не удалось обновить токен — выполняем выход', refreshError);
         forceLogout();
         return Promise.reject(refreshError);
+      }
+    }
+
+    // ── 403 company_archived: запись в архивную компанию (спека архива §7.2) ──
+    // Не устаревшие claims: обновлять токен и повторять бессмысленно — сервер
+    // ответит тем же. Тост вместо молчаливого отказа.
+    if (status === 403) {
+      const data = error.response?.data as { code?: string } | undefined;
+      if (data?.code === 'company_archived') {
+        toast.error(i18next.t('companies.archiveMode.writeRefused',
+          'Нельзя изменить: компания в архиве — только чтение'));
+        // Помечаем, что тост уже показан здесь: большинство вызывающих ловят
+        // ошибку через `reportApiError` (`lib/apiError.ts`), у которой на 403
+        // свой текст сервера — без метки пользователь увидел бы тост дважды.
+        return Promise.reject(Object.assign(error, { archivedReported: true } satisfies ArchivedReportedError));
       }
     }
 

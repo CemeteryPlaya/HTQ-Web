@@ -56,3 +56,40 @@ def test_token_of_one_company_is_rejected_on_another(user, companies):
                           HTTP_X_HTQ_COMPANY="htq-uz")
     assert denied.status_code == 403
     assert denied.json() == {"detail": "Forbidden"}
+
+
+# ── Хост по псевдониму (блок I.2, задача 4) ────────────────────────────────
+#
+# Метка хоста сопоставляется со слагом РОВНО в одном месте — в
+# CompanyContextMiddleware; выпуск токена (apps.users.views.
+# _company_slug_for_token) и сверка claim в api_view читают уже
+# request.company["slug"]. Эти два теста сторожат, чтобы так и осталось:
+# стоит кому-то взять метку из заголовка напрямую, и на htq.<домен> токен
+# выйдет на компанию «htq», которой нет.
+
+
+@pytest.mark.django_db
+def test_login_on_alias_host_issues_token_for_the_slug(user):
+    htq = Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                                 kind=CompanyKind.CONSTRUCTION, subdomain="htq")
+    CompanyMembership.objects.create(user_id=user.id, company=htq, is_default=True)
+
+    resp = Client().post("/api/users/v1/token/", data={
+        "email": "ivan@htq.kz", "password": "pw",
+    }, content_type="application/json", HTTP_X_HTQ_COMPANY="htq")
+
+    assert resp.status_code == 200, resp.content
+    assert decode_token(resp.json()["access"]).company == "hi-tech-qazaqstan"
+
+
+@pytest.mark.django_db
+def test_token_of_the_slug_is_accepted_on_its_alias_host(user):
+    htq = Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ",
+                                 kind=CompanyKind.CONSTRUCTION, subdomain="htq")
+    CompanyMembership.objects.create(user_id=user.id, company=htq, is_default=True)
+    access = issue_token_pair(user)["access"]
+
+    ok = Client().get("/api/users/v1/profile/me",
+                      HTTP_AUTHORIZATION=f"Bearer {access}",
+                      HTTP_X_HTQ_COMPANY="htq")
+    assert ok.status_code == 200, ok.content

@@ -207,6 +207,46 @@ def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
     return [_brief_from_values(row) for row in rows]
 
 
+def staff_user_ids() -> list[int]:
+    """Id пользователей с ``is_staff=True``, кроме суперпользователей, с
+    ДЕЙСТВУЮЩЕЙ учёткой.
+
+    Единственный потребитель — перенос блока L
+    (``manage.py access_backfill_services_admin``): до гейта модуля шесть
+    экранов (media/conference/messenger/mail/cms/approvals) пускали по
+    ``is_staff`` напрямую (``admin=True``), и «перенести как есть» значит
+    найти именно этих людей, а не всех активных пользователей платформы.
+    Суперпользователь исключён — он проходит гейт модуля сам, ему выдавать
+    роль незачем; неактивная учётка (``status`` не ``ACTIVE``) исключена по
+    той же причине, по которой её исключает ``active_member_ids`` соседней
+    аппки — отключённому или ещё не подтверждённому пользователю токена всё
+    равно не выдадут.
+    """
+    require_service("users")
+    return list(
+        User.objects
+        .filter(is_staff=True, is_superuser=False, status=UserStatus.ACTIVE)
+        # Порядок детерминирован: сводка переноса сверяется между --dry-run и
+        # боевым прогоном глазами (финальное ревью блока L, M-9).
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+
+
+def is_superuser(user_id: int) -> bool:
+    """Пользователь — суперпользователь с ДЕЙСТВУЮЩЕЙ учёткой.
+
+    Единственный потребитель — ``apps.companies.interface.
+    user_may_enter_company``: архивную компанию читает только
+    суперпользователь (спека docs/plans/2026-09-25-archive-read-only-spec.md
+    §6.1). Неактивная учётка — ``False`` по той же причине, что в
+    ``staff_user_ids``: токена ей всё равно не выдадут.
+    """
+    require_service("users")
+    return User.objects.filter(pk=user_id, is_superuser=True,
+                               status=UserStatus.ACTIVE).exists()
+
+
 def list_users_brief(search: str | None = None, limit: int = 100) -> list[dict]:
     """Users as picker options — ``{id, username, email, first_name,
     last_name, full_name, is_active}`` — for hr's ``/employees/users/`` GET

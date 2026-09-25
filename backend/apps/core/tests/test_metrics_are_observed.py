@@ -93,44 +93,6 @@ _KNOWN_UNOBSERVED: set[str] = {
     PREFIX + "company_schemas_behind",
 }
 
-# Обратная дыра, и она серьёзнее предыдущей: панели и правила ЕСТЬ, а метрик
-# под ними НЕТ.
-#
-# ``collect_all()`` пропускает тенантные аппки (``settings.TENANT_APPS`` —
-# hr, tasks, contracts, signoff): без веера по компаниям их ``collect()``
-# вызывать нечем, см. докстринг ``apps/core/metrics.py``. Дашборды и правила
-# на эти метрики при этом написаны и лежат в infra/logging.
-#
-# Чем это опасно на проде: у всех зависящих правил стоит ``noDataState: OK``,
-# то есть «просроченные задачи», «уволенные с активным доступом», «перерасход
-# бюджета» и «маршруты без согласующих» будут ВЕЧНО ЗЕЛЁНЫМИ. Не шторм
-# алертов, а тишина, неотличимая от порядка, — ровно то, против чего написан
-# этот файл.
-#
-# TODO: закрывается подпроектом 3 (веер сбора метрик по компаниям). Удалять
-# панели и правила до тех пор НЕ надо: они станут верными в тот же день, когда
-# появится веер, а снятые придётся писать заново.
-_BLOCKED_ON_TENANT_FANOUT = {
-    PREFIX + name for name in (
-        "contracts_accountable_funds_outstanding",
-        "contracts_agreements",
-        "contracts_awaiting_accounting",
-        "contracts_awaiting_accounting_amount",
-        "contracts_budget_lines_overspent",
-        "contracts_signoff_desync",
-        "daily_reports_today",
-        "hr_active_without_account",
-        "hr_employees",
-        "hr_terminated_still_active",
-        "projects_active",
-        "signoff_pending_stale",
-        "signoff_processes",
-        "signoff_routes_without_approvers",
-        "tasks",
-        "tasks_overdue",
-    )
-}
-
 
 def _infra_text() -> str:
     """Всё, что Grafana реально читает: дашборды и файл правил, одной строкой."""
@@ -149,8 +111,7 @@ def _skip_without_infra():
         pytest.skip("infra/logging не смонтирован (запуск не с хоста)")
 
 
-@pytest.mark.django_db
-def test_every_collected_metric_is_observed():
+def test_every_collected_metric_is_observed(company_schema):
     """Каждая считаемая метрика попадает на дашборд или в правило алерта."""
     _skip_without_infra()
 
@@ -172,8 +133,7 @@ def test_every_collected_metric_is_observed():
     )
 
 
-@pytest.mark.django_db
-def test_every_referenced_metric_exists_in_code():
+def test_every_referenced_metric_exists_in_code(company_schema):
     """Каждая упомянутая в конфигах метрика существует в коде.
 
     Опечатка или переименование оставляют панель пустой навсегда, и пустая
@@ -189,7 +149,6 @@ def test_every_referenced_metric_exists_in_code():
         }
         | _DEFINED_OUTSIDE_APPS
         | _CONDITIONAL
-        | _BLOCKED_ON_TENANT_FANOUT
     )
 
     referenced = set(_METRIC_RE.findall(_infra_text()))
@@ -299,3 +258,97 @@ def test_dashboards_use_provisioned_datasource_uids():
         "datasource uid не совпадает с провижиненными (см. "
         "grafana-provisioning/datasources/): %s" % sorted(set(bad))
     )
+
+
+#: Условные метрики tenant-аппок: на пустой схеме их нет в сборе, но панели
+#: и правила на них — такие же tenant-метрики и обязаны следовать компании.
+_CONDITIONAL_TENANT = {
+    PREFIX + "daily_report_staleness_days",        # apps/tasks/metrics.py
+    PREFIX + "signoff_oldest_pending_seconds",     # apps/signoff/metrics.py
+}
+
+
+def _tenant_metric_names() -> set[str]:
+    """Метрики tenant-аппок — их сборщик размечает компанией (веер).
+
+    Отбор по АППКЕ, а не по наличию метки ``company``: нетенантная аппка
+    вправе нести свою метку с тем же именем (``access`` считает разрыв
+    «признак есть, членства нет» по компаниям сам), и её панели сводить по
+    компании незачем.
+    """
+    tenant_apps = set(settings.TENANT_APPS)
+    return {
+        PREFIX + name
+        for app, app_values in metrics.collect_all().items() if app in tenant_apps
+        for name in app_values
+    } | _CONDITIONAL_TENANT
+
+
+def _dashboard_targets():
+    """(файл, dashboard, заголовок панели, expr) по всем панелям, включая вложенные."""
+    for path in sorted(DASHBOARDS.glob("*.json")):
+        dash = json.loads(path.read_text(encoding="utf-8"))
+
+        def walk(panels):
+            for panel in panels:
+                for target in panel.get("targets") or []:
+                    if target.get("expr"):
+                        yield path.name, dash, panel.get("title", "?"), target["expr"]
+                yield from walk(panel.get("panels") or [])
+
+        yield from walk(dash.get("panels") or [])
+
+
+_COMPANY_FILTER = r'\{[^}]*company=~"\$company"'
+_FOLDED = re.compile(r"\b(sum|max|min|avg)\s+without\s*\(\s*company\s*\)")
+
+
+def test_tenant_metrics_on_dashboards_follow_the_company_variable(company_schema):
+    """Панель tenant-метрики фильтрует по переменной «Компания» и сводит
+    компании в одну цифру: при «All» — число по группе, как до веера, а не
+    по серии на компанию."""
+    _skip_without_infra()
+    tenant = _tenant_metric_names()
+    assert tenant, "веер не собрал ни одной tenant-метрики — сломан сам сбор"
+
+    bad = []
+    for file, dash, title, expr in _dashboard_targets():
+        names = set(_METRIC_RE.findall(expr)) & tenant
+        if not names:
+            continue
+        variables = {v.get("name") for v in dash.get("templating", {}).get("list", [])}
+        if "company" not in variables:
+            bad.append(f"{file}: нет переменной company, а панель «{title}» её требует")
+        for name in sorted(names):
+            if not re.search(re.escape(name) + _COMPANY_FILTER, expr):
+                bad.append(f'{file} «{title}»: {name} без {{company=~"$company"}}')
+        if not _FOLDED.search(expr):
+            bad.append(f"{file} «{title}»: не сведено sum/max without (company)")
+    assert bad == [], bad
+
+
+_AGGREGATION = re.compile(r"\b(sum|max|min|avg|count)\b")
+_BY = re.compile(r"\bby\s*\(([^)]*)\)")
+
+
+def test_alert_rules_keep_the_company_of_tenant_metrics(company_schema):
+    """Правило на tenant-метрике либо не агрегирует вовсе (серия на
+    компанию), либо агрегирует ``by (company, …)`` — иначе уведомление не
+    назовёт компанию, ради чего метка и заведена."""
+    _skip_without_infra()
+    yaml = pytest.importorskip("yaml")
+    tenant = _tenant_metric_names()
+
+    bad = []
+    for group in yaml.safe_load(RULES.read_text(encoding="utf-8"))["groups"]:
+        for rule in group["rules"]:
+            for query in rule.get("data") or []:
+                expr = (query.get("model") or {}).get("expr") or ""
+                if not set(_METRIC_RE.findall(expr)) & tenant:
+                    continue
+                if _AGGREGATION.search(expr) and not any(
+                    "company" in [part.strip() for part in by.split(",")]
+                    for by in _BY.findall(expr)
+                ):
+                    bad.append(f"{rule['uid']}: {expr}")
+    assert bad == [], bad

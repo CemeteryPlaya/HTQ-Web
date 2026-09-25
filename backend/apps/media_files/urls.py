@@ -11,7 +11,8 @@ urlpatterns = [
     # registered defensively, same convention as apps/cms/urls.py's
     # contact-requests/news routes (APPEND_SLASH=False never redirects a
     # stray trailing slash on its own). GET on either spelling lists files
-    # (admin only, task 3.3) — see ``views.files_collection``.
+    # (``module="media", level="admin"`` по роли, блок L; до него admin=True)
+    # — see ``views.files_collection``.
     path("files/", views.files_collection),
     path("files", views.files_collection),
     # `{file_id}/sign` (POST) and `{file_id}/{variant}` (GET) share one path

@@ -10,10 +10,27 @@ are built with real ``htqweb.authn.jwt.issue_token_pair`` (no mocking).
 import pytest
 from django.test import Client
 
+from apps.access.tests.helpers import assign
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/users/v1"
+
+#: Компания запроса: с задачи 4 блока I «Единая модель прав» ручки модерации
+#: стоят под ``api_view(module="users", level="admin")`` ПОВЕРХ прежнего
+#: ``admin=True``, а прав вне компании не бывает. Слаг модульный, потому что
+#: нужен помощнику ``_auth``, а не только телам тестов. Схема компании не
+#: нужна — учётки и права живут в ``public`` (см. докстринг фикстуры
+#: ``company_row`` в ``backend/conftest.py``).
+SLUG = "reg-co"
+
+
+@pytest.fixture(autouse=True)
+def company(db):
+    from apps.companies.models import Company, CompanyKind
+
+    Company.objects.create(slug=SLUG, name="Заявки", kind=CompanyKind.SERVICE)
+    return SLUG
 
 
 @pytest.fixture
@@ -27,10 +44,18 @@ def superuser(db):
 
 @pytest.fixture
 def staff_user(db):
+    """Админ платформы «широкого» толка — ``is_staff``, не суперпользователь.
+
+    Ему право на модуль выдаётся явно: ``admin=True`` пускает его в
+    администрирование ПЛАТФОРМЫ, а гейт модуля спрашивает про права в
+    КОМПАНИИ — это две разные двери, и суперпользовательского обхода второй у
+    него нет.
+    """
     u = User.objects.create(username="staffer", email="staffer@htq.test", password="x",
                             status=UserStatus.ACTIVE, is_staff=True)
     u.set_password("Staff1!Pass")
     u.save()
+    assign(SLUG, u.id, "users", "full")
     return u
 
 
@@ -44,8 +69,8 @@ def plain_user(db):
 
 
 def _auth(user) -> dict:
-    token = issue_token_pair(user)["access"]
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    token = issue_token_pair(user, company_slug=SLUG)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": SLUG}
 
 
 # ── POST register/ ───────────────────────────────────────────────────────────

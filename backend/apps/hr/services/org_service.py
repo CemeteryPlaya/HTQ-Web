@@ -44,6 +44,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
+from django.utils import timezone
 
 from apps.hr.models import (
     Department,
@@ -289,7 +290,7 @@ def add_relation(
         superior_position_id=superior_id,
         subordinate_position_id=subordinate_id,
         relation_type=relation_type,
-        effective_from=effective_from or date.today(),
+        effective_from=effective_from or timezone.localdate(),
         effective_to=effective_to,
     )
     return rel
@@ -352,7 +353,7 @@ def set_position_superior(
         superior_position_id=superior_id,
         subordinate_position_id=subordinate_id,
         relation_type=relation_type,
-        effective_from=date.today(),
+        effective_from=timezone.localdate(),
     )
 
 

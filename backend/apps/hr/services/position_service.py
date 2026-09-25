@@ -157,6 +157,11 @@ class LevelFull(Exception):
 # ── сериализаторы (формы из schemas/position.py) ─────────────────────────────
 
 def _serialize_permissions(raw: dict | None) -> dict | None:
+    # Задача 10 блока I.2: запись hr_level через API снята (см. докстринг
+    # schemas.PositionPermissions) — новые/правленные должности сюда его уже
+    # не кладут. raw.get("hr_level") читается только ради строк, записанных
+    # ДО этой задачи (или напрямую через ORM/сиды) — не удалять, пока такие
+    # строки могут существовать в БД.
     if raw is None:
         return None
     return {"hr_level": raw.get("hr_level"), "permissions": list(raw.get("permissions") or [])}
@@ -176,6 +181,9 @@ def serialize(pos: Position) -> dict:
         "permissions": _serialize_permissions(pos.permissions),
         "level": pos.level,
         "is_system": pos.is_system,
+        "is_manager": pos.is_manager,
+        "external_hierarchy": pos.external_hierarchy,
+        "serves_subsidiaries": pos.serves_subsidiaries,
         "created_at": pos.created_at.isoformat(),
         "updated_at": pos.updated_at.isoformat(),
     }
@@ -397,6 +405,22 @@ def create_position(data) -> Position:
 
 @transaction.atomic
 def update_position(id: int, data, *, actor_user_id: int | None = None) -> Position:
+    """PATCH/PUT должности.
+
+    ⚠️ Намеренное следствие задачи 10 блока I.2: ``patch["permissions"]``,
+    если ключ вообще прислан, — это ВЕСЬ ``PositionPermissions.model_dump()``
+    (поля ``hr_level`` там больше нет), и ``setattr`` ниже перезаписывает
+    JSON-колонку целиком, а не мержит её. Значит любой PATCH, тронувший
+    ``permissions`` (даже только чтобы поправить список ключей
+    ``contracts.*``), стирает унаследованный ``hr_level`` у должности,
+    заведённой до этой задачи, — и восстановить его через API уже нельзя
+    (схема его не принимает). Это СОЗНАТЕЛЬНО не смягчается merge'м: колонка
+    объявлена мёртвой для модели прав, а перенос ``access_backfill_positions``
+    штатно проходит ДО открытия трафика (docs/plans/
+    2026-09-14-group-structure-roadmap.md §7) — на момент, когда PATCH мог
+    бы стереть уже перенесённый уровень, обратной дороги в старую модель
+    всё равно нет.
+    """
     pos = get_position(id)
     patch = data.model_dump(exclude_none=True)
     next_weight = patch.pop("weight", None)

@@ -85,3 +85,25 @@ def manager_employee(db, department, position):
         hire_date=datetime.date(2020, 1, 9), user_id=user.id,
         first_name="Пётр", last_name="Начальников",
     )
+
+
+@pytest.fixture
+def hr_admin_auth(company_row):
+    """Держатель ``hr:admin`` (засеянная ``hr-lead``) в компании запроса.
+
+    Для разрушающих ручек подбора/учёта времени/документов, которые рулинг O
+    финальной волны блока I поставил под ``module="hr", level="admin"``
+    (сознательное исключение №3): до этого их звал любой вошедший, и тесты
+    контракта брали обычный токен без компании — теперь «как раньше»
+    проверяется на держателе admin. Гейт требует контекста компании, поэтому
+    и заголовок, и claim ``company``.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    user = make_user("hr-admin-holder@htq.test")
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_X_HTQ_COMPANY": company_row, "HTTP_AUTHORIZATION": f"Bearer {token}"}

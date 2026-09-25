@@ -107,6 +107,17 @@ export function UserAssignmentsDialog({
 
   const roles: Role[] = rolesQuery.data ?? [];
   const roleTitle = (id: number) => roles.find((role) => role.id === id)?.title ?? `#${id}`;
+  // Именная роль другой компании: суперпользователь видит её в каталоге
+  // наравне с общими (спека R2) — метка, как в RoleCatalog и
+  // PositionRolesDialog, не даёт принять её за общую и получить 422.
+  const companyBadge = (role: Role | undefined) =>
+    role?.company_slug
+      ? t('access.companyBadge', {
+        company: role.company_slug,
+        defaultValue: 'Компания: {{company}}',
+      })
+      : null;
+  const roleCompanyBadge = (id: number) => companyBadge(roles.find((role) => role.id === id));
   const departments = departmentsQuery.data ?? [];
   const departmentName = (id: number | null) =>
     departments.find((department) => department.id === id)?.name ?? `#${id}`;
@@ -170,6 +181,7 @@ export function UserAssignmentsDialog({
                     {item.scope_kind === 'company'
                       ? t('access.assignments.wholeCompany', 'вся компания')
                       : `${t('access.assignments.department', 'отдел')}: ${departmentName(item.scope_id)}`}
+                    {roleCompanyBadge(item.role_id) && ` · ${roleCompanyBadge(item.role_id)}`}
                   </span>
                 </div>
                 {canEdit && (
@@ -205,7 +217,9 @@ export function UserAssignmentsDialog({
             >
               <option value="">{t('access.assignments.pickRole', '— выберите роль —')}</option>
               {roles.map((role) => (
-                <option key={role.id} value={role.id}>{role.title}</option>
+                <option key={role.id} value={role.id}>
+                  {companyBadge(role) ? `${role.title} · ${companyBadge(role)}` : role.title}
+                </option>
               ))}
             </select>
 

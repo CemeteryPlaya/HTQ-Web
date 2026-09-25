@@ -9,16 +9,34 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 //
 // HRLayout тянет Header/Footer со всем окружением приложения (профиль, роуты,
 // сервис-реестр) — к предмету теста это отношения не имеет, поэтому сквозной
-// враппер. useHRLevel мокаем, чтобы управлять правами (isSenior) явно, а не
-// через ответ /employees/hr-level/.
+// враппер. usePermissions мокаем, чтобы управлять правами явно: правка
+// справочника должностей — уровень модуля `hr:admin` (задача 10 блока I,
+// как гейт `admin=True` + `level="admin"` на бэкенде).
 
 vi.mock('@/components/hr/HRLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const hrLevel = { isSenior: true };
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => hrLevel,
+const access = { hr: 'admin' as 'none' | 'read' | 'write' | 'admin' };
+const ORDER = ['none', 'read', 'write', 'admin'];
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    // `company: null` — как отдавал НЕмокнутый хук до задачи 10 (ответ
+    // `/access/v1/me` здесь подменялся пустым `data: []` через api.get).
+    company: null,
+    level: (m: string) => (m === 'hr' ? access.hr : 'none'),
+    atLeast: (m: string, req: string) =>
+      ORDER.indexOf(m === 'hr' ? access.hr : 'none') >= ORDER.indexOf(req),
+    scope: () => ({ kind: 'company', id: null }),
+    depth: () => [],
+    can: () => false,
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
+    isLoading: false,
+    isError: false,
+    refetch: () => {},
+  }),
 }));
 
 vi.mock('@/api/client', () => ({
@@ -80,7 +98,7 @@ function stubGet(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hrLevel.isSenior = true;
+  access.hr = 'admin';
   stubGet();
 });
 
@@ -101,7 +119,7 @@ describe('HRPositions — вкладки', () => {
   });
 
   it('прячет вкладки от пользователя без прав на правку', async () => {
-    hrLevel.isSenior = false;
+    access.hr = 'write';
     renderWithProviders(<HRPositions />, { route: '/hr/positions' });
     await screen.findByText('Главный инженер');
     expect(screen.queryByRole('tab', { name: /уровни/i })).not.toBeInTheDocument();

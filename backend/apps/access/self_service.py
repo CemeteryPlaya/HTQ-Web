@@ -1,0 +1,602 @@
+"""Реестр «какая аппка уже под гейтом модуля» и «какой её ручке гейт не положен».
+
+Часть блока I «Единая модель прав» (задача 3,
+``.superpowers/sdd/2026-09-17-block-i-single-rbac/task-3-brief.md``, раунд
+правок 1). Гейт ``api_view(module=, level=)`` (``htqweb/http.py``) в этом
+коммите уже объявлен, но ни на одну ручку ``access``/``users``/``hr``/
+``tasks`` ещё не навешан — задачи 4, 6 и 7 вешают его по одной аппке за
+коммит (``hr`` разбита на задачи 5 и 6 по экранам, но в реестр попадает
+только в 6-й — см. ниже). Этот модуль несёт РОВНО два факта, на которые
+опирается сторож
+``apps/access/tests/test_gate.py::test_gate_covers_every_handle_of_translated_apps``.
+
+1. ``TRANSLATED_APPS`` — какие из аппок блока (сегодня пять: ``access``,
+   ``users``, ``hr``, ``tasks``, ``companies``) УЖЕ переведены. Пока аппки
+   здесь нет, сторож не проверяет её вообще: ни «гейт есть», ни «гейта
+   нет» — задача 5 осознанно вешает гейт на часть ручек ``hr`` (справочники
+   сотрудников/отделов/должностей/оргструктуры), не трогая эту запись, а
+   задача 6 добивает остальные экраны и только тогда включает ``hr`` сюда
+   (согласовано в обоих брифах и в предполётной сверке плана,
+   ``.superpowers/sdd/2026-09-17-block-i-single-rbac/progress.md``,
+   строка «T3 → T4,5,6,7»). Как только аппка появляется здесь, сторож
+   требует ``module=`` у КАЖДОЙ её ручки, кроме перечисленных ниже.
+
+2. ``SELF_SERVICE`` — ``аппка -> {имя_ручки: причина}``. Причина — из
+   ЗАКРЫТОГО списка ``REASONS`` (``self`` | ``open`` | ``scoped``), и
+   сторож (``test_self_service_reasons_are_declared``) падает, если у
+   записи её нет или она вне списка: без этого требования исключение
+   можно было бы добавить молча, ничем не объяснив, почему доступ остаётся
+   широким — ровно то, о чём предупреждает бриф («похоже на
+   самообслуживание» — не объяснение). Раунд правок 1 задачи 3 разделил
+   то, что было одной, смешанной формулировкой «самообслуживание», на две
+   ЧЕСТНО разные причины — ревью справедливо указало, что запись
+   ``org_tree`` была верной, а ярлык «отдаёт только данные вызывающего» на
+   неё — ложью. Раунд правок 1 задачи 6 добавил третью — без неё запись
+   департаментских файлов/идентити-заявок пришлось бы держать как
+   ``open``, а это была бы уже ложь В ДРУГУЮ сторону (см. ниже):
+
+   - **``self``** — ручка отдаёт СТРОГО данные, привязанные к
+     ``request.token`` (личный профиль, свой ``Employee``, свои права),
+     без параметра, который мог бы подменить чужую запись. Гейт ей не
+     нужен, потому что нечего им ограничивать — чужих данных там нет ни
+     при каком наборе параметров.
+   - **``open``** — ручка отдаёт ОБЩИЕ, в том числе чужие данные (полное
+     оргдерево компании — имена, аватары, должности руководителей), но
+     сегодня у неё НЕТ НИ ЕДИНОЙ проверки прав ВООБЩЕ, и она открыта
+     КАЖДОМУ вошедшему сотруднику намеренно, а не по недосмотру: это
+     справочник, которым пользуется вся компания (аналог телефонной
+     книги). Первый же гейт module=/level= отобрал бы его у любого без
+     профильной роли — ``employee-basic`` не несёт ни одного узла
+     ``hr.*`` (``access/migrations/0004_seed_employee_role.py``) — то
+     есть расширил бы не доступ, а ОГРАНИЧЕНИЕ, которого блок вводить не
+     должен ровно так же, как не должен молча раздавать чужие данные.
+     ``open`` — это не «мы разрешили считать это самообслуживанием»,
+     а «эта ручка объявлена вне области действия гейта модуля, потому
+     что таким её спроектировали раньше этой задачи, и сужать её сейчас
+     — не наше решение».
+   - **``scoped``** (задача 6, раунд правок 1) — ручка ЗАЩИЩЕНА, но своей
+     собственной проверкой, НЕ ролевой (не ``hr.*``, не любой другой узел
+     ``apps.access``): доступ решает бизнес-факт, не должность — «это твой
+     СОБСТВЕННЫЙ отдел» (``department_file_service.assert_department_
+     access``: свой отдел ИЛИ ``is_elevated`` — ``hr`` `/department-*/*`)
+     или «ты СОГЛАСУЮЩИЙ по этой конкретной заявке» (``identity_request_
+     service.may_decide``/``NotApprover`` — `hr` `/identity-requests/*`,
+     где право решать НЕ кадровое, см. докстринг ``_identity_access`` в
+     ``apps/hr/views.py``). Отличие от ``open``: у ``open`` при отказе от
+     гейта модуля СЕГОДНЯ нет ВООБЩЕ никакой другой преграды — снял бы
+     гейт, и данные читает кто угодно; у ``scoped`` преграда ЕСТЬ и
+     останется после гейта модуля (или вместо него) — просто это не
+     преграда «нужна роль ``hr.*``», а нечто другое. Называть такую ручку
+     ``open`` было бы ложью симметричной оригинальной ошибке с
+     ``org_tree``: не «мы решили считать это самообслуживанием», а «мы
+     решили считать это дырой», хотя дыры там нет. Гейт module=/level=
+     этой ручке НЕ положен по той же причине, что и ``open`` (кадровой
+     роли для неё сегодня не требуется, и требовать ВНЕЗАПНО значило бы
+     сузить то, чем сотрудники законно пользуются без единого узла
+     ``hr.*``) — но причина в реестре обязана называть РЕАЛЬНЫЙ механизм
+     защиты, а не отсутствие такового.
+
+   Идентификатор ручки — то же имя, которое сторож достаёт из кода рядом с
+   ``api_view(...)``: ``имя_функции`` для вьюх-функций (``hr``/``users``/
+   ``tasks`` объявляют каждую ручку отдельной функцией) и ``Класс.метод``
+   для class-based вьюх (``access``). Номер строки НЕ годится ключом: любая
+   несвязанная правка выше по файлу сдвигает нумерацию и молча ломает
+   сверку, а по имени функции запись переживёт такую правку.
+
+   ⚠️ **``auth=None`` ручки в этот реестр НЕ входят вовсе** (раунд правок 1
+   — были здесь как ``self``, это оказалось лишним и опасным). Сторож
+   пропускает такие вызовы ДО того, как проверяет имя (``if "auth=None"
+   in block: continue`` — раньше, чем ``seen.add(name)``), поэтому запись
+   в ``SELF_SERVICE`` для них никогда не попала бы в ``seen`` и сторож
+   упал бы на ``unknown_exempt`` при первом же переводе аппки — ложно,
+   на пустом месте. В ``htqweb/http.py::api_view`` проверка ``module=``
+   стоит ВНУТРИ ``if auth is not None:`` — для ``auth=None`` она физически
+   не может сработать, регистрировать её как исключение нечего: это не
+   «гейт не нужен», а «гейта здесь не может быть в принципе». Ручки,
+   проверенные поимённо по брифу и не попавшие сюда по этой причине:
+   ``hr.public_org_view``, ``hr.public_employee_view``.
+
+⚠️ Ограничение подхода (текстовый разбор, не импорт вьюх — см. докстринг
+``test_gate.py``): у ``access`` self-service-ручка обязана иметь
+СОБСТВЕННЫЙ, ОТДЕЛЬНЫЙ вызов ``api_view(...)`` — так же, как уже сделано
+для ``MyCompaniesView.get`` в ``apps/companies/views.py`` («Без гейта
+модуля: это то, что нужно КАЖДОМУ вошедшему, чтобы переключиться») — а не
+наследовать декоратор через общий ``read``/``write`` (как сегодня
+``MeView.get`` через ``@read``: единственный вызов ``api_view(...)`` на
+всю группу read-ручек ``access``). Если задача 4, гейтируя ``access``,
+оставит ``MeView.get`` на общем ``@read`` вместо отдельного вызова, сторож
+не найдёт совпадения по имени ``MeView.get`` и упадёт отдельной проверкой
+(«self_service ссылается на несуществующую ручку») — это СИГНАЛ дать
+``/me`` отдельный декоратор, а не ложное срабатывание.
+"""
+
+from __future__ import annotations
+
+#: Аппки, чьи ``api_view(...)`` ручки сторож уже требует держать под
+#: ``module=``. Задача 4 добавила сюда "access" и "users" (две самые
+#: маленькие — на них проверялся приём); задача 6 добавила "hr" (задача 5
+#: гейтировала справочники РАНЬШЕ, чем эта запись появилась — см. докстринг
+#: модуля; задача 6 добила остальные экраны и только тогда включила
+#: сторож); задача 7 добавила "tasks" — последним шагом, после того как
+#: гейт навешан на 122 из её 128 ручек (шесть уведомлений — исключение
+#: ``self``, раунд правок 1: платформенная лента, не только про задачи, см.
+#: комментарий у ``SELF_SERVICE["tasks"]`` ниже). Финальная волна блока I
+#: (рулинг J) добавила "companies": её ручки гейт несли с рождения аппки
+#: (``_GATE_ALLOWLIST`` сторожа), теперь это требование, а не декларация.
+#: Блок L (docs/plans/2026-09-24-block-l-gate-remaining-apps.md) добавляет по
+#: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
+TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
+                                             "media_files", "conference", "messenger", "mail",
+                                             "cms", "approvals"})
+
+#: Закрытый список причин, по которым ручке не положен гейт модуля (см.
+#: докстринг модуля). Любое значение вне списка сторож считает
+#: расхождением — причину нельзя придумать по ходу дела, не объяснив её
+#: здесь. ``scoped`` — задача 6, раунд правок 1: ручка защищена СВОЕЙ
+#: проверкой (свой отдел / согласующий по заявке), не ролью ``hr.*``.
+#:
+#: Условие пересмотра ``open`` (блок I.2, R9): запись держится ровно до тех
+#: пор, пока у ручки нет НИКАКОЙ проверки. Как только у неё появляется
+#: проверка по узлу реестра (``NodeAccess.has``/``access.interface.
+#: flags_for``), причина ``open`` становится ложью — ручка уже не
+#: «справочник без проверок», а ролевая, — и запись пересматривается тем же
+#: коммитом, а не остаётся в реестре по инерции. (``scoped`` для этого не
+#: годится: его защита по определению НЕ ролевая.)
+REASONS: frozenset[str] = frozenset({"self", "open", "scoped"})
+
+#: аппка -> {имя ручки: причина из REASONS} (см. докстринг модуля). Ключи —
+#: все одиннадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
+#: "companies", "media_files", "conference", "messenger", "mail", "cms",
+#: "approvals") — всегда присутствуют (даже с пустым словарём), чтобы сторож
+#: проверял их единообразно. Имя ручки — голое, без модуля: сторож собирает
+#: ручки со всех модулей аппки, не только из views.py.
+SELF_SERVICE: dict[str, dict[str, str]] = {
+    "access": {
+        # /me — права ТЕКУЩЕГО пользователя, посчитанные по его
+        # собственному токену (resolve.resolve_for(request.token, ...)),
+        # без параметра, который мог бы указать на чужой user_id. Нужна
+        # КАЖДОМУ вошедшему, включая держателя employee-basic, у которой
+        # нет ни одного узла access.* — без исключения он не смог бы даже
+        # узнать, что ему доступно.
+        "MeView.get": "self",
+        # GET roles — плоский каталог ролей (код, название, is_system).
+        # Не "self": строки заведомо общие, не привязанные к вызывающему.
+        # Но до задачи 4 его читал ЛЮБОЙ вошедший, и читает не только
+        # редактор ролей: кадровый экран должностей (frontend
+        # HRPositions.tsx -> PositionRolesDialog.tsx) показывает по нему
+        # список, из которого кадровик выбирает роли должности. Гейт
+        # module="access" отобрал бы экран у кадровика, а закрыть разрыв
+        # выдачей кадровым ролям узла access.* НЕЛЬЗЯ: уровень модуля
+        # считается по всему поддереву (resolve.permissions_for), то есть
+        # один узел открыл бы им весь домен прав целиком, включая правку
+        # каталога. Раунд правок 1 задачи 4: это "как сегодня", а сужение
+        # — отдельное решение, которое блок здесь не принимает.
+        "RoleCollectionView.get": "open",
+        # GET positions/<id>/roles — роли конкретной должности. Тот же
+        # кадровый экран, та же причина, что у каталога выше. Запись
+        # (PUT) при этом под гейтом и под admin=True: выдача прав — не
+        # чтение справочника.
+        "PositionRolesView.get": "open",
+    },
+    "users": {
+        # profile/me GET — _get_profile_user резолвит запись строго по
+        # request.token.user_id, параметра-подмены нет.
+        "_get_profile": "self",
+        # profile/me PATCH — тот же резолвер по user_id; правит только
+        # свои поля (display_name/phone/bio/avatar/...).
+        "_update_profile": "self",
+        # profile/avatar DELETE — свой аватар, тот же _get_profile_user.
+        "remove_avatar": "self",
+        # смена ПАРОЛЯ — помимо своего user_id требует знания ТЕКУЩЕГО
+        # пароля (profile_service.change_password), тем более не может
+        # задеть чужую учётку.
+        "change_password": "self",
+    },
+    "hr": {
+        # employees/me — emp_svc.get_my_employee(request.token); Employee
+        # берётся из токена, а не из URL/query.
+        "my_employee": "self",
+        # employees/me/card — та же привязка к своему Employee; Т2-секции
+        # ВНУТРИ карточки уже гейтятся отдельно, полевым RBAC
+        # (card_t2_service) — это не входной гейт самой ручки.
+        "my_employee_card": "self",
+        # employees/me/pmos — тот же get_my_employee под капотом.
+        "my_pmos": "self",
+        # GET employees/hr-level/ — снята задачей 9 блока I вместе с
+        # резолвером, который она отдавала (свой уровень теперь узнают из
+        # /api/access/v1/me); запись из реестра тоже снята — сторож
+        # test_hr_level_endpoint_is_not_in_the_self_service_registry.
+        # GET /org/tree — ОТДАЁТ полное оргдерево компании: имена,
+        # аватары, должности руководителей — заведомо ЧУЖИЕ данные, не
+        # "self". Но сегодня у ручки нет НИ ОДНОЙ проверки прав вовсе
+        # (org_service.get_org_tree вызывается сразу после валидации
+        # query-параметров) — она открыта КАЖДОМУ вошедшему намеренно,
+        # как справочник компании. Первый же гейт module=/level=,
+        # навешенный этой задачей, отобрал бы его у employee-basic
+        # (ни одного узла hr.* — см. докстринг модуля) — то есть сузил бы
+        # то, что есть у всех сегодня, а блок обязан не расширять ДОСТУП
+        # и не расширять ОГРАНИЧЕНИЯ мимо решения задачи 5/6.
+        "org_tree": "open",
+        # ПРИМЕЧАНИЕ (раунд правок 1): calendar_year/calendar_working_days
+        # сюда НЕ входят — ревью показало, что это было ошибкой. Сегодня
+        # обе стоят под _require_permission(request, CALENDAR_VIEW), то есть
+        # ``rbac.resolve(request).has(CALENDAR_VIEW)`` — ключ раскрывается в
+        # узел ``hr.calendar``+признак ``view`` (``legacy_roles.KEY_TO_NODE``),
+        # который есть только у ролей ``hr-junior`` и выше: без единой роли
+        # ``hr.*`` вызывающий получает пустое множество признаков и 403 УЖЕ
+        # СЕГОДНЯ. Оставить их без гейта в задаче 6 значило бы РАСШИРИТЬ
+        # доступ (кто угодно читал бы производственный календарь без
+        # единой роли) — ровно то, что блок обязан не делать. Задача 6
+        # вешает на них обычный module="hr", level="read", как на все
+        # остальные справочные ручки.
+        #
+        # ── Задача 5: справочники departments/positions/org — case 3 брифа ──
+        #
+        # Ручки ниже сегодня стоят ГОЛЫМ ``auth="jwt"`` — ни
+        # ``_require_permission``, ни ``require_hr_access``, ни ``admin=True``
+        # — подтверждено и кодом, и существующими тестами (``test_departments_
+        # api.py``/``test_positions_api.py``::``auth`` — обычный, без единого
+        # HR-признака пользователь — успешно ЧИТАЕТ department- и
+        # position-ручки). Первый же ``module="hr"`` был бы
+        # СУЖЕНИЕМ уже сегодняшнего поведения, а задача 5 обязана только
+        # добавлять гейт, не отбирать то, что есть. Причина у каждой записи —
+        # ``open`` (не ``self``: возвращаются заведомо чужие/общие данные —
+        # чужие отделы, чужие должности, оргструктура компании).
+        #
+        # departments — только ЧТЕНИЕ открыто: это справочник (тот же
+        # телефонный справочник, что и org_tree). ЗАПИСЬ (``_create_department``/
+        # ``_update_department``/``_delete_department``) в реестре НЕТ
+        # намеренно — раунд правок 1 задачи 5 поставил её под ``module="hr"``
+        # (write/write/admin) как осознанное исключение из правила «как есть»:
+        # до блока она стояла голым ``auth="jwt"`` без единой проверки прав, а
+        # DELETE ``?cascade=true`` физически стирает сотрудников поддерева —
+        # это унаследованный из FastAPI пробел, а не спроектированная
+        # открытость. Обоснование — комментарий над ``_create_department`` в
+        # ``apps/hr/views.py`` и отчёт задачи 5, раздел «Раунд правок 1».
+        "_list_departments": "open",
+        "department_tree": "open",
+        "_get_department": "open",
+        "department_children": "open",
+        "department_employees": "open",
+        # positions — ЧТЕНИЕ открыто любому вошедшему уже сегодня (запись
+        # стоит под ``admin=True`` — задача 5 добавляет ей ``module="hr",
+        # level="admin"`` ПОВЕРХ него, это не self_service вовсе).
+        "_list_positions": "open",
+        "_list_level_thresholds": "open",
+        "next_weight_for_level": "open",
+        "get_permissions_catalog": "open",
+        "_get_position": "open",
+        "_list_substitutions": "open",
+        # org — то же самое чтение-без-проверки, что у org_tree выше (тот же
+        # справочник оргструктуры, только другая проекция данных).
+        "org_subordination_matrix": "open",
+        "_list_employee_relations": "open",
+        "_get_deletion_strategy": "open",
+        #
+        # ── Задача 6: остальные экраны hr — case 3 брифа, буквально ──
+        #
+        # /vacancies/*, /applications/* (recruiting) — ВСЕ 13 ручек стоят
+        # голым ``auth="jwt"``, ``recruiting_service`` не содержит ни одной
+        # проверки прав (комментарий над секцией в ``apps/hr/views.py``:
+        # "любой залогиненный пользователь может создавать/менять/удалять
+        # чужие вакансии/отклики" — странность исходника, не баг порта).
+        # Первый же ``module="hr"`` был бы сужением. Исключение — DELETE
+        # (``_close_vacancy``, ``_delete_application``): сознательное
+        # исключение №3 блока I (рулинг O финальной волны) поставило их под
+        # ``module="hr", level="admin"`` — в реестре их больше нет.
+        "_list_vacancies": "open",
+        "_create_vacancy": "open",
+        "_get_vacancy": "open",
+        "_update_vacancy": "open",
+        "vacancy_applications": "open",
+        "_list_applications": "open",
+        "_create_application": "open",
+        "applications_archive": "open",
+        "_get_application": "open",
+        "_update_application": "open",
+        "change_application_status": "open",
+        # /time-tracking/* — та же странность исходника, тот же комментарий:
+        # ВСЕ 8 ручек, включая POST/PUT/DELETE, используют только обычный
+        # ``auth="jwt"``, ни одна не проверяет HR-права. DELETE
+        # (``_delete_time_entry``) — под ``hr:admin`` (исключение №3, рулинг O).
+        "_list_time_entries": "open",
+        "_create_time_entry": "open",
+        "_update_time_entry": "open",
+        "time_daily_report": "open",
+        "time_weekly_report": "open",
+        "time_monthly_report": "open",
+        # /personnel-history/ — список ЧИТАЕТСЯ голым ``auth="jwt"`` (ни
+        # единой проверки в ``_list_personnel_history``); ЗАПИСЬ — наоборот,
+        # ``admin=True`` (case 2 брифа) и получает ``module="hr",
+        # level="admin"`` ПРЯМО в декораторе — в реестре не значится.
+        "_list_personnel_history": "open",
+        # /documents/* — комментарий над секцией в ``apps/hr/views.py``:
+        # исходник НЕ зовёт ``require_hr_write`` нигде в documents.py.
+        # Список/чтение — буквально без проверки, ``open``. Удаление
+        # (``_delete_document``) — под ``hr:admin``: сознательное исключение
+        # №3 блока I (рулинг O финальной волны), в реестре его нет.
+        # ``_upload_document`` (JSON-ветка `POST /documents/`) в реестре
+        # НЕТ намеренно — раунд правок 1 задачи 6 поставил её под
+        # ``module="hr", level="write"`` РЯДОМ с multipart-веткой
+        # (``_upload_document_multipart``, тоже ``write``): обе — ОДНА
+        # ручка ``POST /documents/``, диспетчеризуемая по ``Content-Type``
+        # (``documents_collection``), и гейт только на одной из двух ветвей
+        # снимался бы сменой заголовка запроса — обоснование и текст
+        # исключения см. комментарий над ``_upload_document`` в
+        # ``apps/hr/views.py``, по образцу записи отделов задачи 5.
+        "_list_documents": "open",
+        "_get_document": "open",
+        # /pmo/* — та же пара, что у departments/positions/org в задаче 5:
+        # reads голым ``auth="jwt"``, writes под ``admin=True`` (получают
+        # ``module="hr", level="admin"`` в декораторе, в реестре не значатся).
+        "_list_pmos": "open",
+        "_get_pmo": "open",
+        "_list_pmo_members": "open",
+        "pmo_org_chart": "open",
+        # /department-folders/, /department-file-folders/, /department-files/
+        # — ``scoped`` (раунд правок 1: было по ошибке ``open`` — эти ручки
+        # НЕ "нет проверки вовсе", у них есть РЕАЛЬНАЯ защита, просто не
+        # ролевая). ``department_file_service.assert_department_access``
+        # (свой отдел ИЛИ ``is_elevated``) — общий инструмент "файлы моего
+        # отдела", доступный КАЖДОМУ сотруднику для СВОЕГО (не любого)
+        # отдела (frontend/src/pages/DepartmentFiles.tsx, пункт профильного
+        # сайдбара "Файлы отдела", ``requiresAuth: true``, НЕ спрятан за
+        # кадровым экраном); ``department_folders_list``/``department_
+        # files_search`` фильтруют по ``accessible_department_ids`` (тот же
+        # свой-отдел-или-admin принцип, другой хелпер). ``employee-basic``
+        # не несёт ни одного узла ``hr.*`` — гейт ``module="hr"`` отобрал
+        # бы этот общедоступный инструмент у всех, кроме кадровиков, что
+        # было бы сужением так же, как и с departments/org_tree выше — но
+        # называть его ``open`` значило бы утверждать, что защиты нет
+        # вовсе, а она есть, просто другая.
+        "department_folders_list": "scoped",
+        "department_files_search": "scoped",
+        "_list_department_file_folders": "scoped",
+        "_create_department_file_folder": "scoped",
+        "_list_department_files": "scoped",
+        "_upload_department_file": "scoped",
+        "department_file_detail": "scoped",
+        # /logs/ (audit) — комментарий над секцией: "любой залогиненный
+        # видит весь журнал (буквальный порт, странность исходника, не баг)".
+        "audit_logs": "open",
+        # /identity-requests/* — ``scoped`` (раунд правок 1: было по ошибке
+        # ``open``). ``_identity_access`` (``apps/hr/views.py``) намеренно НЕ
+        # проверяет «есть ли кадровый доступ хоть какой-нибудь»: право РЕШАТЬ
+        # заявку принадлежит подтверждающему (руководителю отдела), который в
+        # общем случае НЕ кадровик и не несёт ни одного узла ``hr.*`` — гейт
+        # module="hr" отсёк бы его от собственной задачи (см. докстринг
+        # ``_identity_access``). Но внешняя граница ручек НЕ "отказывает
+        # ВСЕГДА никому" — у неё ЕСТЬ реальная защита, просто не ролевая:
+        # видимость строк и право решать считает сама
+        # ``identity_request_service`` (``may_decide``/``NotApprover``,
+        # независимо от гейта модуля) по факту «ты согласующий ИМЕННО этой
+        # заявки» — тот же принцип, что у department-files выше («свой
+        # отдел»), только предмет другой («своя заявка»). Называть это
+        # ``open`` значило бы утверждать, что дыра есть, хотя ручка и так
+        # не отдаёт ничего, на что у вызывающего нет предметного права.
+        # ``GET /identity-approver`` — ИСКЛЮЧЕНИЕ внутри исключения: та
+        # ручка (``_get_identity_approver`` ниже) НЕ несёт вообще НИ ОДНОЙ
+        # проверки (кто подтверждающий — не секрет, та же категория, что
+        # org_tree) — честно ``open``, не ``scoped``. ``PUT`` (назначение
+        # подтверждающего) — ОТДЕЛЬНАЯ функция ``_set_identity_approver``
+        # (см. докстринг ``identity_approver`` в ``apps/hr/views.py`` про
+        # расщепление одного URL на пару) и стоит под ``module="hr",
+        # level="admin"`` в декораторе — у неё, в отличие от read/decide,
+        # нет approver-escape-хода, это чистая кадровая администрация.
+        "identity_requests_collection": "scoped",
+        "identity_request_detail": "scoped",
+        "identity_request_decide": "scoped",
+        "_get_identity_approver": "open",
+        # /approvals/{subject_type}/{id}/submit — докстринг
+        # ``approval_service.submit_for_approval``: "Предметных проверок
+        # 'можно ли отправлять' здесь нет намеренно" — отправить кадровый
+        # предмет на согласование может любой сотрудник или кадровик,
+        # решает не эта ручка, а маршрут согласования (кто утвердит).
+        "submit_subject": "open",
+        #
+        # ── Задача 6: share-links — self, не open ──
+        #
+        # В отличие от department-ручек, каждая из четырёх привязана СТРОГО
+        # к ``request.token.user_id`` (комментарий над секцией: "любой
+        # залогиненный может создать/отозвать СВОЮ ссылку, get_link/
+        # list_audit сами гейтят по created_by_user_id") — ни один параметр
+        # не подменяет владельца, поэтому это ``self``, а не ``open``
+        # (``open`` — про ЧУЖИЕ/общие данные без единой проверки; здесь
+        # чужого нет ни при каком запросе).
+        "_create_share_link": "self",
+        "_list_share_links": "self",
+        "share_link_detail": "self",
+        "share_link_audit": "self",
+    },
+    # tasks: почти без самообслуживания. "Свои" задачи и ежедневка
+    # обеспечены ролью employee-basic (tasks.tasks/tasks.daily_reports —
+    # access/migrations/0004_seed_employee_role.py), а не исключением из
+    # гейта: без этой роли пусто и то, и другое, гейт остаётся общим
+    # правилом для всех ручек tasks (см. бриф задачи 7).
+    #
+    # Раунд правок 1: шесть ручек уведомлений — ИСКЛЮЧЕНИЕ, ``self``.
+    # ``/notifications/*`` строго по ``request.token.user_id`` (ни один
+    # параметр не подменяет получателя — тот же принцип, что у
+    # ``users._get_profile``/``hr.my_employee`` выше), но лента ЕЩЁ и
+    # ПЛАТФОРМЕННАЯ: колокольчик в шапке (``frontend/src/App.tsx``) несёт
+    # уведомления мессенджера/конференций/календаря для КАЖДОГО вошедшего,
+    # а не только для тех, у кого есть узел ``tasks.*``. Гейт module="tasks"
+    # отрезал бы держателя роли другого домена (скажем, только
+    # ``messenger``) от его СОБСТВЕННЫХ уведомлений — сужение, которого
+    # задача 7 не должна вносить. Обнаружено ревью: комментарий над секцией
+    # в ``views.py`` уже называл её caller-scoped ДО этой правки, но ручки
+    # изначально ушли под общее правило «в tasks самообслуживания нет».
+    "tasks": {
+        "notifications_collection": "self",
+        "notification_history": "self",
+        "notification_mark_read": "self",
+        "notification_mark_unread": "self",
+        "notifications_mark_all_read": "self",
+        "notification_detail": "self",
+    },
+    # companies (финальная волна блока I, рулинг J): гейты НЕ менялись — всё
+    # остальное уже под ``module="companies"`` (общие ``read``/``write``).
+    "companies": {
+        # GET companies/v1/me — СВОИ членства: выборка строго по
+        # ``request.token.user_id``, параметра-подмены нет. Нужна каждому
+        # вошедшему, чтобы переключиться между компаниями. Плюс
+        # суперпользователю архивные компании реестра (спека архива §6.3) —
+        # чужих данных это не отдаёт: реестр компаний суперпользователь
+        # видит и так.
+        "MyCompaniesView.get": "self",
+        # Фабрика ``platform(...)`` — один вызов ``api_view(admin=True)`` на
+        # три ручки: архив (``CompanyArchiveView.post``), восстановление
+        # (``CompanyRestoreView.post``) и отзыв членства
+        # (``CompanyMembershipItemView.delete``). Защита — своя и сильнее
+        # любого уровня модуля: ``admin=True`` в декораторе плюс
+        # ``deny_unless_platform_admin`` (``is_superuser``) первой строкой
+        # каждого метода. Сторож видит фабрику одним именем — новая ручка на
+        # ``@platform`` обязана звать ту же проверку.
+        "platform": "scoped",
+    },
+    # media_files (блок L, задача 4): строго своих ручек нет — загрузка
+    # (``upload_file``) и подпись (``issue_signed_url``) стоят под
+    # ``module="media", level="write"`` (уровень employee-basic: узел
+    # ``media.files`` с view+create, access/0011), общий список файлов
+    # (``list_files``, бывший admin=True) — под ``level="admin"``; чтение
+    # (``download_file``, ``download_variant``, ``serve_raw_key``) —
+    # ``auth=None`` с подписью ``?sig=&exp=`` и в реестр не входит вовсе
+    # (см. докстринг модуля про ``auth=None``).
+    "media_files": {},
+    # conference (блок L, задача 5). Записей самообслуживания нет: все пять
+    # ручек чтения встреч (overview, sessions, session_detail, session_events,
+    # session_transcript) стоят под ``conference:read`` — уровень, который
+    # несёт ``employee-basic`` (``access/0011``: ``conference.history``,
+    # ``conference.transcripts`` — VIEW). Видимость конкретной встречи режет
+    # не гейт, а ``apps/conference/services/access.py::may_view`` (участник,
+    # автор, приглашённый из календаря, администратор; иначе 404, а не 403).
+    # ``session_recording``/``session_poster`` и ``internal_*`` объявлены
+    # ``auth=None`` (подпись ``?sig=&exp=`` / общий секрет SFU) — в реестр
+    # не вносятся.
+    "conference": {},
+    # messenger (блок L, задача 6). Сотруднику — module="messenger" (read для
+    # чтения и отправки, write для правки комнат, состава и своих сообщений;
+    # employee-basic агрегируется в write, access/0011: messenger.rooms без
+    # delete), модерация /admin/* — level="admin" (бывшие admin=True).
+    # Участие в комнате и авторство сообщения режет не гейт, а сервисы
+    # (messenger_service/membership_service/attachment_service).
+    # serve_attachment/serve_attachment_thumb — auth=None с подписью
+    # ?sig=&exp= — в реестр не вносятся.
+    "messenger": {
+        # бейдж шапки: msg_svc.unread_total(request.token.user_id) — свой
+        # счётчик, без параметра; зовётся и с голого домена (Header), где
+        # гейта модуля быть не может — компании нет.
+        "unread_count": "self",
+        # свои E2EE-ключи: device_id и ключ пишутся под request.token.user_id.
+        "upload_keys": "self",
+        # users/me — свой профиль в мессенджере по request.token.user_id.
+        "me": "self",
+    },
+    # mail (блок L, задача 7): личная почта — аккаунт, OAuth и письма
+    # привязаны к ``request.token.user_id``, сервис отвечает 404
+    # (``AccountNotFound``/``EmailNotFound``) на чужой id (докстринг
+    # ``apps/mail/views.py``). Ящики и реквизиты сервера (20 бывших
+    # ``admin=True``) — под ``mail:admin``; подсказка настроек IMAP
+    # (``_imap_connect_hint``) — под ``mail:read``: она читает не строки
+    # пользователя, а настройки сервера по введённому адресу.
+    # ``oauth_callback`` и ``apps/mail/webhooks.py`` — ``auth=None``, в реестр
+    # не входят.
+    "mail": {
+        # GET accounts/ — account_service.list_accounts:
+        # EmailAccount.filter(user_id=user_id), параметра-подмены нет.
+        "accounts_collection": "self",
+        # POST accounts/<id>/set-default/ — _get_owned(user_id, id): чужой
+        # аккаунт -> AccountNotFound (404); сброс default — тоже по user_id.
+        "account_set_default": "self",
+        # POST accounts/<id>/sync/ — тот же _get_owned -> 404 на чужой id.
+        "account_sync": "self",
+        # PATCH accounts/<id>/signature/ — update_signature через _get_owned.
+        "account_signature": "self",
+        # DELETE accounts/<id>/ — disconnect_account через _get_owned.
+        "account_detail": "self",
+        # GET accounts/connect-corporate/ — свой ящик
+        # (ProvisionedMailbox.filter(user_id=...)) и свой адрес
+        # (users.interface.get_user_brief(user_id)); из настроек сервера —
+        # только домен и флаг самоподключения, без адресов хостов.
+        "corporate_connect_info": "self",
+        # POST accounts/connect-corporate/ — self_service.connect_own_mailbox:
+        # ящик привязывается к user_id токена; чужой ящик ->
+        # MailboxTakenByAnotherUser (409), владение доказывает живой вход.
+        "_corporate_connect": "self",
+        # DELETE accounts/connect-corporate/ — disconnect_own_mailbox:
+        # ProvisionedMailbox.filter(user_id=user_id); нет своего -> 404.
+        "_corporate_disconnect": "self",
+        # POST accounts/connect-imap/ — imap_account_service.connect: аккаунт
+        # создаётся на user_id токена, дубль своего адреса -> 409.
+        "_imap_connect": "self",
+        # POST accounts/<id>/imap-password/ — update_password:
+        # filter(id=account_id, user_id=user_id) -> DoesNotExist (404).
+        "imap_account_password": "self",
+        # GET oauth/status — OAuthToken.filter(user_id=user_id).
+        "oauth_status": "self",
+        # GET oauth/accounts — OAuthToken.filter(user_id=user_id).
+        "oauth_accounts": "self",
+        # POST oauth/connect/<provider> — state-нонс в кэше несёт user_id
+        # токена; callback привяжет аккаунт только к нему.
+        "oauth_connect": "self",
+        # DELETE oauth/disconnect — disconnect_all(user_id): удаляет лишь
+        # свои личные аккаунты и токены.
+        "oauth_disconnect": "self",
+        # GET folder/<folder> — email_service.list_emails:
+        # EmailMessage.filter(user_id=user_id, ...); account_id сужает ту же
+        # выборку, а не расширяет её.
+        "list_emails": "self",
+        # GET unread-counts/ — оба COUNT по filter(user_id=user_id).
+        "unread_counts": "self",
+        # GET <uuid> — filter(id=message_id, user_id=user_id) -> EmailNotFound (404).
+        "get_email": "self",
+        # POST send — чужой account_id -> AccountNotFound (404); письмо
+        # создаётся с user_id токена.
+        "send_email": "self",
+        # POST <uuid>/read — UPDATE ... filter(id=, user_id=): чужое письмо
+        # не меняется (204 без проверки rowcount — буквальный порт исходника).
+        "mark_as_read": "self",
+        # POST draft — черновик создаётся с user_id токена, параметра-id нет.
+        "save_draft": "self",
+    },
+    # cms (блок L, задача 8). Контент (новости, категории/теги, блоки главной,
+    # обращения — 25 бывших admin=True) стоит под module="cms",
+    # level="write" — уровня, которого employee-basic не несёт (её уровень в
+    # cms — read, инвариант L1: у неё только cms.news:view из access/0004,
+    # задача 8 не добавляла ей новых узлов). Единственная запись реестра —
+    # конфиг конференции (финальное ревью блока L, I-1, см. ниже). Все четыре
+    # ручки приглашений — level="read" (уровень employee-basic),
+    # но приглашения защищены не гейтом модуля, а
+    # conference_invite_service.may_manage_invites: организатор календарного
+    # события комнаты (apps.tasks.interface.get_conference_event_for_room),
+    # автор ссылки (ConferenceInvite.created_by_id) или cms:admin — спека
+    # блока L §7. _create_conference_invite остаётся открытой любому
+    # сотруднику ("перенести как есть", §12 вопрос 2 спеки). Публичные ручки
+    # (создание обращения, чтение новостей/категорий/тегов/блоков главной,
+    # публичная страница приглашения и выдача гостевого токена) — auth=None,
+    # в реестр не входят.
+    "cms": {
+        # GET conference/config — рантайм-конфиг звонка (ICE/TURN-серверы,
+        # адрес и отпечаток моста WebTransport), без данных пользователя; до
+        # блока L у ручки не было проверок, кроме входа. Нужен в комнате
+        # /room/<id> на ГОЛОМ домене, куда ведёт ссылка-приглашение
+        # (build_join_url строится от PUBLIC_BASE_URL): там нет компании, и
+        # гейт модуля дал бы none -> 403, то есть звонок без TURN (финальное
+        # ревью блока L, I-1). Гостю тот же конфиг уже отдаётся вместе с
+        # гостевым токеном. Сужать доступ к нему — не решение блока.
+        "conference_config": "open",
+    },
+    # approvals (блок L, задача 9): заявка — общий объект (инициатор,
+    # согласующие, наблюдатели): своё над ней — write/read + собственные
+    # проверки, не self. Чтение/подача/действия над заявкой стоят под
+    # module="approvals" (read для чтения и для approve/reject/
+    # request_changes/recall/batch_approve — сами по себе они не решают, кто
+    # согласующий, это делает request_runtime.act; write для create/update/
+    # submit/cancel), кто именно может действовать — по-прежнему решают
+    # request_runtime.act/.cancel/.recall (Forbidden -> 403) и
+    # permissions.ensure_can_manage_project/_template, а доступ к
+    # авто-таблице шаблона — template_data_table.can_view_/
+    # can_manage_data_table. Заведение проекта и справочников (бывшие
+    # admin=True) — под level="admin". Записей самообслуживания нет.
+    "approvals": {},
+}

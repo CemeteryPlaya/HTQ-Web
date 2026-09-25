@@ -61,8 +61,24 @@ def _user(email, **kw):
     return user
 
 
-def _auth(user):
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+def _auth(user, company_slug=None):
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    if company_slug is not None:
+        headers["HTTP_X_HTQ_COMPANY"] = company_slug
+    return headers
+
+
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Блок I задача 5 — ``module="hr", level=…`` стоит ПОВЕРХ старой
+    Employee/Position-эвристики (тот же приём, что в
+    ``test_employees_api.py::_grant_seeded_role``)."""
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
 
 
 @pytest.fixture
@@ -76,28 +92,31 @@ def other_dep(db):
 
 
 @pytest.fixture
-def senior(db, hr_dep):
+def senior(db, hr_dep, company_row):
     """senior => can_create_employee + can_list_user_options, без transfer? нет —
     у senior transfer есть; отсутствие transfer проверяется на middle."""
     pos = _pos("Senior HR Manager", hr_dep, weight=30)
     user = _user("hr-senior@htq.test")
     emp = _emp(hr_dep, pos, "hr-senior@htq.test", user_id=user.id)
-    return emp, _auth(user)
+    _grant_seeded_role(company_row, user.id, "hr-senior")
+    return emp, _auth(user, company_row)
 
 
 @pytest.fixture
-def middle(db, hr_dep):
+def middle(db, hr_dep, company_row):
     """middle => can_write_basic, но НЕ can_transfer_employee и НЕ users.list."""
     pos = _pos("HR Manager", hr_dep, weight=20)
     user = _user("hr-middle@htq.test")
     emp = _emp(hr_dep, pos, "hr-middle@htq.test", user_id=user.id)
-    return emp, _auth(user)
+    _grant_seeded_role(company_row, user.id, "hr-middle")
+    return emp, _auth(user, company_row)
 
 
 @pytest.fixture
-def admin_auth(db):
+def admin_auth(db, company_row):
     user = _user("hr-admin@htq.test", is_staff=True)
-    return _auth(user)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
+    return _auth(user, company_row)
 
 
 @pytest.fixture

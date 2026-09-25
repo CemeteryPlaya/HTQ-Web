@@ -50,8 +50,22 @@ def test_create_project_respects_explicit_owner():
     assert resp.json()["owner_id"] == 55
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_project_name_must_be_unique():
+    """``transaction=True``, не обычный ``django_db`` — тестовый феномен, не
+    боевой путь. Компания-заголовок (block I, задача 7) заводит
+    ``CompanyContextMiddleware`` в ветку с ``try/finally`` (``apply_search_
+    path`` при выходе). Обычный ``django_db`` оборачивает весь тест в
+    ``atomic()``; необработанный ``IntegrityError`` внутри такого блока
+    помечает ВСЮ транзакцию сломанной, и следующий же запрос —
+    безобидный ``SET search_path`` в ``finally`` middleware — падает
+    ``TransactionManagementError`` раньше, чем успевает уйти уже построенный
+    500-ответ. В проде этого пути нет: ``ATOMIC_REQUESTS`` нигде не задан
+    (``htqweb/settings/base.py``), запрос идёт в autocommit, и один упавший
+    ``INSERT`` не портит ничего, кроме себя. ``transaction=True`` снимает
+    тестовую обёртку — тот же приём и по той же причине, что в
+    ``test_holding_api.py``.
+    """
     Project.objects.create(name="Dup")
     resp = post_json(Client(), f"{BASE}/projects/", {"name": "Dup"},
                      **auth(admin_token()))

@@ -266,7 +266,7 @@ def test_counterparty_created_from_partner_is_linked():
     partner = Contractor.objects.create(name="Альфа-Монтаж", bin_iin="123456789012")
     resp = post_json(Client(), f"{CONTRACTS}/counterparties/full",
                      _full_body(contractor_id=partner.id),
-                     **auth(contracts_helpers.token()))
+                     **contracts_helpers.auth(contracts_helpers.token()))
     assert resp.status_code == 201, resp.content
     body = resp.json()
     assert body["contractor"] == {"id": partner.id, "name": "Альфа-Монтаж",
@@ -276,7 +276,7 @@ def test_counterparty_created_from_partner_is_linked():
     assert partner.counterparty_id == body["id"]
 
     card = Client().get(f"{CONTRACTS}/counterparties/{body['id']}",
-                        **auth(contracts_helpers.token()))
+                        **contracts_helpers.auth(contracts_helpers.token()))
     assert card.json()["contractor"]["id"] == partner.id
 
 
@@ -287,7 +287,7 @@ def test_failed_link_rolls_back_the_new_counterparty():
     partner = Contractor.objects.create(name="Альфа-Монтаж", bin_iin="999999999999")
     resp = post_json(Client(), f"{CONTRACTS}/counterparties/full",
                      _full_body(contractor_id=partner.id),
-                     **auth(contracts_helpers.token()))
+                     **contracts_helpers.auth(contracts_helpers.token()))
     assert resp.status_code == 409
     assert not Counterparty.objects.exists()
 
@@ -298,7 +298,7 @@ def test_partner_is_not_silently_taken_from_another_counterparty():
     partner = Contractor.objects.create(name="Бета-Монтаж", counterparty_id=other.id)
     resp = post_json(Client(), f"{CONTRACTS}/counterparties/full",
                      _full_body(contractor_id=partner.id),
-                     **auth(contracts_helpers.token()))
+                     **contracts_helpers.auth(contracts_helpers.token()))
     assert resp.status_code == 409
     partner.refresh_from_db()
     assert partner.counterparty_id == other.id
@@ -309,7 +309,7 @@ def test_deleting_counterparty_unlinks_the_partner():
     cp = _counterparty()
     partner = Contractor.objects.create(name="Альфа-Монтаж", counterparty_id=cp.id)
     resp = Client().delete(f"{CONTRACTS}/counterparties/{cp.id}",
-                           **auth(contracts_helpers.admin_token()))
+                           **contracts_helpers.auth(contracts_helpers.admin_token()))
     assert resp.status_code == 204
     partner.refresh_from_db()
     assert partner.counterparty_id is None

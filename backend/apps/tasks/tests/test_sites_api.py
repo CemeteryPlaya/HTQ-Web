@@ -78,8 +78,14 @@ def test_create_site_defaults():
     assert body["color"] == "#0ea5e9"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_site_name_is_unique():
+    """``transaction=True`` — тестовый феномен (обычный ``django_db``
+    оборачивает тест в ``atomic()``, и необработанный ``IntegrityError``
+    ломает следующий же запрос — ``SET search_path`` в ``finally``
+    ``CompanyContextMiddleware``), не боевой путь: ``ATOMIC_REQUESTS`` нигде
+    не задан, прод работает в autocommit. Подробности —
+    ``test_projects_api.py::test_project_name_must_be_unique``."""
     _site("Алга")
     resp = post_json(Client(), f"{BASE}/sites/", {"name": "Алга"},
                      **auth(admin_token()))
@@ -360,10 +366,12 @@ def test_stats_can_be_narrowed_to_one_site():
 
 @pytest.mark.django_db
 def test_resource_gantt_can_be_narrowed_to_one_site():
-    from datetime import date, timedelta
+    from datetime import timedelta
+
+    from django.utils import timezone
 
     site = _site("Алга")
-    today = date.today()
+    today = timezone.localdate()
     window = {"from": str(today - timedelta(days=1)),
               "to": str(today + timedelta(days=30))}
     _task(site=site, assignee_id=USER, start_date=today,

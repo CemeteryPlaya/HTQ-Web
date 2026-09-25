@@ -735,7 +735,7 @@ def task_stats(*, department_id=None, project_id=None, site_id=None,
     by_type = {(row["task_type__slug"] or "unknown"): row["n"] for row in
                qs.values("task_type__slug").annotate(n=n)}
 
-    since = timezone.now().date() - timedelta(days=30)
+    since = timezone.localdate() - timedelta(days=30)
     created_per_day = [
         {"day": str(row["day"]), "count": row["n"]}
         for row in (qs.filter(created_at__date__gte=since)

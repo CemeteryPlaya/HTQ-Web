@@ -12,21 +12,29 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { EmployeeFormDialog } from '@/components/hr/EmployeeFormDialog';
 
-const hasPerm = vi.fn();
+// Права — `usePermissions().can(node, flag)` (задача 10 блока I). Секции
+// Т-2 сидят на узлах `hr.employees.salary` (финансы) и
+// `hr.employees.passport` (личные данные) — `SECTION_NODE` в cardT2Fields.
+// Мок по умолчанию разрешает всё; кейсы ниже отзывают ОДИН признак на одном
+// узле — ровно то, что раньше выражалось через `hasPerm('hr.card.<секция>.
+// <view|edit>')`.
+const can = vi.fn<(node: string, flag: string) => boolean>();
+const deny = (node: string, flag: string) => (n: string, f: string) => !(n === node && f === flag);
 
-vi.mock('@/hooks/useHRLevel', () => ({
-  useHRLevel: () => ({
-    level: 'lead',
-    hasHrAccess: true,
-    canWriteBasic: true,
-    canCreateEmployee: true,
-    canTransferEmployee: true,
-    canDeleteEmployee: true,
-    canListUserOptions: true,
-    canManageUserOptions: true,
-    permissions: [],
-    hasPerm,
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    company: 'demo',
+    level: () => 'admin',
+    atLeast: () => true,
+    scope: () => ({ kind: 'company', id: null }),
+    depth: () => ['view', 'create', 'edit', 'delete'],
+    can: (node: string, flag: string) => can(node, flag),
+    pageHidden: () => false,
+    subordinateCompanies: [],
+    inheritedFrom: [],
     isLoading: false,
+    isError: false,
+    refetch: () => {},
   }),
 }));
 
@@ -92,13 +100,13 @@ const save = () => act(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hasPerm.mockImplementation(() => true);
+  can.mockImplementation(() => true);
 });
 
 describe('EmployeeFormDialog — секции Т-2', () => {
   it('не показывает секцию без права view', async () => {
-    hasPerm.mockImplementation(
-      (key: string) => key !== 'hr.card.financial.view' && key !== 'hr.card.financial.edit',
+    can.mockImplementation(
+      (node, flag) => !(node === 'hr.employees.salary' && (flag === 'view' || flag === 'edit')),
     );
     renderDialog(EMPLOYEE);
 
@@ -109,7 +117,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   it('скрывает секцию, на которую есть edit, но нет view — иначе сохранение затёрло бы её null-ами', async () => {
     // edit есть, view нет: показывать нечего, а показать пустую форму значит
     // предложить пользователю затереть данные, которых он не видит.
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
+    can.mockImplementation(deny('hr.employees.salary', 'view'));
     renderDialog(EMPLOYEE);
 
     await waitFor(() => expect(screen.getByText(/Личные данные/)).toBeInTheDocument());
@@ -117,7 +125,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
   });
 
   it('делает поля read-only при view без edit', async () => {
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.edit');
+    can.mockImplementation(deny('hr.employees.salary', 'edit'));
     renderDialog(EMPLOYEE);
 
     fireEvent.click(await screen.findByText(/Финансовые данные/));
@@ -180,7 +188,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     // прошёл бы его тоже — скрытая секция там не трогается и потому «чистая».
     // Явно проверяем, что financial без view не попадает в payload, даже
     // когда мы редактируем другую (personal) секцию.
-    hasPerm.mockImplementation((key: string) => key !== 'hr.card.financial.view');
+    can.mockImplementation(deny('hr.employees.salary', 'view'));
     renderDialog(EMPLOYEE);
 
     // financial здесь скрыта (нет view), так что якорить на её значении
@@ -243,7 +251,7 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     expect(dateInput).toBeTruthy();
     fireEvent.change(dateInput!, { target: { value: '2024-05-01' } });
 
-    // Заполняем Т-2 поле — секция открыта по умолчанию правами (hasPerm
+    // Заполняем Т-2 поле — секция открыта по умолчанию правами (can
     // мокнут в true), только раскрываем Collapsible.
     fireEvent.click(await screen.findByText(/Финансовые данные/));
     await act(async () => {
@@ -294,6 +302,104 @@ describe('EmployeeFormDialog — секции Т-2', () => {
     expect(await screen.findByLabelText(/Оклад/)).toBeInTheDocument();
     // И заголовок секции подсвечен бейджем ошибки.
     expect(await screen.findByText('Проверьте поля')).toBeInTheDocument();
+  });
+});
+
+describe('EmployeeFormDialog — статус «уволен» и право перевода', () => {
+  // Фикс-раунд 1 задачи 10 блока I. Бэкенд (apps/hr/views.py::
+  // _update_employee) требует EMPLOYEES_TRANSFER для terminated/suspended/
+  // rejected — раньше селект целиком открывался по `canWriteBasic`, и middle
+  // выбирал «уволен», чтобы получить 403. Недоступные поля в этом диалоге
+  // помечаются `disabled` (отдел, должность) — тот же приём и здесь.
+  //
+  // Radix Select в jsdom открывается pointerDown'ом по триггеру (полифиллы
+  // Pointer Capture — в src/test/setup.ts; приём — как в
+  // components/__tests__/BodyPointerEventsGuard.test.tsx).
+  const openStatusSelect = async () => {
+    const trigger = (await screen.findByText(/Активен/)).closest('button');
+    expect(trigger).not.toBeNull();
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    return screen.findByRole('option', { name: /Уволен/ });
+  };
+
+  it('без права перевода пункт «Уволен» недоступен, остальные статусы — доступны', async () => {
+    can.mockImplementation(deny('hr.employees.transfer', 'edit'));
+    renderDialog(EMPLOYEE);
+
+    const terminated = await openStatusSelect();
+    expect(terminated).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /Неактивен/ })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('с правом перевода пункт «Уволен» доступен', async () => {
+    renderDialog(EMPLOYEE);
+
+    const terminated = await openStatusSelect();
+    expect(terminated).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
+describe('EmployeeFormDialog — PATCH только изменённых полей перевода (T10-A)', () => {
+  // Бэкенд требует права перевода при ЛЮБОМ присланном department_id/
+  // position_id/termination_date и статусе «уволен»; форма раньше слала отдел
+  // и должность всегда — middle получал 403 за то, чего не менял.
+  it('нетронутые отдел, должность и статус в PATCH не уходят', async () => {
+    can.mockImplementation(deny('hr.employees.transfer', 'edit'));
+    renderDialog(EMPLOYEE);
+
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, payload] = mockUpdate.mock.calls[0]!;
+    expect(payload).not.toHaveProperty('department_id');
+    expect(payload).not.toHaveProperty('position_id');
+    expect(payload).not.toHaveProperty('status');
+    expect(payload).not.toHaveProperty('termination_date');
+    expect(payload).toMatchObject({ phone: EMPLOYEE.phone, first_name: EMPLOYEE.first_name });
+  });
+
+  it('изменённый статус уходит', async () => {
+    renderDialog(EMPLOYEE);
+    fireEvent.click(await screen.findByText(/Финансовые данные/));
+    await screen.findByDisplayValue('450000.00');
+
+    const trigger = (await screen.findByText(/Активен/)).closest('button');
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    fireEvent.click(await screen.findByRole('option', { name: /Неактивен/ }));
+    save();
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    const [, payload] = mockUpdate.mock.calls[0]!;
+    expect(payload).toHaveProperty('status');
+    expect(payload).not.toHaveProperty('department_id');
+  });
+});
+
+describe('EmployeeFormDialog — статус при создании (T10-B)', () => {
+  const statusTrigger = async () => (await screen.findByText(/Активен/)).closest('button');
+
+  it('без права создания селект статуса недоступен — как отдел и должность', async () => {
+    can.mockImplementation(deny('hr.employees', 'create'));
+    renderDialog(null);
+
+    expect(await statusTrigger()).toBeDisabled();
+  });
+
+  it('с правом создания селект открыт, и «Уволен» в ветке создания не закрыт', async () => {
+    renderDialog(null);
+
+    const trigger = await statusTrigger();
+    expect(trigger).not.toBeDisabled();
+    act(() => {
+      fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    });
+    expect(await screen.findByRole('option', { name: /Уволен/ })).not.toHaveAttribute('aria-disabled', 'true');
   });
 });
 

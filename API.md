@@ -4,7 +4,9 @@
 > and the Django monolith that preceded them are both gone. One Django
 > backend (Python 3.14, Django 5.2.7) now serves every domain behind a Vite
 > dev proxy (`:3000`) or the nginx prod gateway (`:80`). Real-time chat over
-> Socket.IO, served by the backend's ASGI process. One Postgres schema.
+> Socket.IO, served by the backend's ASGI process. One Postgres database:
+> shared apps in schema `public`, the tenant apps (`hr`, `tasks`,
+> `contracts`, `signoff`) in one schema per company (`co_<slug>`).
 
 ## Architecture
 
@@ -26,8 +28,10 @@
 │ in prod), same image, different `command` per process:               │
 │                                                                       │
 │   backend-web    :8000   gunicorn/WSGI — all of /api/*, /django-admin/,│
-│                          static. Only this process runs `migrate` +   │
-│                          seeds the admin account (RUN_MIGRATIONS=1)   │
+│                          static. Only this process migrates          │
+│                          (`migrate_shared` — shared apps only) +     │
+│                          seeds the admin account (RUN_BOOTSTRAP=1;   │
+│                          migrations — RUN_MIGRATIONS=1)              │
 │   backend-asgi   :8000   uvicorn/ASGI  — SSE /api/requests/v1/stream +│
 │                          WebSocket /ws/ (messenger Socket.IO)         │
 │   backend-worker         Celery worker (all domains' @shared_task)   │
@@ -38,7 +42,8 @@
           ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Postgres :5432 (direct — no pooling middleman in the request path)   │
-│   one schema: public. Table names are Django's own default           │
+│   public (shared apps) + co_<slug> per company (TENANT_APPS) +       │
+│   holding (UNION ALL views). Table names are Django's own default    │
 │   (<app_label>_<model>, e.g. hr_department, mail_emailaccount)       │
 │   PgBouncer :6432 kept for host tooling only, not live traffic       │
 │ Redis :6379  (cache, Celery broker/results, SSE pub/sub bridge)      │
@@ -48,7 +53,9 @@
 
 Domains are Django apps under `backend/apps/`: `users`, `hr`, `tasks`,
 `approvals` (mounted at `/api/requests/`), `cms`, `media_files` (mounted at
-`/api/media/`), `mail` (mounted at `/api/email/`), `messenger`, plus `core`
+`/api/media/`), `mail` (mounted at `/api/email/`), `messenger`, `contracts`,
+`signoff`, `conference`, `companies` (the group's company registry) and
+`access` (roles and permissions), plus `core`
 (health checks + the service registry, no domain of its own). Each domain's
 URLs live in `apps/<domain>/urls.py` — that is now the source of truth this
 document is checked against, not a FastAPI router. See
@@ -173,12 +180,137 @@ JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth` — unchanged from
 the FastAPI generation, even though there's no separate user-service
 anymore):
 ```
-{ user_id, username, email, is_staff, is_superuser, is_admin,
-  token_type: "access" | "refresh", iat, exp, iss }
+{ sub, user_id, username, email, is_staff, is_superuser, is_admin,
+  company, token_type: "access" | "refresh", iat, exp, iss }
 ```
-`is_admin = is_staff OR is_superuser`. `apps.users` (`htqweb/authn/jwt.py`)
+`is_admin = is_staff OR is_superuser`. `company` is the slug of the company
+the token was issued for — the request's company (`X-HTQ-Company`;
+membership required, otherwise login/refresh answer 403 and issue no
+token — with one exception: an archived company issues a token to a
+superuser only, membership or not, and to nobody else, members included;
+see [the archive spec](docs/plans/2026-09-25-archive-read-only-spec.md));
+without the header — the user's default active company
+(`apps/users/views.py::_company_slug_for_token`,
+`htqweb/authn/jwt.py::_base_claims`). A refresh token carries only `sub`,
+`user_id`, `iss` plus the type/time claims. `apps.users` (`htqweb/authn/jwt.py`)
 both issues and validates every token, in-process, for every app — no
 introspection round-trip, no separate identity service.
+
+### Authorization — one rule: JWT + company + `module × level`
+
+Stated once here; the per-domain tables below do **not** repeat it per row.
+
+1. **JWT** (`Authorization: Bearer`) — every `/api/*` route unless marked
+   *Public* / `auth=None`.
+2. **Company context** — `X-HTQ-Company: <host label>` (nginx sets it from the
+   subdomain; the SPA and any client on a subdomain gets it for free). Since
+   block I.2 the label is the company's short alias `Company.subdomain`
+   (`htq`, `hts`, `keg`, `group`) or, for a company **without** an alias, its
+   slug — `apps.companies.interface.resolve_host_label`. Each company has one
+   canonical host: the slug-host of a company that has an alias answers
+   **404**, same as an unknown label. From there on everything uses the slug
+   (schema, token claim, role assignments). The bare domain carries no company:
+   the SPA sends a signed-in user to `/companies/choose` there. The
+   token's `company` claim must equal the header's company, otherwise
+   **403** — a subdomain is trivial to spoof, a signature is not. Switching
+   company means moving to that company's host: the SPA there has no access
+   token of its own (it is per-origin) and exchanges the refresh token, kept
+   in a cookie on the parent domain, for one issued for that company
+   (`frontend/src/lib/auth/sessionRestore.ts`, `companySwitch.ts`) — no
+   second login. Both login and refresh refuse (**403**) a company the user
+   has no `CompanyMembership` in.
+3. **Module × level** — a route declared `api_view(module="<m>",
+   level="read"|"write"|"admin")` asks `apps.access` for the caller's level
+   on that module *in the request's company* and answers **403** when it is
+   below the declared one. The level is the projection of the caller's roles
+   (`GET /api/access/v1/me` → `permissions[<m>].level`), computed from
+   `PositionRole` (roles of the position they hold, incl. inherited from a
+   serving ancestor company) plus personal `RoleAssignment`. **Without a
+   company context the level is `none` for everyone but a superuser** — the
+   only free pass left; `is_staff`/`is_admin` alone open nothing.
+   `admin=True` on a route is the platform-admin predicate and is checked
+   in addition, not instead.
+4. **Finer than the level** — inside a route the domain may check a single
+   function-registry node (`apps/hr/rbac.py::NodeAccess.has`, e.g.
+   `hr.employees` with flag `delete`), because the module level aggregates
+   over the whole subtree (`hr-senior` reaches `admin` on `hr` through
+   `delete` on org/staffing/calendar without being allowed to delete
+   employees). Such checks answer 403 with the domain's own detail — in
+   `hr` most often `{"detail": "Missing permission: <old key>"}`, where the
+   key is the legacy permission name the node check was asked for (e.g.
+   `hr.calendar.manage`), not `<node>.<flag>`. The *scope* of a grant (`department` vs `company`,
+   `/me` → `permissions[<m>].scope`) narrows the data a read returns
+   (employee list of one's own department), not the route's availability.
+
+**Which routes carry the gate.** Every route of the five apps `hr`, `users`,
+`companies`, `access` and `tasks` — enforced by the inverted guard in
+`apps/access/tests/test_gate.py` (every route outside the registry must carry
+`module=`, always with an explicit `level=`) — except the ones listed in the
+self-service registry `apps/access/self_service.py`, each with a declared
+reason: `self` (returns strictly the caller's own data, e.g.
+`GET /api/hr/v1/employees/me`, `/api/users/v1/profile/me`,
+`GET /api/companies/v1/me`), `open` (a company-wide reference such as
+`GET /api/hr/v1/org/tree`, deliberately readable by any signed-in employee) or
+`scoped` (protected by its own non-role check — one's own department's files,
+being the approver of a given identity request; the platform operations of
+`companies` — archive, restore, revoking a membership — which only a
+superuser may call: `admin=True` plus `is_superuser` in the method). Those
+three share one decorator factory, `platform(...)` in
+`apps/companies/views.py`, and the registry lists the factory once
+(`"platform": "scoped"`) — so **any new route put on `@platform` becomes
+`scoped` automatically** and must call `deny_unless_platform_admin` first,
+like the three existing ones; the guard cannot tell it apart. The
+destructive `hr` routes that used to be open to anyone signed in
+(`DELETE /vacancies/{id}/`, `/applications/{id}/`,
+`/time-tracking/entries/{id}/`, `/documents/{id}/`) are gated at `hr: admin`
+— the third deliberate exception of block I; creating and editing those
+resources stays open. `contracts` and `signoff` are **not** gated yet —
+their owners add `api_view(module=…)` themselves (roadmap §6.2/6.3); until
+then they follow the older "read = JWT, write = admin / explicit
+permission" wording in their own sections.
+
+The seeded roles: `platform-admin` (`access/migrations/0002`);
+`employee-basic` (`0004` — profile, messenger, conference (join only), mail,
+tasks, calendar, news, requests), granted to a new member together with the
+membership (`membership_service.grant_membership` →
+`access.interface.ensure_basic_role`) and to members that existed at rollout
+by `manage.py access_backfill_basic`; `hr-junior` (hr: read, own department),
+`hr-middle` (hr: write, own department), `hr-senior` and `hr-lead` (hr:
+admin, whole company) — `0005`, sub-node denies `0008`. Positions get
+them through `PositionRole` (`PUT /api/access/v1/positions/{id}/roles`, or
+`manage.py access_backfill_positions` once, at rollout — a position whose
+old explicit key list replaced its level preset gets a named role
+`hr-custom-<slug>-<id>` instead of a level role).
+
+What the rollout moves over, and what it deliberately doesn't:
+
+- A named role belongs to its company (`Role.company_slug`, see
+  `apps.access` below). Its nodes are the union of the flags of every listed
+  key that maps to the node, so keys of one node **add up**: the role answers
+  "yes" to a neighbouring old key of the same node whose flags it covers —
+  the same property the level roles have.
+- **Deliberate exception #4 of block I:** a position whose list holds only
+  `contracts.*` keys gets no HR role at all. The old model let its holder
+  into HR routes gated by the bare level (`HRAccess.has_access` was "a level
+  OR any key"), though the list granted no HR key; the migration summary
+  prints such positions as «явный список без кадровых ключей», and
+  `contracts` keeps reading its keys from `Position.permissions` itself.
+- The holder's HR card is found by `user_id` and then by the token's email,
+  as the old resolver did. That cannot be used to claim someone else's card:
+  self-registration is moderated — the account stays `PENDING` until an
+  admin approves it (`/api/users/v1/pending-registrations/`), and login and
+  refresh issue tokens to `ACTIVE` accounts only.
+- Revoking a membership (`DELETE …/memberships/{user_id}`) leaves the user's
+  `PositionRole`/`RoleAssignment` rows in place (customer decision). They are
+  inert: without a membership neither login nor refresh issues a token for
+  that company (`apps.companies.interface.user_may_enter_company`). Caveat:
+  an access token issued before the revocation keeps working, with all its
+  roles, until it expires (`JWT_ACCESS_TTL_MIN`, 60 min) — `api_view` checks
+  the `company` claim, not the membership. That was already so before
+  block I.2.
+- A membership created in django-admin goes through
+  `membership_service.grant_membership` too, so it gets `employee-basic` like
+  every other path.
 
 ### Refresh token
 
@@ -188,7 +320,11 @@ Content-Type: application/json
 
 { "refresh": "<jwt>" }
 → 200 { "access": "<jwt>", "token_type": "Bearer" }
+→ 403 { "detail": "Forbidden" }   # X-HTQ-Company names a company the user has no membership in
 ```
+The new access token is issued for the request's company, not for the one
+the refresh token was first issued in (a refresh token carries no
+`company`); without `X-HTQ-Company` — for the user's default company.
 
 ### Admin-session cookie — legacy, kept for contract parity, no live consumer
 
@@ -213,8 +349,12 @@ session/login form against the same `User` model. Don't wire new code to
 ### Bootstrap an admin user
 
 The `backend-web` process seeds one automatically and idempotently on every
-start (`RUN_MIGRATIONS=1` → `docker-entrypoint.sh` → `migrate` then a
-`manage.py shell` one-liner):
+start (`RUN_BOOTSTRAP=1` → `docker-entrypoint.sh` → a `manage.py shell`
+one-liner, after collectstatic and bucket creation). `RUN_BOOTSTRAP` is
+separate from `RUN_MIGRATIONS` (which only gates `migrate_shared`) and is
+`1` in all three compose files (a `${RUN_BOOTSTRAP:-1}` default in
+`docker-compose.yml`/`test-env`, hard-coded in `test-local`), so the admin
+is seeded even where migrations are off:
 ```
 username=admin, password=admin12345, is_staff=is_superuser=True, status=ACTIVE
 ```
@@ -305,6 +445,9 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/departments/tree`             | GET    | Full tree                      |
 | `/api/hr/v1/positions/`                   | GET, POST |                              |
 | `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
+| `/api/hr/v1/positions/{id}/substitutions` | GET, POST | Substitution matrix — GET: JWT, POST: admin=True |
+| `/api/hr/v1/substitutions/{id}`          | PATCH, DELETE | Edit/delete (admin=True) |
+| `/api/hr/v1/approvals/{subject_type}/{id}/submit` | POST | Отправить кадровый объект на согласование через `apps.signoff`. JWT, БЕЗ `admin=True` — отправляет тот, кто завёл заявку, а решает маршрут. `subject_type` — один из десяти `hr.*` (матрица HR-FRM-004, список в roadmap §6.4); 404 — неизвестный тип или нет такой строки, 409 — маршрут не настроен / объект уже на согласовании / в этапе не осталось согласующих / объект заперт. Ответ — карточка процесса с этапами |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
 | `/api/hr/v1/time/`                        | GET, POST | Time tracking               |
@@ -318,6 +461,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/pmo/`                         | GET, POST | Project management office   |
 | `/api/hr/v1/share-links/`                 | GET, POST |                              |
 | `/api/hr/v1/public/org/{token}`           | GET    | Public org-chart by share link — nginx `api_public` rate limit |
+| `/api/hr/v1/holding/headcount`            | GET    | Сводка по группе: люди/структура/штат по каждой действующей компании (блок H, `holding.*` через `apps/hr/holding_models.py`). JWT + гейт `module="hr", level="read"`, ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/hr/urls.py` (170 registered patterns, counting both
 slash spellings — see [STRUCTURE.md §4.2](STRUCTURE.md) for HR-adjacent
@@ -384,6 +528,7 @@ business logic).
 | `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    |                              |
+| `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
 (reporter/supervisor/assignee/delegate/watcher) are unchanged from the
@@ -1081,6 +1226,154 @@ a schema one (an unknown condition operator lands here, not in 409).
 
 ---
 
+## `apps.access` — `/api/access/v1`
+
+Roles-and-permissions engine — stage-2 spec
+(`docs/plans/2026-08-29-stage2-access-and-roles-spec.md` §4) frozen contract.
+A role is a named set of function-registry entries (`node → depth flags`,
+one of `view/create/edit/delete`); a position normally carries a set of
+roles (`PositionRole`) — a personal `RoleAssignment` on a user is the
+exception, for what a position can't carry (acting head, temporary
+widening). **For a group of companies, cross-company access by position is
+now also the normal path** (customer decision, 2026-09-15 — see block C
+below and stage2-spec §1.2), not just within one company. The module-level
+`level` (`none|read|write|admin`) inside `permissions` is a *projection* of
+the finer `depth` map, kept for routing and the `api_view(module=)` gate —
+`depth` is the source of truth for hiding individual fields/buttons.
+
+| Endpoint | Method | Auth | Notes |
+|---|---|---|---|
+| `/api/access/v1/me` | GET | jwt | Caller's resolved permissions in the request's company — fields below |
+| `/api/access/v1/functions` | GET | access/read | Function-registry tree (`module → function → field`) + flat page list, for the roles/permissions editor |
+| `/api/access/v1/roles` | GET, POST | GET jwt (open); POST access/admin + superuser | Role catalog, `RoleRead.company_slug` included. A role with empty `company_slug` is shared by the group and acts the same in every company, so every catalog write is superuser-only. A role with `company_slug` set belongs to one company (block I.2 — today the named `hr-custom-*` roles of the rollout, migrations `access/0009`/`0010`): GET lists the shared roles plus those of the request's company; a superuser sees all |
+| `/api/access/v1/roles/{id}` | PATCH, DELETE | access/admin + superuser | 409 deleting an `is_system` role |
+| `/api/access/v1/roles/{id}/permissions` | GET, PUT | GET access/read; PUT access/admin + superuser | Depth flags per registry node for this role. GET of another company's role → 404, as if it didn't exist (PUT is superuser-only anyway) |
+| `/api/access/v1/roles/{id}/holders` | GET | jwt (access/read) | Who holds the role — `position` (via `PositionRole`, fix by editing the position) vs `personal` (`RoleAssignment`, fix by editing the assignment) — named so a role can actually be unassigned before deletion. Another company's role → 404 |
+| `/api/access/v1/roles/{id}/copy` | POST | access/admin + superuser | Duplicate a role's permission set under a new code/title; the copy keeps the source's `company_slug` |
+| `/api/access/v1/positions/{position_id}/roles` | GET, PUT | GET jwt (open); PUT access/admin + `admin=True` | Roles carried by a position — the normal path, including the cross-company one described below. 422 for a role of another company — refused on every path that grants a role: this service check, and `PositionRole.clean()`/`RoleAssignment.clean()` for django-admin |
+| `/api/access/v1/assignments/{user_id}` | GET, PUT | GET access/read; PUT access/admin + `admin=True` | Personal role assignments — the exception path. 422 for a role of another company, as above |
+
+**`GET /me` response** (`MeRead`):
+
+| Field | Type | Notes |
+|---|---|---|
+| `company` | `string \| null` | `null` outside a company context — transitional mode (roadmap §3), not an error |
+| `permissions` | `{module: {level, scope}}` | Module-level projection; drives routing and `api_view(module=)` |
+| `depth` | `{node: flags[]}` | Full picture by function-registry node; project fields/buttons by this, not by `permissions`. The client resolves a node by looking it up, then its ancestors — the first entry found is the answer (`frontend/src/lib/auth/permissions.ts::depthFor`). So the map carries a node only where its effective depth **differs** from what the client would inherit: an explicit role row equal to its ancestor's depth is left out, and a deny under a granted ancestor comes as an **empty list** (`hr.employees: ["view"]` + `hr.employees.salary: []`, the sub-node denies of `access/0008`) — the only case where `[]` means something; a node with no rights anywhere up the tree is simply absent. Sub-node `hr.employees.transfer` (transfer, change of position, dismissal — `edit` for `hr-senior`/`hr-lead`, deny for `hr-junior`/`hr-middle`) is one of those nodes |
+| `hidden_pages` | `string[]` | Pages the role explicitly vetoes; a page not listed here follows the ordinary rules regardless of depth |
+| `subordinate_companies` | `string[]` | Companies *below* this one in the ownership tree where the caller is manager by external hierarchy (`hr.Position.is_manager`/`external_hierarchy`, block B). Display only — doesn't filter data (stage2-spec §7) |
+| `inherited_from` | `string[]` | **New in block C.** Companies *above* this one whose serving position (`hr.Position.serves_subsidiaries`) contributed part of `permissions`/`depth` above. Sorted; empty for a superuser and for anyone inheritance gave nothing. Ancestors are not mutually exclusive (customer decision 7) — a serving grandparent and a serving parent both contribute, so this can carry more than one slug |
+
+**Holding rights in subsidiary companies (block C).** A position marked
+`serves_subsidiaries=True` (separate from `is_manager`/`external_hierarchy`
+— "runs the group's back office" and "manages people" are different
+questions) carries its roles into every company below its own in
+the ownership tree (`apps.access.services.inheritance`, walking `parent`
+upward from the request's company, not the reverse): company-scoped,
+unioned across every serving ancestor, and an archived ancestor is skipped
+without stopping the walk further up. **This grants rights only** — the
+holder still needs an explicit `CompanyMembership` in the subsidiary to get
+a token for its subdomain at all (customer decision 3); `manage.py
+company_grant --serving` grants it in bulk for a company, and the metric
+`htqweb_access_serving_holders_without_membership` (`htqweb-domains`
+dashboard) tracks who was marked serving but never actually granted
+membership — the gap is invisible from the position screen alone otherwise.
+A subsidiary can see (but not revoke) who from above holds rights in it via
+`GET /api/companies/v1/companies/{slug}/external-holders` — see
+`apps.companies` below.
+
+---
+
+## `apps.companies` — `/api/companies/v1`
+
+Company registry for the schema-per-company tenancy design (CLAUDE.md,
+"Мультикомпанейность"): `Company`, `CompanyModule` (per-company kill switch
+layered on top of `apps.core.models.ServiceStatus`), `CompanyMembership`
+(who may work in which company). `TENANT_APPS = (hr, tasks, contracts,
+signoff)` live in `co_<slug>` schemas; `companies` itself lives in `public`
+and needs no `X-HTQ-Company` header.
+
+**Two auth shapes.** Read/write routes go through `api_view(module=
+"companies", level="read"|"write")` — the caller needs that access level
+for the `companies` module (`apps.access`), same mechanism as every other
+domain. Archive, restore, bankruptcy and membership revocation are **platform-level**
+instead: `api_view(admin=True)` (staff-or-superuser) plus an explicit
+`is_superuser` check inside the view (`deny_unless_platform_admin`) — a
+plain staff token gets 403. Archive/restore/bankruptcy/revoke are
+irreversible-ish enough (archive turns every write on the company's
+subdomain into a 403 `company_archived` — for everyone, superuser included, except `GET`/`HEAD`/
+`OPTIONS` and the token endpoints — and every read of the company's data on
+it into a 404 for anyone but a superuser: anonymous (`auth=None`) handlers of
+the tenant apps (`hr`, `tasks`, `contracts`, `signoff`, e.g. HR share links)
+404 too, while anonymous handlers of shared apps — signed file URLs,
+messenger attachments, avatars, meeting recordings — keep answering, since
+they read `public`, not the company's schema, and are signature-protected;
+`django-admin` doesn't get even that exception and
+404s regardless of who's asking, because the check runs before Django's own
+session/auth middleware can tell; bankruptcy does all that and also hands
+every member a membership in the successor, which restore does not take
+back; revoke locks someone out) that "elevated"
+isn't a high enough bar.
+
+⚠️ **The module gate alone is company-blind.** `api_view(module=…)` resolves
+the caller's level in *the caller's own company* (`current_company_or_none()`)
+and never looks at the `{slug}` path segment being read or mutated — so on
+its own it would let a `companies` writer in company A rename, re-parent, or
+flip a module of company B, and let a `companies` reader in company A list
+company B's module states or membership roster (`username`/`full_name`/
+`email`). The final review of Block A caught this; the fix (present in the
+rows below) is a second, explicit check inside the view: `PATCH
+/companies/{slug}`, `PATCH …/modules/{app_label}` and `POST …/memberships`
+additionally call `deny_unless_platform_admin` (same helper archive/restore
+use — the registry is run by the platform administrator, not by peer
+companies), and `GET …/modules` / `GET …/memberships` additionally call
+`deny_unless_own_company`, which passes for a superuser or for the company
+named in `X-HTQ-Company` and 403s everyone else. **A company's own
+sub-resources (modules, memberships) are visible to that company and to the
+platform administrator only.**
+
+| Endpoint                                                | Method | Auth              | Notes |
+|----------------------------------------------------------|--------|-------------------|-------|
+| `/api/companies/v1/me`                                    | GET    | jwt               | Companies where the caller holds an active membership in an active company, ordered `-is_default, name`; `[{slug, subdomain, name, kind, is_default, is_current}]` — the SPA builds a company's host from `subdomain ?? slug` (switcher, `/companies/choose`); no module gate — every signed-in user needs this to switch companies. A superuser additionally gets every archived company in the registry appended, membership or not, each row carrying `is_archived: true` (`false` on every other row). An archived company is read-only: any method there but `GET`/`HEAD`/`OPTIONS` (the token endpoints excepted) is refused with 403 `company_archived` for everyone, and of the safe methods only a superuser gets through to read it — see [the archive spec](docs/plans/2026-09-25-archive-read-only-spec.md) |
+| `/api/companies/v1/companies`                              | GET    | jwt (companies/read)  | `?status=all\|active\|archived`, default `all` |
+| `/api/companies/v1/companies/tree`                         | GET    | jwt (companies/read)  | Active companies only, nested by `parent_slug`. A node whose parent got archived becomes a root instead of disappearing from the tree |
+| `/api/companies/v1/companies/{slug}`                       | GET    | jwt (companies/read)  | 404 `not_found` for an unknown slug |
+| `/api/companies/v1/companies/{slug}`                       | PATCH  | jwt (companies/write) + superuser | `{name?, kind?, country?, parent_slug?, show_external_holders?, subdomain?}` — `slug` itself never changes: it names the Postgres schema and is the company's value in tokens and role assignments. `subdomain` is the short host label (block I.2); `""`/`null` removes it (the company goes back to its slug-host), an omitted key leaves it alone; reserved labels (`www`, `api`, `admin`, `mail`, `static`, `cdn`, `grafana`, `media`, `sfu`, `ws`, `localhost`) and a label equal to another company's slug (or a slug equal to another's alias) are refused by `Company.clean()` → 422 `invalid`. A changed alias takes effect within the 5-second registry cache. `parent_slug: null` clears the parent; omitting any key leaves it alone (`model_fields_set`, not a `None` check). 422 `parent_not_found` / `parent_cycle` / `invalid`. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/archive`               | POST   | admin (superuser)     | Idempotent. 409 `last_active` if this is the only company with `status=active` — see below. Rebuilds holding views |
+| `/api/companies/v1/companies/{slug}/restore`                | POST   | admin (superuser)     | Idempotent. Clears `successor` (the restored company lives on its own again); memberships already granted in the successor by a bankruptcy are **not** revoked. Rebuilds holding views |
+| `/api/companies/v1/companies/{slug}/bankrupt`               | POST   | admin (superuser)     | Bankruptcy with a successor ([spec](docs/plans/2026-09-26-company-bankruptcy-spec.md), `lifecycle.bankrupt_company`; same operation as `manage.py company_bankrupt`). Body `{successor: "<slug>", dry_run?: false}`. Every member of `{slug}` with an **active** account gets a membership in the successor (`membership_service.grant_membership` — the new membership comes with `employee-basic`; a member whose default company was `{slug}` gets `is_default` on the new one; members already in the successor are left alone), then `{slug}.successor` is set and the company is archived (read-only) with a holding-view rebuild. **Only membership moves** — `hr` cards, equipment and contracts stay in the archive. Response `{company: CompanyRead, successor: CompanyRead, members_total, members_granted, members_already, archived, dry_run}`; `dry_run: true` counts and changes nothing (`archived: false`). Idempotent for the same pair: a repeat grants whatever is missing; `archived: false` when the company was already archived. An already-archived company without a successor can still be bankrupted. 403 for anyone but a superuser (a staff token included — `deny_unless_platform_admin`); 404 `not_found` for an unknown company or successor; 409 `successor_conflict` if the company already has a *different* successor, 409 `holding_stale` if the holding views could not be rebuilt (memberships and `successor` are already saved at that point; the views are finished by `manage.py migrate_companies`); 422 `successor_invalid` if the successor is the company itself or isn't active, 422 on a malformed body |
+| `/api/companies/v1/companies/{slug}/modules`                | GET    | jwt (companies/read), own company only | One row per `KNOWN_SERVICES` entry: `{app_label, enabled, message, is_core}`. No stored `CompanyModule` row means enabled. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/modules/{app_label}`    | PATCH  | jwt (companies/write) + superuser | `{enabled, message?}`. 422 if `app_label` isn't in the platform service registry; 409 if it's one of `CORE_MODULES` — core modules can't be switched off per company at all. `deny_unless_platform_admin` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/memberships`            | GET    | jwt (companies/read), own company only | Account fields joined in via `apps.users.interface.get_users_brief`. A membership whose account got deleted still shows, with blank account fields, rather than being hidden — a hidden row can't be revoked. `deny_unless_own_company` inside the view — see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/memberships`             | POST   | jwt (companies/write) + superuser | `{user_id, is_default?}`. 422 if `user_id` doesn't resolve via `get_user_brief`. Idempotent on `(company, user_id)`: 201 on first grant, 200 on repeat, never a second row. `deny_unless_platform_admin` inside the view — granting membership hands out a legitimate `company` claim and that company's whole tenant schema, see the company-blind-gate note above |
+| `/api/companies/v1/companies/{slug}/memberships/{user_id}`   | DELETE | admin (superuser)     | 409 `self_revoke` — can't revoke your own membership over HTTP (locking yourself out is one click; getting back in needs `manage.py company_grant` from a console). 404 if there's no such membership |
+| `/api/companies/v1/companies/{slug}/external-holders`         | GET    | jwt (companies/read), own company only | Block C. Who from a company *above* this one in the ownership tree currently holds rights here through a serving position (`hr.Position.serves_subsidiaries` → `apps.access.services.inheritance`) — `[{full_name, home_company, position, modules: [{module, level}]}]`, exactly those four fields and nothing else (no email/phone/department — this is holding-staff data disclosed to the subsidiary). `deny_unless_own_company`, same as the membership roster. 403 with a body (not an empty list — an empty list would mean "nobody from outside holds rights here", which would be false) when `Company.show_external_holders` is off for this company |
+
+**`show_external_holders`** (`CompanyRead`/`CompanyPatch`, migration `companies/0004`, default `true`) is a per-company, platform-admin-only setting: it controls whether a subsidiary can *see* who from a parent company holds rights in it via the endpoint above — it does not control the access itself, and a subsidiary cannot turn it off for itself (customer decision 4, block C). Defaulting to on is deliberate: hiding it by default would hide the fact of access from the company whose data is actually being read.
+
+**`successor_slug`** (`CompanyRead`, read-only; a model property like `parent_slug`) is the slug of the company that took over a bankrupt one, `null` otherwise. It is set only by `POST …/bankrupt` / `manage.py company_bankrupt` and cleared by restore; the registry screen shows it on the company card as a «Преемник» row with the successor company's name.
+
+**`subdomain`** (`CompanyRead`, `MyCompany`, `CompanyPatch`; migrations `companies/0005` field, `0006` seeds `hi-tech-qazaqstan → htq`, `hi-tech-systems → hts`, `kazakhstan-engineering-group → keg`, `hi-tech-group → group`; CLI `company_create --subdomain`) is the company's short host label, `null` when the company lives on its slug. It decides only which host resolves to the company (see "Company context" in the authorization rule above); links that must open a company page from outside — HR share links — are built by `apps.companies.interface.public_url(slug)` as `https://<subdomain or slug>.<host of PUBLIC_BASE_URL>`. Rollout checklist (DNS, origin certificate, `SFU_ALLOWED_ORIGINS`, order of commands, checks): [docs/deploy/subdomains-runbook.md](docs/deploy/subdomains-runbook.md).
+
+**No HTTP company creation, on purpose.** `provision_company` runs a fresh
+schema plus four apps' worth of migrations (~1 minute) before it's done;
+`gunicorn --timeout 60` would kill the worker mid-DDL. Creation stays
+CLI-only — `manage.py company_create`. Archive/restore/bankruptcy stay over HTTP
+because they're a status flip (bankruptcy adds a membership row per member)
+and a view rebuild, not DDL.
+
+**Archiving the last active company is refused, not silently allowed.**
+`archive_company` returns 409 `last_active` when the target is the only
+company with `status=active`: for as long as the transition mode holds
+(`docs/plans/2026-09-14-group-structure-roadmap.md` §3 — currently one
+live company, "Hi-Tech Qazaqstan"), archiving it would leave the platform
+with no active company to write to — every route on it, `contracts`/
+`signoff` included, resolves its schema from the company on the request,
+and a schema only a superuser can read (and nobody can write) isn't a
+schema the platform can run on.
+
+---
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
@@ -1137,11 +1430,11 @@ in-process Python contract instead.
 | **Request ID**        | Gateway emits `X-Request-ID`; `htqweb.middleware.request_id.RequestIDMiddleware` echoes/generates it and puts it on `request.request_id`. |
 | **JWT validation**    | Every app decodes the JWT the same way, in-process (`htqweb/authn/jwt.py`), HS256, shared `JWT_SECRET`. No introspection, no S2S JWT anymore — the Django port explicitly dropped the old `SERVICE_JWT_SECRET`/`X-User-Id` service-to-service concept (see `apps/media_files/views.py`'s `_can_access_private` docstring). |
 | **User context**      | `request.token.user_id` (int) is the source of truth for the calling user. |
-| **Authorisation**     | `is_staff`/`is_superuser`/`is_admin` claims (`TokenPayload.is_elevated`) gate admin paths, via `api_view(admin=True)` / `htqweb.authn.rbac.require_admin`. |
+| **Authorisation**     | Application routes: `api_view(module=, level=)` — the caller's roles in `apps.access`, counted in the request's company (see Authentication → Authorization). Platform-admin paths: `is_staff`/`is_superuser`/`is_admin` claims (`TokenPayload.is_elevated`) via `api_view(admin=True)` / `htqweb.authn.rbac.require_admin`, checked in addition to the module gate in the five gated apps (`hr`/`users`/`companies`/`access`/`tasks`); elsewhere `admin=True` is the only gate. |
 | **Cross-app calls**   | A neighbour app is reached only through its `apps.<x>.interface` module — a plain Python function call, not HTTP. Every `interface.py` function starts with `require_service("<name>")`, so a disabled dependency degrades the same way an external call would (`ServiceDisabled` → 503 envelope), instead of a raw exception. |
 | **Logging**           | structlog-style JSON to stdout → Promtail → Loki. |
-| **Database**           | One Postgres schema (`public`), one connection per app process (`CONN_MAX_AGE=0`, direct to `db:5432`, no PgBouncer in the request path). Table names are Django's own `<app_label>_<model>` default. |
-| **Migrations**        | Plain Django `makemigrations`/`migrate`, `managed=True`. No Alembic. |
+| **Database**           | One Postgres database: shared apps in `public`, `TENANT_APPS` (`hr`, `tasks`, `contracts`, `signoff`) in one `co_<slug>` schema per company, chosen per request by `search_path` (`CompanyContextMiddleware`); group-wide read views in schema `holding`. One connection per app process (`CONN_MAX_AGE=0`, direct to `db:5432`, no PgBouncer in the request path). Table names are Django's own `<app_label>_<model>` default. |
+| **Migrations**        | Plain Django `makemigrations`, `managed=True`, no Alembic. Applied in two steps: `manage.py migrate_shared` (shared apps — what container start runs) and `manage.py migrate_companies` (each company's schema, a separate rollout step) — never bare `migrate` once `tenancy_bootstrap` has moved the tenant apps out of `public`. |
 | **Pub/Sub**            | Redis pub/sub survives for exactly one purpose now: bridging `apps.approvals`' SSE stream across the WSGI/ASGI process split (see the SSE section above). The old `user.upserted`/`user.deactivated` replication channels were dropped — neighbours call `apps.users.interface` directly instead of consuming an async replica. |
 | **Worker queue**      | Celery, Redis broker. One `backend-worker` + one `backend-beat` for the whole platform (not one pair per domain anymore). Every task's first line is `require_service("<app>")`. |
 
@@ -1155,7 +1448,7 @@ in-process Python contract instead.
 | `api_public`      | 10 req/min  | `/api/hr/v1/public/`                                        | 5     |
 | `media_upload`    | 5 req/s     | `POST /api/media/v1/files/`                                  | 10    |
 | `websocket`       | 10 req/s    | `/ws/sfu/` (burst 5), `/ws/` (burst 20)                       | 5–20  |
-| `api_auth`        | 5 req/min   | *(zone defined in nginx, not currently attached to any `location`)* | —     |
+| `api_auth`        | 5 req/min   | `/api/users/v1/token`, `token/refresh`, `register` (exact-match, both spellings) | 2     |
 
 `/api/email/v1/webhooks/` is explicitly exempt from rate limiting (webhook
 senders retry aggressively; false-positive 429s would just cause more
@@ -1177,8 +1470,8 @@ change:
 |----------|---------------------------------------------------------------------|
 | 400      | Validation / malformed request (`SuspiciousOperation`)               |
 | 401      | Missing or invalid JWT                                               |
-| 403      | Authenticated but not authorised (e.g. non-admin on admin route), or `django-admin` `PermissionDenied` |
-| 404      | Resource (or route) not found — see the routing table above          |
+| 403      | Authenticated but not authorised (e.g. non-admin on admin route, module level below the route's, token `company` claim ≠ the request's company), or `django-admin` `PermissionDenied` |
+| 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown company's host, from `django-admin` on an archived company's host, or from `api_view` for anyone but a superuser reading an archived company (see the archive spec) |
 | 409      | Conflict (e.g. duplicate email on register)                          |
 | 422      | Pydantic validation error (`body=` schema on `api_view`)              |
 | 429      | Rate limit exceeded (nginx prod only)                                |

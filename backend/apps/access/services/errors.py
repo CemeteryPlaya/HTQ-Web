@@ -47,6 +47,10 @@ class DepthNotApplicable(AccessError):
     """
 
 
+class RoleNotInCompany(AccessError):
+    """Роль принадлежит другой компании — выдать её здесь нельзя (блок I.2, R2)."""
+
+
 class SystemRoleCodeLocked(AccessError):
     """Код системной роли менять нельзя.
 

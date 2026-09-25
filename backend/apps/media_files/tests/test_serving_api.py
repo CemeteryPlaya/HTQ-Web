@@ -23,6 +23,7 @@ import uuid
 import pytest
 from django.test import Client, override_settings
 
+from apps.access.tests.helpers import gate_company
 from apps.media_files import views
 from apps.media_files.models import FileMetadata, FileVariant
 from apps.users.models import User, UserStatus
@@ -30,6 +31,11 @@ from htqweb.authn.jwt import issue_token_pair
 from htqweb.storage.signed_url import sign, signed_query
 
 BASE = "/api/media/v1/files"
+
+#: Блок L, задача 4: подпись и список стоят под ``api_view(module="media")``
+#: (``write`` и ``admin``) — им нужны компания запроса (заголовок + claim) и
+#: роль. Скачивание (``auth=None``) гейта не несёт и ходит через ``_auth``.
+COMPANY = "t-media-gate"
 
 CONTENT = b"0123456789"  # 10 bytes, deliberately small + easy to slice
 
@@ -104,6 +110,17 @@ def admin(db):
 def _auth(user) -> dict:
     token = issue_token_pair(user)["access"]
     return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+
+def _gate_auth(user, level: str = "write") -> dict:
+    """Заголовки для ручек под гейтом модуля ``media``: рядовой вызывающий —
+    ``write`` (уровень ``employee-basic``), администратор — ``full``.
+    Посторонний, на котором проверяется СОБСТВЕННАЯ проверка ручки (не
+    владелец при подписи), получает тот же ``write`` — иначе 403 дал бы
+    гейт, а не проверка владельца."""
+    gate_company(COMPANY, {user.id: {"media": level}})
+    token = issue_token_pair(user, company_slug=COMPANY)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 def _make_file(*, owner_id, is_public, path="generic/2026/07/abc/original.txt",
@@ -451,7 +468,7 @@ def test_sign_route_round_trips_to_a_working_url(fake_storage, owner):
     meta = _make_file(owner_id=owner.id, is_public=False)
     fake_storage.save(meta.path, CONTENT, "text/plain")
 
-    resp = Client().post(f"{BASE}/{meta.id}/sign", **_auth(owner))
+    resp = Client().post(f"{BASE}/{meta.id}/sign", **_gate_auth(owner))
     assert resp.status_code == 200
     body = resp.json()
     assert body["url"].startswith(f"{BASE}/{meta.id}?sig=")
@@ -472,7 +489,7 @@ def test_sign_route_for_variant_scopes_to_that_variant(fake_storage, owner):
     )
     fake_storage.save(fv.path, variant_bytes, "image/webp")
 
-    resp = Client().post(f"{BASE}/{meta.id}/sign?variant=thumb_32", **_auth(owner))
+    resp = Client().post(f"{BASE}/{meta.id}/sign?variant=thumb_32", **_gate_auth(owner))
     assert resp.status_code == 200
     body = resp.json()
     assert body["url"].startswith(f"{BASE}/{meta.id}/thumb_32?sig=")
@@ -493,7 +510,7 @@ def test_sign_route_for_variant_scopes_to_that_variant(fake_storage, owner):
 @pytest.mark.django_db
 def test_sign_route_forbidden_for_non_owner(fake_storage, owner, other_user):
     meta = _make_file(owner_id=owner.id, is_public=False)
-    resp = Client().post(f"{BASE}/{meta.id}/sign", **_auth(other_user))
+    resp = Client().post(f"{BASE}/{meta.id}/sign", **_gate_auth(other_user))
     assert resp.status_code == 403
 
 
@@ -510,7 +527,7 @@ def test_sign_route_requires_auth(fake_storage, owner):
 @pytest.mark.django_db
 def test_list_files_requires_admin(fake_storage, owner):
     _make_file(owner_id=owner.id, is_public=True)
-    resp = Client().get(f"{BASE}/", **_auth(owner))
+    resp = Client().get(f"{BASE}/", **_gate_auth(owner))
     assert resp.status_code == 403
 
 
@@ -522,7 +539,7 @@ def test_list_files_admin_sees_all_excluding_soft_deleted(fake_storage, owner, a
     deleted.deleted_at = datetime.datetime.now(datetime.timezone.utc)
     deleted.save(update_fields=["deleted_at"])
 
-    resp = Client().get(f"{BASE}/", **_auth(admin))
+    resp = Client().get(f"{BASE}/", **_gate_auth(admin, "full"))
     assert resp.status_code == 200
     ids = {row["id"] for row in resp.json()}
     assert ids == {str(m1.id), str(m2.id)}

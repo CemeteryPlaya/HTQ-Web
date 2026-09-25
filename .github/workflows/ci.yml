@@ -85,7 +85,8 @@ jobs:
 
   # ── Тесты-сторожа бэкенда ──────────────────────────────────────────────────
   # Подмножество, которое защищает инварианты платформы и наблюдаемость:
-  # изоляция аппок, guard отключаемости у задач, «метрика без панели»,
+  # изоляция аппок, guard отключаемости у задач, «сегодня» в одном поясе
+  # (без БД, миллисекунды), «метрика без панели»,
   # «ссылка из уведомления в никуда», datasource с опечаткой. Минуты вместо
   # часа — поэтому гоняются на каждый push, а не только на PR.
   backend-guards:
@@ -128,6 +129,7 @@ jobs:
           python -m pytest -q \
             apps/core/tests/test_invariants.py \
             apps/core/tests/test_app_isolation.py \
+            apps/core/tests/test_platform_today.py \
             apps/core/tests/test_metrics.py \
             apps/core/tests/test_metrics_are_observed.py \
             apps/core/tests/test_gunicorn_metrics_hooks.py \

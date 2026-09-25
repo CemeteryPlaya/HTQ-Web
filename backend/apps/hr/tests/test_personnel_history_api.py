@@ -9,6 +9,14 @@ service.py) — здесь вынесена в apps/hr/services/personnel_histor
 require_hr_write исходника (is_elevated) -> api_view(admin=True) — та же пара,
 что у departments/positions/org.
 
+Блок I, задача 6: writes получили ``module="hr", level="admin"`` ПОВЕРХ
+``admin=True`` (та же формула, что и у positions/pmo — ``admin=True``
+безусловно даёт ``level="admin"``); reads остались без гейта (реестр
+``apps.access.self_service`` — ``_list_personnel_history``: ``open``, ни
+единой проверки в исходнике). ``admin_auth`` получил ``X-HTQ-Company`` +
+роль ``hr-lead``, иначе новый гейт отвечал бы 403 раньше старой
+``admin=True``-проверки.
+
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * список отдаёт ГОЛЫЙ массив (НЕ paginated envelope), order_by=(event_date
     desc, id desc);
@@ -74,14 +82,21 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
+def admin_auth(db, company_row):
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
     user = User.objects.create(
         username="ph-admin", email="ph-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    RoleAssignment.objects.create(
+        company_slug=company_row, user_id=user.id, role=Role.objects.get(code="hr-lead"),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _hist(emp, event_type="hired", event_date=datetime.date(2026, 1, 1), **kw):

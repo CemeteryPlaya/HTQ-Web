@@ -45,6 +45,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from apps.hr import interface as hr_interface
 from apps.tasks.models import (
@@ -94,7 +95,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "db", "::1", ""}
 SYSTEM_TASK_TYPES = import_module(
     "apps.tasks.migrations.0002_seed_system_task_types").SEED_TYPES
 
-TODAY = date.today()
+TODAY = timezone.localdate()
 
 
 def _d(offset: int) -> date:
@@ -167,6 +168,10 @@ BLOCK_VOLUMES = [
     ("Жанаозен", "РП-3", "Кабель 10 кВ", 400),
 ]
 
+# Пути отделов — из утверждённой структуры HTQ
+# (apps/hr/management/group_structures.py): у строительной компании один
+# профильный отдел ``stroy``. Прежние ``stroy.elektro``/``proekt`` были из
+# старого одно-компанейского сида и оставляли бы проекты без отдела молча.
 PROJECTS = [
     {"name": "Алга-2026: подстанция 110/10",
      "description": "Строительство и ввод подстанции на объекте Алга.",
@@ -180,14 +185,14 @@ PROJECTS = [
     {"name": "Сазаган: СЭС, вторая очередь",
      "description": "Монтаж второй очереди солнечной электростанции.",
      "status": ProjectStatus.ACTIVE, "color": "#16a34a",
-     "department_path": "stroy.elektro",
+     "department_path": "stroy",
      "sites": ["Сазаган"], "primary": "Сазаган",
      "start": _d(-30), "end": _d(180),
      "production_calendar": False},
     {"name": "Западный контур: ЛЭП и РП",
      "description": "Сквозной проект по двум объектам западного контура.",
      "status": ProjectStatus.ACTIVE, "color": "#f97316",
-     "department_path": "proekt",
+     "department_path": "stroy",
      "sites": ["Кандыагаш", "Жанаозен"], "primary": "Кандыагаш",
      "start": _d(-120), "end": _d(60),
      # Проектный, а не монтажный: бюро действительно работает по
@@ -666,6 +671,11 @@ class Command(BaseCommand):
                                  "наполнением — сносит и чужие строки.")
         parser.add_argument("--wipe-only", action="store_true",
                             help="Только полная очистка домена.")
+        parser.add_argument(
+            "--company", dest="company", default=None,
+            help="slug компании: данные пишутся в её схему. Без флага — "
+                 "текущий search_path (режим перехода).",
+        )
         parser.add_argument("--force-remote", action="store_true",
                             help="Осознанно разрешить неместную БД.")
 
@@ -1183,10 +1193,26 @@ class Command(BaseCommand):
         )
 
     def _tasks_tables(self) -> list[str]:
-        """Таблицы аппки ``tasks``, включая автосозданную M2M меток."""
+        """Таблицы аппки ``tasks``, включая автосозданную M2M меток.
+
+        ``managed=False`` отфильтрован тем же приёмом, что в
+        ``tenancy_bootstrap._tenant_tables``/``tenancy_status`` — модель без
+        таблицы не владеет ничем, а у ``tasks`` есть ровно такие:
+        ``managed=False``-читатели холдинга (``apps/tasks/holding_models.py``
+        — ``HoldingProject``/``HoldingSite``/``HoldingTask``/
+        ``HoldingDailyReport``), чей ``db_table`` НАМЕРЕННО совпадает с
+        настоящей таблицей аппки (представление называется по таблице
+        компании). Без фильтра ``config.get_models()`` отдал бы, например,
+        ``tasks_task`` дважды под разными моделями — сюда, в ``TRUNCATE``,
+        это сегодня приходит безвредно (результат уходит в ``set()``,
+        повтор схлопывается сам), но источник отказа — тот же самый, что
+        уронил ``tenancy_bootstrap`` без этого фильтра, и держать приём
+        разным по факту «пока не аукнулось» — не повод.
+        """
         config = django_apps.get_app_config("tasks")
         return sorted({model._meta.db_table for model
-                       in config.get_models(include_auto_created=True)})
+                       in config.get_models(include_auto_created=True)
+                       if model._meta.managed is not False})
 
     def _assert_no_external_references(self, tables: list[str]) -> None:
         """Отказ, если в домен задач ссылается кто-то извне.
@@ -1277,10 +1303,24 @@ class Command(BaseCommand):
 
     # ── точка входа ────────────────────────────────────────────────────────
 
-    @transaction.atomic
     def handle(self, *args, **options):
         self._assert_local(options["force_remote"])
+        slug = options["company"]
+        if slug is None:
+            self._run(options)
+            return
+        from apps.companies import interface as companies
+        from htqweb.tenancy.db import use_company
 
+        if companies.get_company(slug) is None:
+            raise CommandError(f"Компания {slug!r} не найдена в реестре.")
+        if not companies.schema_exists(slug):
+            raise CommandError(f"У компании {slug!r} нет схемы Postgres.")
+        with use_company(slug):
+            self._run(options)
+
+    @transaction.atomic
+    def _run(self, options) -> None:
         if options["wipe"] or options["wipe_only"]:
             self.stdout.write("Полная очистка домена задач...")
             self._wipe()

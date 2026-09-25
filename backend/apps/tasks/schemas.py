@@ -1695,3 +1695,37 @@ class ProductionDayResponse(BaseModel):
     note: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── сводка по группе (блок H) — GET /holding/projects ───────────────────────
+
+class HoldingCompanyRow(BaseModel):
+    """Одна строка сводки — действующая компания группы.
+
+    Форма — 1:1 с ``apps.tasks.services.holding_service.projects_by_company()``
+    плюс ``company_name`` из реестра (сервис отдаёт только слаг, имена не его
+    забота). ``reports_last_date`` — ``None`` у компании без отчётов, и это
+    НЕ ноль и не сегодняшняя дата."""
+
+    company_slug: str
+    company_name: str
+    projects_active: int
+    sites_active: int
+    tasks_open: int
+    tasks_overdue: int
+    reports_last_date: date | None
+
+
+class HoldingTotals(BaseModel):
+    """Сумма строк сводки. Только счётчики — дату последнего отчёта
+    складывать бессмысленно, поэтому в totals её нет."""
+
+    projects_active: int
+    sites_active: int
+    tasks_open: int
+    tasks_overdue: int
+
+
+class HoldingProjectsOut(BaseModel):
+    companies: list[HoldingCompanyRow]
+    totals: HoldingTotals

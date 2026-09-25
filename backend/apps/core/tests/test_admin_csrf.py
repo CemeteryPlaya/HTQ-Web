@@ -74,16 +74,48 @@ def test_trusted_origins_from_env(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://portal.example/join/")
     assert base._trusted_origins() == [
         "https://second.example", "http://45.10.110.212", "https://portal.example",
+        "https://*.portal.example",
     ]
 
 
 def test_trusted_origins_dedup_and_bad_public_url(monkeypatch):
     monkeypatch.setenv("CSRF_TRUSTED_ORIGINS", "https://portal.example")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://portal.example")
-    assert base._trusted_origins() == ["https://portal.example"]
+    assert base._trusted_origins() == ["https://portal.example", "https://*.portal.example"]
 
     # Без схемы PUBLIC_BASE_URL в origin не превращается — лучше не доверить,
     # чем доверить не то.
     monkeypatch.setenv("CSRF_TRUSTED_ORIGINS", "")
     monkeypatch.setenv("PUBLIC_BASE_URL", "portal.example")
     assert base._trusted_origins() == []
+
+
+def test_trusted_origins_cover_company_subdomains(monkeypatch):
+    # Компании живут на поддоменах (блок I.2): форма, открытая на
+    # htq.htq.group, обязана пройти проверку CSRF так же, как голый домен.
+    monkeypatch.setenv("CSRF_TRUSTED_ORIGINS", "")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://htq.group")
+    origins = base._trusted_origins()
+    assert "https://htq.group" in origins
+    assert "https://*.htq.group" in origins
+
+    # Пустой PUBLIC_BASE_URL не даёт подстановки — доверять «*.» нечему.
+    monkeypatch.setenv("PUBLIC_BASE_URL", "")
+    assert not any("*." in o for o in base._trusted_origins())
+
+
+@override_settings(CSRF_TRUSTED_ORIGINS=["https://*.htq.test"])
+def test_company_subdomain_origin_passes_csrf(superuser):
+    # Сквозная проверка, что Django понимает подстановку: TLS снят до nginx,
+    # до Django доходит http, а Origin — https-поддомен компании.
+    host = "acme.htq.test"
+    c = Client(enforce_csrf_checks=True)
+    headers = {"HTTP_X_FORWARDED_PROTO": "http", "HTTP_ORIGIN": f"https://{host}"}
+    assert c.get("/django-admin/login/", HTTP_HOST=host, **headers).status_code == 200
+    resp = c.post("/django-admin/login/", {
+        "username": superuser.username,
+        "password": PASSWORD,
+        "csrfmiddlewaretoken": c.cookies["csrftoken"].value,
+        "next": "/django-admin/",
+    }, HTTP_HOST=host, **headers)
+    assert resp.status_code == 302, resp.content[:300]

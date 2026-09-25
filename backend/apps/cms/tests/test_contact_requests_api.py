@@ -4,37 +4,23 @@ Mirrors ``services/cms/app/api/v1/contact_requests.py``: public POST, admin
 list/stats/detail/patch/reply/delete. Tokens are built with real
 ``jwt.encode`` against ``settings.JWT_SECRET`` (no mocking of
 ``decode_token``) — same style as ``apps/core/tests/test_api_view.py``.
+
+Блок L: админские ручки стоят под ``api_view(module="cms", level="write")``;
+токены и роли — ``apps/cms/tests/helpers.py`` (редактор — ``cms:full``,
+рядовой — ``cms:read``, его 403 даёт гейт модуля).
 """
 
 import json
 
-import jwt as pyjwt
 import pytest
-from django.conf import settings
 from django.test import Client
 
 from apps.cms.models import AuditLog, ContactRequest
+from apps.cms.tests.helpers import (
+    admin_token as _admin_token, auth_header as _auth_header, token as _token,
+)
 
 BASE = "/api/cms/v1/contact-requests"
-
-
-def _token(**over):
-    claims = {
-        "user_id": 7, "username": "u", "email": "u@htq.test",
-        "is_staff": False, "is_superuser": False, "is_admin": False,
-        "token_type": "access", "iat": 1, "exp": 9_999_999_999,
-        "iss": "htqweb-auth", "sub": "7",
-        **over,
-    }
-    return pyjwt.encode(claims, settings.JWT_SECRET, algorithm="HS256")
-
-
-def _admin_token(**over):
-    return _token(user_id=9, sub="9", is_admin=True, **over)
-
-
-def _auth_header(token: str) -> dict:
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
 
 def _post_json(client: Client, path: str, body: dict, **extra):

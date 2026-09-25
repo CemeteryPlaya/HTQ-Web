@@ -27,6 +27,8 @@ from apps.mail.services.provisioning.base import ProvisioningError
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
+from .conftest import gate_auth
+
 BASE = "/api/email/v1/mailboxes"
 
 #: Настройки, при которых режим РЕЗОЛВИТСЯ в mailcow. Нужны там, где тест
@@ -152,7 +154,8 @@ def admin_auth(db):
     )
     u.set_password("Adm1n!Pass")
     u.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(u)['access']}"}
+    # Ящики — под гейтом ``mail:admin`` (блок L): нужна роль, не ``is_staff``.
+    return gate_auth(u, "full")
 
 
 @pytest.fixture
@@ -163,7 +166,8 @@ def plain_auth(db):
     )
     u.set_password("S3cret!")
     u.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(u)['access']}"}
+    # Уровень ``employee-basic`` в ``mail`` (``read``): 403 на сверке даёт гейт.
+    return gate_auth(u, "read")
 
 
 class _Payload:

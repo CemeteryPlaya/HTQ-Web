@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { companyFromHost, parentDomain } from './companySwitch';
+import { companyFromHost, hostLabelOf, parentDomain, switchCompany } from './companySwitch';
 
 describe('companyFromHost', () => {
   it('извлекает компанию из поддомена', () => {
@@ -62,5 +62,74 @@ describe('parentDomain', () => {
 
   it('не ставит точку перед localhost', () => {
     expect(parentDomain('kz.localhost')).toBe('localhost');
+  });
+});
+
+describe('switchCompany', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('ведёт на псевдоним, когда он есть', () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', {
+      host: 'htq.htq.group', pathname: '/hr/employees', search: '', hash: '',
+      protocol: 'https:', assign,
+    });
+
+    switchCompany({ slug: 'hi-tech-systems', subdomain: 'hts' });
+
+    expect(assign).toHaveBeenCalledWith('https://hts.htq.group/hr/employees');
+  });
+
+  it('ведёт на слаг, когда псевдонима нет', () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', {
+      host: 'acme.htq.group', pathname: '/', search: '', hash: '',
+      protocol: 'https:', assign,
+    });
+
+    switchCompany({ slug: 'beta' });
+
+    expect(assign).toHaveBeenCalledWith('https://beta.htq.group/');
+  });
+
+  it('без второго аргумента сохраняет текущий путь, query и hash', () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', {
+      host: 'htq.localhost:3000', pathname: '/hr/employees', search: '?tab=cards', hash: '#top',
+      protocol: 'http:', assign,
+    });
+
+    switchCompany({ slug: 'hi-tech-systems', subdomain: null });
+
+    expect(assign).toHaveBeenCalledWith('http://hi-tech-systems.localhost:3000/hr/employees?tab=cards#top');
+  });
+
+  it('с целевым путём ведёт на него, а не на текущий', () => {
+    // Экран выбора компании: человек пришёл на голый домен по глубокой
+    // ссылке, RequireAuth увёл его на /companies/choose — вернуть надо туда,
+    // куда он шёл, а не на сам экран выбора.
+    const assign = vi.fn();
+    vi.stubGlobal('location', {
+      host: 'htq.group', pathname: '/companies/choose', search: '', hash: '',
+      protocol: 'https:', assign,
+    });
+
+    switchCompany({ slug: 'hi-tech-qazaqstan', subdomain: 'htq' }, '/hr/employees?tab=cards#top');
+
+    expect(assign).toHaveBeenCalledWith('https://htq.htq.group/hr/employees?tab=cards#top');
+  });
+});
+
+describe('hostLabelOf', () => {
+  it('берёт псевдоним, если он задан', () => {
+    expect(hostLabelOf({ slug: 'hi-tech-qazaqstan', subdomain: 'htq' })).toBe('htq');
+  });
+
+  it('берёт слаг, если псевдонима нет или он пуст', () => {
+    expect(hostLabelOf({ slug: 'beta' })).toBe('beta');
+    expect(hostLabelOf({ slug: 'beta', subdomain: null })).toBe('beta');
+    expect(hostLabelOf({ slug: 'beta', subdomain: '' })).toBe('beta');
   });
 });

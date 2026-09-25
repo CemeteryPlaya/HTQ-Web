@@ -36,7 +36,7 @@ What did NOT come across, and why:
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 from celery import shared_task
 from django.utils import timezone
@@ -70,7 +70,7 @@ def task_deadline_reminder() -> int:
 
     from .models import Notification, Status, Task
 
-    today = date.today()
+    today = timezone.localdate()
     horizon = today + timedelta(days=1)
     due = list(Task.objects.filter(
         due_date__isnull=False, due_date__lte=horizon, is_deleted=False,

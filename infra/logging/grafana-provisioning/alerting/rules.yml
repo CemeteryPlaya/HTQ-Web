@@ -1705,7 +1705,7 @@ groups:
             model:
               datasource: { type: prometheus, uid: prometheus }
               editorMode: code
-              expr: 'sum(htqweb_contracts_awaiting_accounting)'
+              expr: 'sum by (company) (htqweb_contracts_awaiting_accounting)'
               instant: true
               refId: A
           - refId: B
@@ -1751,7 +1751,7 @@ groups:
             model:
               datasource: { type: prometheus, uid: prometheus }
               editorMode: code
-              expr: 'sum by (subject_type) (htqweb_signoff_pending_stale)'
+              expr: 'sum by (company, subject_type) (htqweb_signoff_pending_stale)'
               instant: true
               refId: A
           - refId: B

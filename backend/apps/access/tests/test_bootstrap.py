@@ -160,7 +160,9 @@ def test_employee_role_opens_the_expected_modules(user):
 
     assert resolve.permission_level(user, "tasks", "htq-kz") == Level.WRITE
     assert resolve.permission_level(user, "cms", "htq-kz") == Level.READ
-    assert resolve.permission_level(user, "messenger", "htq-kz") == Level.READ
+    # Блок L (access/0011): messenger.rooms без delete — создание и состав
+    # своих комнат, которые до гейта были открыты всем; модерация — admin.
+    assert resolve.permission_level(user, "messenger", "htq-kz") == Level.WRITE
     # Кадры рядовому не открываются вовсе.
     assert resolve.permission_level(user, "hr", "htq-kz") == Level.NONE
 

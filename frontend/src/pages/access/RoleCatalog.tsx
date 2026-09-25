@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AxiosError } from 'axios';
-import { Copy, Globe2, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react';
+import { Building2, Copy, Globe2, Loader2, Lock, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -259,6 +259,18 @@ const RoleCatalog = () => {
                       {t('access.catalog.system', 'служебная')}
                     </Badge>
                   )}
+                  {/* Именная роль одной компании (спека R2): суперпользователь
+                      видит её в общем каталоге, но должен опознать, что она
+                      чужая, а не общая — метка вместо тихого умолчания. */}
+                  {role.company_slug && (
+                    <Badge variant="outline" className="gap-1 text-[10px]">
+                      <Building2 className="h-3 w-3" />
+                      {t('access.companyBadge', {
+                        company: role.company_slug,
+                        defaultValue: 'Компания: {{company}}',
+                      })}
+                    </Badge>
+                  )}
                   {canEdit && (
                     <Button
                       size="sm"
@@ -350,7 +362,7 @@ const RoleCatalog = () => {
                     onClick={() => saveMutation.mutate()}
                   >
                     <Save className="h-4 w-4" />
-                    {t('access.catalog.save', 'Сохранить права')}
+                    {t('access.catalog.savePermissions', 'Сохранить права')}
                   </Button>
                 )}
               </header>

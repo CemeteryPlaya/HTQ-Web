@@ -61,6 +61,19 @@ def _emp(dep, pos, email, **kw):
     )
 
 
+def _grant_seeded_role(company_slug: str, user_id: int, code: str) -> None:
+    """Назначить УЖЕ засеянную роль (``access/migrations/0005``) — блок I
+    задача 5, тот же приём, что в ``test_org_api.py::_grant_seeded_role``:
+    ``module="hr", level=…`` теперь стоит ПОВЕРХ ``hr.org.edit``, и старой
+    Employee/Position-эвристики одной уже не хватает."""
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
+
+
 @pytest.fixture
 def auth(db):
     user = User.objects.create(
@@ -72,18 +85,20 @@ def auth(db):
 
 
 @pytest.fixture
-def admin_auth(db):
+def admin_auth(db, company_row):
     user = User.objects.create(
         username="orgemp-admin", email="orgemp-admin@htq.test", password="x", status=UserStatus.ACTIVE,
         is_staff=True,
     )
     user.set_password("Adm1n!Pass")
     user.save()
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-lead")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture
-def middle_auth(db, hr_dep):
+def middle_auth(db, hr_dep, company_row):
     pos = _pos("HR Manager", hr_dep, weight=930)
     user = User.objects.create(
         username="orgemp-middle", email="orgemp-middle@htq.test", password="x", status=UserStatus.ACTIVE,
@@ -94,11 +109,13 @@ def middle_auth(db, hr_dep):
         first_name="И", last_name="И", email="orgemp-middle@htq.test",
         department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-middle")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 @pytest.fixture
-def senior_auth(db, hr_dep):
+def senior_auth(db, hr_dep, company_row):
     pos = _pos("Senior HR Manager", hr_dep, weight=931)
     user = User.objects.create(
         username="orgemp-senior", email="orgemp-senior@htq.test", password="x", status=UserStatus.ACTIVE,
@@ -109,7 +126,9 @@ def senior_auth(db, hr_dep):
         first_name="И", last_name="И", email="orgemp-senior@htq.test",
         department=hr_dep, position=pos, hire_date=datetime.date(2024, 1, 9), user_id=user.id,
     )
-    return {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    _grant_seeded_role(company_row, user.id, "hr-senior")
+    token = issue_token_pair(user, company_slug=company_row)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": company_row}
 
 
 def _has_edge(edges: list[dict], **expected) -> bool:
@@ -192,6 +211,9 @@ def test_create_requires_jwt():
 
 @pytest.mark.django_db
 def test_create_forbidden_without_hr_access(auth, dep):
+    """Без роли на модуль ``hr`` гейт отказывает раньше тела вьюхи — detail
+    "Forbidden", не "Missing permission: hr.org.edit" (см.
+    ``test_org_api.py::test_add_relation_forbidden_for_non_admin_jwt_user``)."""
     p = _pos("P", dep, weight=10)
     a = _emp(dep, p, "a@htq.test")
     b = _emp(dep, p, "b@htq.test")
@@ -201,7 +223,6 @@ def test_create_forbidden_without_hr_access(auth, dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing permission: hr.org.edit"
 
 
 @pytest.mark.django_db

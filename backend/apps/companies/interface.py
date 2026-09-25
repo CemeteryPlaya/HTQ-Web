@@ -30,10 +30,12 @@ user_id — int, а не пользовательская строка.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.core.cache import cache
 
-from .models import Company, CompanyMembership, CompanyModule, CompanyStatus
+from .models import Company, CompanyKind, CompanyMembership, CompanyModule, CompanyStatus
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ def _serialize(company: Company) -> dict:
     return {
         "id": company.id,
         "slug": company.slug,
+        "subdomain": company.subdomain,
         "name": company.name,
         "kind": company.kind,
         "status": company.status,
@@ -81,6 +84,71 @@ def get_company(slug: str) -> dict | None:
 
     found = _cached(f"company:slug:{slug}", produce)
     return found or None
+
+
+def resolve_host_label(label: str) -> dict | None:
+    """Строка реестра по МЕТКЕ ХОСТА (первая часть поддомена), или None.
+
+    Порядок: сначала псевдоним (``subdomain``), затем слаг — и только у
+    компании, у которой псевдонима нет. Так у каждой компании ровно один
+    канонический хост: будь доступны оба, у одной компании было бы два
+    origin'а, а значит два раздельных ``localStorage`` и два токена.
+
+    Кэш живёт те же 5 секунд, что и ``get_company``; явного сброса нет —
+    смена псевдонима вступает в силу не позже чем через 5 с.
+    """
+    def produce():
+        company = (Company.objects.select_related("parent")
+                   .filter(subdomain=label).first())
+        if company is None:
+            company = (Company.objects.select_related("parent")
+                       .filter(slug=label, subdomain__isnull=True).first())
+        return _serialize(company) if company else {}
+
+    found = _cached(f"company:label:{label}", produce)
+    return found or None
+
+
+def public_url(slug: str) -> str | None:
+    """Адрес компании для ссылок, уходящих наружу: https://<метка>.<корень>.
+
+    Корень берётся из ``PUBLIC_BASE_URL`` (https://htq.group → htq.group).
+    Нужен там, где ссылка ведёт на страницу, читающую таблицы КОМПАНИИ:
+    на голом домене контекста компании нет, и такая страница не найдёт
+    ничего. Пусто — вызывающий остаётся на своём прежнем поведении.
+    """
+    # require_service здесь НЕ зовётся намеренно: реестр компаний —
+    # фундамент, а не отключаемый домен (докстринг модуля).
+    base = (settings.PUBLIC_BASE_URL or "").strip()
+    if not base:
+        return None
+    company = get_company(slug)
+    if company is None:
+        return None
+    parts = urlsplit(base)
+    # Без схемы (``htq.group``) urlsplit кладёт всё в path, и адрес вышел
+    # бы ``://acme.`` — такой ссылке лучше не быть вовсе: вызывающий
+    # откатится на прежний источник (блок I.2, B2).
+    if not parts.scheme or not parts.netloc:
+        return None
+    label = company["subdomain"] or company["slug"]
+    return f"{parts.scheme}://{label}.{parts.netloc}"
+
+
+def is_holding(slug: str) -> bool:
+    """Компания этого слага — холдинг (владеет долями остальных).
+
+    Предикат, а не выдача ``kind`` наружу: ``CompanyKind`` — деталь модели, и
+    её протечка за границу аппки ломает то же правило, что прямой импорт
+    чужих моделей. Ровно та же причина, по которой рядом отдаётся готовый
+    ``is_active``, а не сырой ``status``.
+
+    Неизвестный слаг — False, а не исключение: спрашивающий уже получил
+    компанию из контекста запроса, и «такой компании нет» значит для него
+    ровно «не холдинг».
+    """
+    company = get_company(slug)
+    return bool(company and company["kind"] == CompanyKind.HOLDING)
 
 
 def active_company_slugs(*, fresh: bool = False) -> list[str]:
@@ -106,6 +174,48 @@ def active_company_slugs(*, fresh: bool = False) -> list[str]:
     return _cached("company:active", produce)
 
 
+def migratable_company_slugs(*, fresh: bool = False) -> list[str]:
+    """Slug'и компаний, чьи схемы доводит ``migrate_companies``, по алфавиту:
+    все действующие и архивные со схемой (спека архива §8.1).
+
+    Архивные — потому что схема архивной компании обязана идти в ногу с
+    кодом, иначе после первой же новой миграции её нельзя ни прочесть
+    (архив — только чтение), ни восстановить (``restore_company`` упадёт на
+    пересборке сводок). Сводки холдинга по-прежнему только по действующим —
+    ``active_company_slugs``.
+
+    Архивная строка без схемы пропускается: мигрировать в ней нечего, а
+    ``SchemaMissing`` на ней уронил бы ``migrate_companies`` ПОСЛЕ сноса
+    представлений ``holding`` — и группа осталась бы без сводок из-за
+    строки, которую оператор как раз спрятал архивом (осиротевшая строка
+    после отката ``company_create``). Действующая без схемы — наоборот,
+    остаётся в списке: для неё громкое падение команды и есть нужный сигнал,
+    как и до архива.
+    """
+    def produce():
+        rows = Company.objects.values_list("slug", "status")
+        return sorted(
+            slug for slug, status in rows
+            if status == CompanyStatus.ACTIVE or schema_exists(slug)
+        )
+
+    if fresh:
+        return produce()
+    return _cached("company:migratable", produce)
+
+
+def is_archived(slug: str) -> bool:
+    """Компания этого слага в архиве. Незаведённый slug — ``False``.
+
+    Для ``@company_task`` (``htqweb/tenancy/celery.py``): задача архивной
+    компании не выполняется. Незаведённый slug — не архив намеренно: молча
+    пропустить опечатку значило бы спрятать её; её уронит тот, кто полезет
+    в схему.
+    """
+    company = get_company(slug)
+    return bool(company) and not company["is_active"]
+
+
 def user_company_slugs(user_id: int) -> list[str]:
     """Компании, в которых пользователь имеет право работать."""
     return _cached(
@@ -117,6 +227,37 @@ def user_company_slugs(user_id: int) -> list[str]:
     )
 
 
+def active_member_ids(slug: str) -> list[int]:
+    """Id участников компании, чья УЧЁТКА действует, по возрастанию.
+
+    Обратная сторона ``user_company_slugs``: там «в каких компаниях этот
+    человек», здесь «какие люди в этой компании». Понадобилась переносу
+    базовой роли (``manage.py access_backfill_basic``, блок I задача 4,
+    раунд правок 1): ``apps.access`` обязана спросить состав компании у
+    соседа, а не собирать его запросом к ``CompanyMembership``
+    (``apps/core/tests/test_app_isolation.py``).
+
+    Два условия, а не одно: строка ``CompanyMembership`` И действующая
+    учётка. Членство переживает увольнение — строку никто не снимает
+    автоматически, — и выдавать права по нему одному значило бы раздать их
+    отключённым и неподтверждённым учёткам. Статус считает
+    ``membership_service.list_memberships`` через ``apps.users.interface``:
+    знания об enum статусов пользователя в этой аппке нет и не должно быть.
+
+    БЕЗ кэша, в отличие от соседей выше: список запрашивают команды переноса
+    и администрирования, а не горячий путь запроса, зато устаревший на пять
+    секунд состав компании означал бы «кому-то не выдали права, и никто не
+    заметил».
+    """
+    from apps.companies.services import membership_service
+
+    company = Company.objects.filter(slug=slug).first()
+    if company is None:
+        return []
+    return sorted(row["user_id"] for row in membership_service.list_memberships(company)
+                  if row["is_active"])
+
+
 def user_may_enter_company(user_id: int, slug: str) -> bool:
     """Пускать ли пользователя в компанию ``slug``.
 
@@ -124,23 +265,50 @@ def user_may_enter_company(user_id: int, slug: str) -> bool:
     им пользуется ``apps.users.views._company_slug_for_token``, общий шаг
     ОБЕИХ дверей выдачи токена (``obtain_token`` — вход по паролю, и
     ``refresh_token`` — обмен refresh-cookie), и любой будущий вызывающий,
-    которому нужен тот же вопрос. Сегодня ответ — голое членство
-    (``CompanyMembership``); когда появятся роли (должность из HR как
-    носитель прав) и механизм для не-сотрудников, это тело обрастёт
-    условиями, а сигнатура и место вызова останутся прежними — вызывающему
-    не придётся ничего переписывать.
+    которому нужен тот же вопрос. Для действующей компании ответ — членство
+    (``CompanyMembership``); для архивной — см. ниже. Когда появятся роли
+    (должность из HR как носитель прав) и механизм для не-сотрудников, это
+    тело обрастёт условиями, а сигнатура и место вызова останутся прежними —
+    вызывающему не придётся ничего переписывать.
+
+    Архивную компанию (спека docs/plans/2026-09-25-archive-read-only-spec.md
+    §6.1) читает только суперпользователь, и членство ему для этого не
+    нужно: заводить его в архив некому и незачем. Участникам архива — нет.
     """
+    company = get_company(slug)
+    if company is None:
+        return False
+    if not company["is_active"]:
+        from apps.users import interface as users
+
+        return users.is_superuser(user_id)
     return slug in user_company_slugs(user_id)
 
 
 def default_company_slug(user_id: int) -> str | None:
-    """Компания, куда пользователя пускать сразу после входа."""
+    """Компания, куда пользователя пускать сразу после входа.
+
+    Только действующая: архивная по умолчанию увела бы человека после входа
+    в 404 (спека архива §6.2).
+    """
     row = (CompanyMembership.objects
-           .filter(user_id=user_id)
+           .filter(user_id=user_id, company__status=CompanyStatus.ACTIVE)
            .order_by("-is_default", "company__slug")
            .values_list("company__slug", flat=True)
            .first())
     return row
+
+
+def schema_exists(slug: str) -> bool:
+    """Есть ли у компании ФИЗИЧЕСКАЯ схема.
+
+    Строка реестра и схема — разные факты (осиротевшая строка после
+    неудачного отката ``company_create``, см. CLAUDE.md). ``SET search_path``
+    молча принимает несуществующую схему, и запросы уходят в ``public`` —
+    поэтому команда, входящая в схему по slug, обязана спросить это до входа.
+    """
+    from apps.companies.services import schema_service
+    return schema_service.schema_exists(slug)
 
 
 def module_enabled(slug: str, app_label: str) -> tuple[bool, str]:

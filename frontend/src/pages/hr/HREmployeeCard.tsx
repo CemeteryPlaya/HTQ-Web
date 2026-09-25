@@ -21,7 +21,8 @@ import { EmployeeCardView } from '@/components/hr/EmployeeCardView';
 import { ShareEmployeeDialog } from '@/components/hr/ShareEmployeeDialog';
 import { CardT2SectionDialog } from '@/components/hr/CardT2SectionDialog';
 import { Button } from '@/components/ui/button';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
+import { SECTION_NODE } from '@/components/hr/cardT2Fields';
 import { useTranslation } from 'react-i18next';
 
 /** Строка «подпись — значение» внутри секции Т-2. */
@@ -61,7 +62,20 @@ const HREmployeeCard = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const employeeId = Number(id);
-  const { hasHrAccess, canWriteBasic, hasPerm, isLoading: levelLoading } = useHRLevel();
+  // Права — по узлам реестра через `usePermissions` (задача 10 блока I):
+  // вход на карточку — любой кадровый доступ, кнопка правки —
+  // `hr.employees: edit` (EMPLOYEES_EDIT), секции Т-2 — `view`/`edit` на
+  // узле секции (`SECTION_NODE`: финансы → `hr.employees.salary`, личные
+  // данные → `hr.employees.passport`) — то же, что проверяет
+  // `employee_card_t2_service._SECTIONS` на бэкенде.
+  const permissions = usePermissions();
+  const hasHrAccess = permissions.atLeast('hr', 'read');
+  const canWriteBasic = permissions.can('hr.employees', 'edit');
+  const levelLoading = permissions.isLoading;
+  const sectionAllows = (section: CardT2Section, flag: 'view' | 'edit'): boolean => {
+    const node = SECTION_NODE[section];
+    return node !== undefined && permissions.can(node, flag);
+  };
   const [shareOpen, setShareOpen] = useState(false);
   // Какую секцию Т-2 сейчас правим; null — диалог закрыт.
   const [editingSection, setEditingSection] = useState<CardT2Section | null>(null);
@@ -75,7 +89,7 @@ const HREmployeeCard = () => {
   const { data: cardT2 } = useQuery({
     queryKey: ['hr-card-t2', employeeId],
     queryFn: () => fetchCardT2(Number(employeeId)),
-    enabled: !!employeeId && (hasPerm('hr.card.financial.view') || hasPerm('hr.card.personal.view')),
+    enabled: !!employeeId && (sectionAllows('financial', 'view') || sectionAllows('personal', 'view')),
   });
 
   const title = data?.full_name || t('share.employee.title');
@@ -162,10 +176,10 @@ const HREmployeeCard = () => {
             Секции «Сертификаты / СРО» здесь больше нет: миграция
             hr/0016_remove_employeecard_certs сняла её колонки, на бэкенде
             остались только financial и personal. */}
-        {hasPerm('hr.card.financial.view') && (
+        {sectionAllows('financial', 'view') && (
           <T2Section
             title={t('hr.employeeCard.finance')}
-            canEdit={hasPerm('hr.card.financial.edit')}
+            canEdit={sectionAllows('financial', 'edit')}
             onEdit={() => setEditingSection('financial')}
           >
             <Row label={t('hr.pages.employees.fields.salary')} value={cardT2?.financial?.salary} />
@@ -173,10 +187,10 @@ const HREmployeeCard = () => {
             <Row label={t('hr.pages.employees.fields.bankAccount')} value={cardT2?.financial?.bank_account} />
           </T2Section>
         )}
-        {hasPerm('hr.card.personal.view') && (
+        {sectionAllows('personal', 'view') && (
           <T2Section
             title={t('hr.employeeCard.personal')}
-            canEdit={hasPerm('hr.card.personal.edit')}
+            canEdit={sectionAllows('personal', 'edit')}
             onEdit={() => setEditingSection('personal')}
           >
             <Row label={t('hr.pages.employees.fields.passportData')} value={cardT2?.personal?.passport_data} />

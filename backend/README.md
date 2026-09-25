@@ -4,7 +4,7 @@ One Django backend (Python 3.14, Django 5.2.7) serving the whole HTQWeb API. It 
 platform's earlier FastAPI generation — nine independently-deployed microservices (`services/*`)
 plus a shared `libs/htqweb_auth` — which have been deleted from this repo. This document
 replaces the deleted `services/README.md` and covers the equivalent ground for the new shape:
-the anatomy of one Django app, the rules that keep eleven domains from turning back into a tangle,
+the anatomy of one Django app, the rules that keep thirteen domains from turning back into a tangle,
 how to add a new one, and how to run/test locally.
 
 See also: [../CLAUDE.md](../CLAUDE.md) (session-level orientation), [../STRUCTURE.md](../STRUCTURE.md)
@@ -14,8 +14,10 @@ See also: [../CLAUDE.md](../CLAUDE.md) (session-level orientation), [../STRUCTUR
 ## What this is
 
 Domains live as Django apps under `apps/`: `users`, `cms`, `media_files`, `hr`, `mail`,
-`messenger`, `tasks`, `approvals`, `contracts`, `signoff`, `conference`, plus `core` (shared foundation — the
-service registry, ETL helpers, health checks; not a domain itself). Everything else — auth primitives, the API
+`messenger`, `tasks`, `approvals`, `contracts`, `signoff`, `conference`, `companies` (the group's company
+registry — schema-per-company tenancy, rule 12), `access` (roles and permissions — the `module`/`level`
+gate, rule 2), plus `core` (shared foundation — the service registry, ETL helpers, health checks; not a
+domain itself). Everything else — auth primitives, the API
 decorator, object storage, middleware — lives once in the `htqweb/` project package, not
 duplicated per app the way the FastAPI generation duplicated `s3_storage.py`/`request_id.py`
 per service. There is exactly one codebase, one process family, one settings module tree; the
@@ -43,7 +45,9 @@ backend/
 │   ├── middleware/
 │   │   ├── request_id.py         # X-Request-ID propagation
 │   │   ├── service_gate.py        # ServiceGateMiddleware — URL-prefix service gate
+│   │   ├── company_context.py      # CompanyContextMiddleware — X-HTQ-Company → search_path (rule 12)
 │   │   └── api_csrf_exempt.py      # exempts /api/* from Django's session-CSRF (JWT is stateless)
+│   ├── tenancy/                  # company context, schema_for, use_company/use_holding, @company_task
 │   └── storage/
 │       ├── s3.py                   # S3/MinIO + local-disk backend (sync; ported from cms's async original)
 │       ├── signed_url.py            # HMAC signed-URL issuance/verification for private files
@@ -144,6 +148,15 @@ def create_thing(request, data: CreateThing):
   frontend's error parsing didn't need to change. `ServiceDisabled` (raised by a
   `require_service()` call inside the view or a service it called) becomes `503` automatically —
   a view never needs to catch it itself.
+- `module`/`level` — the application permission gate: `api_view(module="hr", level="read"|"write"|"admin")`
+  asks `apps.access` for the caller's level on that module *in the request's company* (roles of
+  their position plus personal assignments) and answers `403` below the declared level; without a
+  company context the level is `none` for everyone but a superuser. `admin=True` is the separate
+  platform-admin predicate, checked in addition. In the five apps `hr`, `users`, `companies`,
+  `access`, `tasks` every route must carry `module=` with an explicit `level=`, unless it is listed
+  with a reason (`self`/`open`/`scoped`) in the self-service registry `apps/access/self_service.py` —
+  enforced by `apps/access/tests/test_gate.py`. The full rule: [../CLAUDE.md](../CLAUDE.md), «Модель
+  прав — одна»; the per-request contract: [../API.md](../API.md), Authentication → Authorization.
 
 Covered by [`apps/core/tests/test_api_view.py`](apps/core/tests/test_api_view.py).
 
@@ -179,24 +192,32 @@ in `services/`.
 
 ### 6. Models are `managed=True`, migrations are plain Django
 
-No Alembic, no hand-owned migration transactions, no `search_path` juggling. `manage.py
-makemigrations <app>` after a model change, `manage.py migrate` to apply. Table names are
+No Alembic, no hand-owned migration transactions, no per-service `search_path` juggling (the
+per-company schema of rule 12 is set by middleware, not by migrations). `manage.py
+makemigrations <app>` after a model change. Applying them is two commands once the tenant apps have
+moved out of `public`: `manage.py migrate_shared` for the shared apps (that's what container start
+runs) and `manage.py migrate_companies` for every company's schema — a bare `migrate` would recreate
+the tenant apps' tables, empty, in `public` (see rule 12 and `../CLAUDE.md`, «Мультикомпанейность»). Table names are
 Django's own default (`<app_label>_<model>`, e.g. `hr_department`, `mail_emailaccount`) — nothing
 here is prefixed by hand the way the old PgBouncer-schema-per-service setup required (see
 [STRUCTURE.md §10](../STRUCTURE.md) if you're wondering why old comments mention `hr_*`/`task_*`
 prefixes as if someone chose them deliberately — that was a different DB topology).
 
-### 7. JWT contract is unchanged from the FastAPI generation
+### 7. JWT contract — the FastAPI-era claims plus `company`
 
 Issuer is still `htqweb-auth` (`settings.JWT_ISSUER`), HS256, shared `JWT_SECRET`. `apps.users`
 now both issues (`htqweb/authn/jwt.py::issue_token_pair`, called from `apps.users.views`) and
 every app validates locally (`htqweb/authn/jwt.py::decode_token`, called from `htqweb.http`'s
 authenticators) — no separate identity service, no network round-trip either way. Claims:
-`sub, user_id, username, email, is_staff, is_superuser, is_admin, token_type, iat, exp, iss`.
+`sub, user_id, username, email, is_staff, is_superuser, is_admin, company, token_type, iat, exp, iss` —
+the FastAPI-era set plus `company`, the slug of the company the token was issued for; `api_view`
+answers `403` when it differs from the request's company (rule 12).
 `TokenPayload.is_elevated` (`htqweb/authn/payload.py`) is the coarse admin predicate
 (`is_admin or is_staff or is_superuser`) that `api_view(admin=True)` and
-`htqweb.authn.rbac.require_admin` both key off. Department-scoped seniority (separate from the
-coarse admin flag) is `htqweb/authn/levels.py::DepartmentLevel`.
+`htqweb.authn.rbac.require_admin` both key off. Everything finer than that flag — module levels,
+department vs company scope — is `apps.access` roles (rule 2), not the token.
+`htqweb/authn/levels.py::DepartmentLevel` survives from the FastAPI port, but no permission check
+reads it any more (`apps/tasks/models.py::ContractorLevel` only borrows its value names).
 
 ### 8. Every app is disableable at runtime — plumb new features through the gate, don't bypass it
 
@@ -208,6 +229,11 @@ Four pieces work together, all keyed by the same registry (`apps.core.models.KNO
 | `ServiceGateMiddleware` | `htqweb/middleware/service_gate.py` | HTTP edge — `/api/<prefix>/` and `/ws/<prefix>/` by URL, via `PREFIX_TO_SERVICE` |
 | `require_service(name)` | `apps/core/services.py` | In-process — first line of every `interface.py` function and every `tasks.py` task |
 | `ServiceGatedAdminMixin` | `htqweb/admin_gate.py` | `/django-admin/` — wraps a `ModelAdmin`'s permission hooks |
+
+A second, per-company layer sits on top: `apps.companies.models.CompanyModule` switches an app off
+for one company (never one of `apps.core.services.CORE_MODULES`), and `apps.core.services.service_status()`
+merges both layers for the middleware and `require_service()` alike — see `../CLAUDE.md`, «Два
+независимых рубильника».
 
 Flip one: `manage.py service <name> --on/--off [--message "..."]`. A disabled app answers `503`
 `{"detail", "code": "service_disabled", "service"}` at the HTTP edge and via any `interface.py`
@@ -359,7 +385,7 @@ Full design: [../docs/multi-company-tenancy-design.md](../docs/multi-company-ten
 
 ```bash
 cd backend
-.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>
+../.venv/Scripts/python.exe manage.py startapp <domain> apps/<domain>
 ```
 Then:
 0. Decide tenant vs `public` (rule 12 above) — this determines whether the new app's tables end up
@@ -386,8 +412,9 @@ Brings up `backend-web` (gunicorn WSGI in prod / `runserver` in dev, `:8000`→h
 `backend-asgi` (uvicorn ASGI, SSE `/api/requests/v1/stream` + WS `/ws/`, `:8000`→host `:8001`),
 `backend-worker`/`backend-beat` (Celery), `flower` (`:5555`), plus `db`/`redis`/`minio` and the
 Vite dev server (`:3000`) which proxies to all of the above. `backend-web` is the only process
-that runs `migrate` and seeds `admin`/`admin12345` (`RUN_MIGRATIONS=1`, see
-`docker-entrypoint.sh`). Rebuild one process after a code change:
+that runs migrations (`migrate_shared` — shared apps only, rule 6; gated by `RUN_MIGRATIONS=1`) and
+seeds `admin`/`admin12345` (gated separately by `RUN_BOOTSTRAP=1`, which every compose file sets to `1` even where migrations
+are off — see `docker-entrypoint.sh`). Rebuild one process after a code change:
 ```bash
 docker compose -f docker-compose.test-local.yml up -d --build --no-deps backend-web
 ```
@@ -400,8 +427,8 @@ for the full story (why port `:55432`, not `:5432`/`:6432`). Short version:
 ```bash
 docker compose -f docker-compose.test-local.yml up -d db   # once, publishes :55432
 cd backend
-.venv/Scripts/python.exe -m pytest -q                                    # whole suite
-.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name    # single test
+../.venv/Scripts/python.exe -m pytest -q                                    # whole suite
+../.venv/Scripts/python.exe -m pytest apps/hr/tests/test_x.py::test_name    # single test
 ```
 `pytest.ini` pins `DJANGO_SETTINGS_MODULE=htqweb.settings.test`; that settings module fixes
 `JWT_SECRET`, runs Celery eagerly (synchronous, no broker), and uses `LocMemCache`. The

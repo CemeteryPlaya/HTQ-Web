@@ -4,26 +4,35 @@ import { useSearchParams } from 'react-router-dom';
 import { DragDropContext, Draggable, Droppable, type DropResult } from '@hello-pangea/dnd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GripVertical, KeyRound, Lock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { accessApi } from '@/api/access';
 import api from '@/api/client';
+import { companiesApi } from '@/api/companies';
 import { PositionRolesDialog } from '@/components/access/PositionRolesDialog';
 import HRLayout from '@/components/hr/HRLayout';
 import PositionLevelsPanel from '@/components/hr/PositionLevelsPanel';
+import { PositionSubstitutions } from '@/components/hr/PositionSubstitutions';
 import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { HR_LIMITS } from '@/lib/fieldLimits';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { errorDetail, reportApiError } from '@/lib/apiError';
+import type { PositionRole } from '@/types/access';
+import type { CompanyTreeNode } from '@/types/companies';
 import type { LevelThreshold, NextWeightForLevel } from '@/types/hr';
 
 type HRLevelKey = 'junior' | 'middle' | 'senior' | 'lead';
 
 interface PositionPermissions {
-  hr_level: HRLevelKey | null;
+  // hr_level снят с фронта (задача 10 блока I.2): API больше не пишет его
+  // из формы, а старые строки колонки бейджем в строке не показываются —
+  // значение больше не читается. `hr_levels`/`level_presets` каталога ниже
+  // не трогаем — это отдельный справочник permissions-catalog, вне scope.
   permissions: string[];
 }
 
@@ -35,7 +44,19 @@ interface Position {
   weight: number;
   level: number;
   grade: number;
+  /** Матрица замещения (PositionSubstitutions) исключает неактивные
+   * должности и из выбора замещающего, и из списка «кого назначить». */
+  is_active: boolean;
   is_system?: boolean;
+  /** Руководящая ли должность — включает участие во внешней иерархии. */
+  is_manager?: boolean;
+  /** Действует только у руководящей: командует ли нижестоящими компаниями. */
+  external_hierarchy?: 'inherit' | 'none';
+  /**
+   * Обслуживает ли должность дочерние компании: не про подчинение, а про то,
+   * с чьими данными работает должность — роли распространяются на поддерево.
+   */
+  serves_subsidiaries?: boolean;
   permissions?: PositionPermissions | null;
 }
 
@@ -80,10 +101,50 @@ function sortedPositions(items: Position[]): Position[] {
   ));
 }
 
+/** Ищет узел компании по слагу в дереве владения (`companiesApi.tree()`). */
+function findCompanyNode(nodes: CompanyTreeNode[], slug: string): CompanyTreeNode | null {
+  for (const node of nodes) {
+    if (node.slug === slug) return node;
+    const found = findCompanyNode(node.children, slug);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Имена ВСЕХ компаний ниже узла — то, что реально получает признак. */
+function collectDescendantNames(node: CompanyTreeNode | null): string[] {
+  if (!node) return [];
+  const names: string[] = [];
+  for (const child of node.children) {
+    names.push(child.name, ...collectDescendantNames(child));
+  }
+  return names;
+}
+
 const HRPositions = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Всё управление справочником должностей и уровней (создание, правка,
+  // удаление, вес, перенос между уровнями, ребаланс, справочник уровней) на
+  // бэкенде под `admin=True` + `module="hr", level="admin"`
+  // (apps/hr/views.py, positions/*), поэтому и здесь — уровень модуля
+  // `admin`, а не старый `isSenior` (write + область company), который
+  // показывал редактирование тому, кому сервер ответил бы 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Те же ручки стоят ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
+  const hrAdmin = permissions.atLeast('hr', 'admin');
+  // Роли должности — другой домен: `PUT /access/v1/positions/{id}/roles`
+  // гейтится `module="access", level="admin"` (apps/access/views.py::
+  // PositionRolesView.put — тоже с `admin=True`, см. выше), и диалог обязан
+  // спрашивать тот же модуль — иначе он рисует чекбоксы, которые нельзя
+  // сохранить.
+  const canEditPositionRoles = permissions.atLeast('access', 'admin');
 
   // Вкладка живёт в ?tab= — справочник уровней был отдельным адресом
   // (/admin/levels), поэтому на него должна оставаться прямая ссылка.
@@ -132,9 +193,21 @@ const HRPositions = () => {
     level: string;
     weight: string;
     grade: string;
-    hr_level: HRLevelKey | '';
     permissions: string[];
-  }>({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+    is_manager: boolean;
+    external_hierarchy: 'inherit' | 'none';
+    serves_subsidiaries: boolean;
+  }>({
+    title: '',
+    department_id: '',
+    level: '',
+    weight: '100',
+    grade: '1',
+    permissions: [],
+    is_manager: false,
+    external_hierarchy: 'inherit',
+    serves_subsidiaries: false,
+  });
   // Сообщение о том, что серверу не удалось подобрать свободный вес в уровне
   // (диапазон порога занят целиком) — вес тогда вводится вручную.
   const [levelWeightError, setLevelWeightError] = useState<string | null>(null);
@@ -188,11 +261,16 @@ const HRPositions = () => {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const permissions = (form.hr_level || form.permissions.length > 0)
-        ? {
-            hr_level: form.hr_level || null,
-            permissions: form.permissions,
-          }
+      // Кадровый доступ колонка `Position.permissions` больше не даёт (блок I:
+      // права — роли должности, диалог «Роли должности»), поэтому `hr_level`
+      // форма не шлёт вовсе (рулинг N финальной волны). Список ключей уходит
+      // целиком, как пришёл: галочки показаны только для ключей вне `hr.*`
+      // (сегодня — `contracts.*`, их читает `apps.contracts` через
+      // `hr.interface.user_has_permission`), а скрытые `hr.*` должности
+      // возвращаются нетронутыми. У правки должности, у которой список был,
+      // пустой список уходит тоже — иначе снять последнюю галочку нельзя.
+      const permissions = (form.permissions.length > 0 || editingPos?.permissions)
+        ? { permissions: form.permissions }
         : null;
       // For system positions: skip title/department/is_active in the
       // payload — backend rejects those edits with 409.
@@ -200,6 +278,9 @@ const HRPositions = () => {
         weight: Number(form.weight),
         grade: Number(form.grade),
         permissions,
+        is_manager: form.is_manager,
+        external_hierarchy: form.external_hierarchy,
+        serves_subsidiaries: form.serves_subsidiaries,
       };
       // level — не поле модели, а выбор веса: бэкенд проверит, что вес попал
       // в диапазон порога (422 иначе), и выведет level из веса как обычно.
@@ -219,7 +300,17 @@ const HRPositions = () => {
       setDialogOpen(false);
       setEditingPos(null);
       setSaveError(null);
-      setForm({ title: '', department_id: '', level: '', weight: '100', grade: '1', hr_level: '', permissions: [] });
+      setForm({
+        title: '',
+        department_id: '',
+        level: '',
+        weight: '100',
+        grade: '1',
+          permissions: [],
+        is_manager: false,
+        external_hierarchy: 'inherit',
+        serves_subsidiaries: false,
+      });
     },
     onError: (err) => {
       // 409 (вес занят / системная должность) и 422 (вес вне диапазона) —
@@ -313,8 +404,10 @@ const HRPositions = () => {
       level: firstLevel ? String(firstLevel.level_number) : '',
       weight: String(firstLevel?.weight_from ?? 100),
       grade: '1',
-      hr_level: '',
       permissions: [],
+      is_manager: false,
+      external_hierarchy: 'inherit',
+      serves_subsidiaries: false,
     });
     setDialogOpen(true);
     if (firstLevel) void suggestWeightForLevel(firstLevel.level_number);
@@ -330,8 +423,10 @@ const HRPositions = () => {
       level: String(pos.level),
       weight: String(pos.weight),
       grade: String(pos.grade),
-      hr_level: pos.permissions?.hr_level ?? '',
       permissions: pos.permissions?.permissions ?? [],
+      is_manager: pos.is_manager ?? false,
+      external_hierarchy: pos.external_hierarchy ?? 'inherit',
+      serves_subsidiaries: pos.serves_subsidiaries ?? false,
     });
     setDialogOpen(true);
   };
@@ -347,15 +442,47 @@ const HRPositions = () => {
 
   const groupedPermissions = useMemo(() => {
     const groups = new Map<string, PermissionCatalogItem[]>();
-    for (const item of permissionsCatalog?.permissions ?? []) {
+    // Только ключи ВНЕ кадрового домена: `hr.*` колонка больше не выдаёт
+    // (рулинг N финальной волны блока I) — кадровые права выдаёт диалог
+    // «Роли должности».
+    for (const item of (permissionsCatalog?.permissions ?? []).filter((p) => !p.key.startsWith('hr.'))) {
       if (!groups.has(item.group)) groups.set(item.group, []);
       groups.get(item.group)!.push(item);
     }
     return Array.from(groups.entries());
   }, [permissionsCatalog]);
 
+  // Предпросмотр «что выдаёт признак» (решение 5) — существующие ручки,
+  // новых не заводим. Роли — только когда должность уже существует (у новой
+  // нет id, значит нет и назначенных ролей); дерево компаний — как только
+  // переключатель включён, независимо от того, создание это или правка.
+  const { company } = permissions;
+
+  const previewRolesQuery = useQuery<PositionRole[]>({
+    queryKey: ['access', 'positions', editingPos?.id, 'roles'],
+    queryFn: async () => (await accessApi.getPositionRoles(editingPos!.id)).data,
+    enabled: dialogOpen && form.serves_subsidiaries && editingPos?.id != null,
+  });
+
+  const companyTreeQuery = useQuery<CompanyTreeNode[]>({
+    queryKey: ['companies', 'tree'],
+    queryFn: async () => (await companiesApi.tree()).data,
+    enabled: dialogOpen && form.serves_subsidiaries,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Реестр компаний закрыт правом companies:read, которого у кадровика может
+  // не быть (403) — тот же приём деградации, что в ExternalHierarchy.tsx:
+  // список названий заменяется фразой «во все компании ниже по дереву
+  // владения», а не словом «ошибка».
+  const subsidiaryNames = useMemo(() => {
+    if (!company) return [];
+    return collectDescendantNames(findCompanyNode(companyTreeQuery.data ?? [], company));
+  }, [companyTreeQuery.data, company]);
+
   const onDragEnd = (result: DropResult) => {
-    if (!result.destination || !isSenior) return;
+    if (!result.destination || !hrAdmin) return;
     const sourceLevel = Number(result.source.droppableId);
     const targetLevel = Number(result.destination.droppableId);
     const sourceItems = [...(groups.get(sourceLevel) ?? [])];
@@ -418,7 +545,7 @@ const HRPositions = () => {
               </div>
             </div>
 
-            {isSenior && (
+            {hrAdmin && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
@@ -586,32 +713,129 @@ const HRPositions = () => {
                     </details>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
-                      <div className="text-sm font-semibold">{t('hr.positions.hrAccessLevel')}</div>
+                      <div className="text-sm font-semibold">
+                        {t('hr.positions.externalHierarchy', 'Внешняя иерархия')}
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        {t('hr.positions.hrAccessHint')}
+                        {t(
+                          'hr.positions.externalHierarchyHint',
+                          'Сотрудник вышестоящей компании является начальником сотрудников '
+                          + 'нижестоящих. Связь означает подчинение, а не передачу прав: права '
+                          + 'приходят ролями должности, иерархия лишь расширяет круг компаний, '
+                          + 'в которых они действуют.',
+                        )}
                       </p>
-                      <Select
-                        value={form.hr_level || 'none'}
-                        onValueChange={(v) => {
-                          const level = v === 'none' ? '' : (v as HRLevelKey);
-                          const preset = level
-                            ? (permissionsCatalog?.level_presets?.[level] ?? [])
-                            : [];
-                          setForm({ ...form, hr_level: level, permissions: preset });
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('hr.positions.noHrAccess')} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">{t('hr.positions.noHrAccess')}</SelectItem>
-                          {permissionsCatalog?.hr_levels.map((lvl) => (
-                            <SelectItem key={lvl.value} value={lvl.value}>
-                              {lvl.label} — {lvl.description}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <label className="flex items-center justify-between gap-3 text-sm">
+                        {t('hr.positions.isManager', 'Руководящая должность')}
+                        <Switch
+                          aria-label={t('hr.positions.isManager', 'Руководящая должность')}
+                          checked={form.is_manager}
+                          onCheckedChange={(next) => setForm({ ...form, is_manager: next })}
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm">
+                        {t('hr.positions.externalParticipation', 'Участие во внешней иерархии')}
+                        <select
+                          aria-label={t('hr.positions.externalParticipation', 'Участие во внешней иерархии')}
+                          className="rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50"
+                          disabled={!form.is_manager}
+                          value={form.external_hierarchy}
+                          onChange={(e) => setForm({
+                            ...form,
+                            external_hierarchy: e.target.value as 'inherit' | 'none',
+                          })}
+                        >
+                          <option value="inherit">
+                            {t('hr.positions.externalInherit', 'Командует нижестоящими компаниями')}
+                          </option>
+                          <option value="none">
+                            {t('hr.positions.externalNone', 'Только своя компания')}
+                          </option>
+                        </select>
+                        {!form.is_manager && (
+                          <span className="text-xs text-muted-foreground">
+                            {t(
+                              'hr.positions.externalNeedsManager',
+                              'Выбор доступен только у руководящей должности.',
+                            )}
+                          </span>
+                        )}
+                      </label>
+
+                      {/* Отдельная строка со своей подписью: это не про то, кто
+                          кому подчиняется (см. is_manager/external_hierarchy
+                          выше), а про то, с чьими данными работает должность. */}
+                      <div className="mt-1 grid gap-2 border-t pt-3">
+                        <label className="flex items-center justify-between gap-3 text-sm">
+                          <span className="font-medium">
+                            {t('hr.positions.servesSubsidiaries', 'Обслуживает дочерние компании')}
+                          </span>
+                          <Switch
+                            aria-label={t('hr.positions.servesSubsidiaries', 'Обслуживает дочерние компании')}
+                            checked={form.serves_subsidiaries}
+                            onCheckedChange={(next) => setForm({ ...form, serves_subsidiaries: next })}
+                          />
+                        </label>
+                        <p className="text-xs text-muted-foreground">
+                          {t(
+                            'hr.positions.servesSubsidiariesHint',
+                            'Это не про то, кто кому подчиняется: признак определяет, с чьими '
+                            + 'данными работает должность. Включённый — и роли этой должности '
+                            + 'начинают действовать также в дочерних компаниях, а не только в своей.',
+                          )}
+                        </p>
+
+                        {form.serves_subsidiaries && (
+                          <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                            <p>
+                              {t(
+                                'hr.positions.servesSubsidiariesMembership',
+                                'Права начнут действовать, когда держателям этой должности заведут '
+                                + 'членство в дочерней компании — на странице «Компании группы» → '
+                                + 'участники. Без членства токен на поддомен ДО не выдаётся, и признак '
+                                + 'не даёт ничего.',
+                              )}
+                            </p>
+                            <div className="grid gap-1">
+                              <div>
+                                <span className="font-medium">
+                                  {t('hr.positions.servesSubsidiariesRolesLabel', 'Роли должности')}:
+                                </span>{' '}
+                                {!editingPos ? (
+                                  t(
+                                    'hr.positions.servesSubsidiariesAfterSave',
+                                    'появятся после сохранения должности',
+                                  )
+                                ) : previewRolesQuery.isLoading ? (
+                                  t('common.loading', 'Загрузка…')
+                                ) : (previewRolesQuery.data?.length ?? 0) > 0 ? (
+                                  previewRolesQuery.data!.map((role) => role.title).join(', ')
+                                ) : (
+                                  t('hr.positions.servesSubsidiariesNoRoles', 'ролей пока не назначено')
+                                )}
+                              </div>
+                              <div>
+                                <span className="font-medium">
+                                  {t('hr.positions.servesSubsidiariesCompaniesLabel', 'Компании')}:
+                                </span>{' '}
+                                {companyTreeQuery.isSuccess ? (
+                                  subsidiaryNames.length > 0
+                                    ? subsidiaryNames.join(', ')
+                                    : t(
+                                        'hr.positions.servesSubsidiariesNoCompanies',
+                                        'нижестоящих компаний нет',
+                                      )
+                                ) : (
+                                  t(
+                                    'hr.positions.servesSubsidiariesTreeFallback',
+                                    'во все компании ниже по дереву владения',
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid gap-2 rounded-lg border bg-muted/30 p-3">
@@ -648,6 +872,15 @@ const HRPositions = () => {
                         )}
                       </div>
                     </div>
+
+                    {editingPos?.id != null && (
+                      <div className="border-t pt-4">
+                        <PositionSubstitutions
+                          positionId={editingPos.id}
+                          positions={positions}
+                        />
+                      </div>
+                    )}
 
                     {saveError && (
                       <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -724,7 +957,7 @@ const HRPositions = () => {
                         </p>
                       )}
                     </div>
-                    {isSenior && (
+                    {hrAdmin && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -737,7 +970,7 @@ const HRPositions = () => {
                     )}
                   </div>
 
-                  <Droppable droppableId={String(level)} isDropDisabled={!isSenior}>
+                  <Droppable droppableId={String(level)} isDropDisabled={!hrAdmin}>
                     {(provided, snapshot) => (
                       <div
                         ref={provided.innerRef}
@@ -749,7 +982,7 @@ const HRPositions = () => {
                             key={position.id}
                             draggableId={String(position.id)}
                             index={index}
-                            isDragDisabled={!isSenior}
+                            isDragDisabled={!hrAdmin}
                           >
                             {(dragProvided, dragSnapshot) => (
                               <div
@@ -773,18 +1006,13 @@ const HRPositions = () => {
                                         <Lock className="h-3 w-3" /> {t('hr.positions.system')}
                                       </Badge>
                                     )}
-                                    {position.permissions?.hr_level && (
-                                      <Badge variant="outline" className="text-[10px] uppercase">
-                                        {position.permissions.hr_level}
-                                      </Badge>
-                                    )}
                                   </div>
                                   <div className="truncate text-xs text-muted-foreground">
                                     {position.department_name ?? t('hr.positions.noDepartment')}{' '}
                         {t('hr.positions.gradeValue', { grade: position.grade })}
                                   </div>
                                 </div>
-                                {isSenior && (
+                                {hrAdmin && (
                                   <div className="flex items-center gap-1">
                                     <Button
                                       size="sm"
@@ -839,14 +1067,15 @@ const HRPositions = () => {
           positionTitle={rolesFor?.title ?? ''}
           open={rolesFor !== null}
           onOpenChange={(next) => { if (!next) setRolesFor(null); }}
-          canEdit={isSenior}
+          canEdit={canEditPositionRoles}
+          servesSubsidiaries={rolesFor?.serves_subsidiaries ?? false}
         />
     </div>
   );
 
   return (
     <HRLayout title={t('hr.pages.positions.title')} subtitle={t('hr.pages.positions.subtitle')}>
-      {isSenior ? (
+      {hrAdmin ? (
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="positions">{t('hr.pages.positions.tabs.positions')}</TabsTrigger>

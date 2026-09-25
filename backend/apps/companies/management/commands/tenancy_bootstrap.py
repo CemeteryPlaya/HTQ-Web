@@ -105,12 +105,25 @@ class Command(BaseCommand):
         ``co_y.tasks_task_labels``, а первая навсегда осталась бы на
         public-копии — молчаливый, но фатальный разъезд данных между
         компаниями.
+
+        ``managed=False`` пропускается: модель без таблицы не владеет
+        ничем, переносить ей нечего. Единственные такие в проекте —
+        читатели холдинга (``apps/hr/holding_models.py``,
+        ``apps/tasks/holding_models.py``), чей ``db_table`` НАМЕРЕННО
+        совпадает с таблицей компании (представление называется по
+        таблице): без этого фильтра ``hr_employee`` попадала бы в список
+        дважды, и второй ``ALTER TABLE ... SET SCHEMA`` ронял перенос.
+        Именно фильтр, а не ``set()``: дедупликация спрятала бы и будущий
+        случай двух managed-моделей на одной таблице, который сам по себе
+        баг и обязан быть виден.
         """
         tables = []
         for label in settings.TENANT_APPS:
             for model in django_apps.get_app_config(label).get_models(
                 include_auto_created=True,
             ):
+                if model._meta.managed is False:
+                    continue
                 tables.append(model._meta.db_table)
         return sorted(tables)
 

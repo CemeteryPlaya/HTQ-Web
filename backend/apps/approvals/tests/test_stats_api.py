@@ -7,14 +7,21 @@ real runtime (project -> template -> submit -> auto-approve) so
 checks the JSON shapes match the original's aggregation cuts.
 """
 
+import datetime as dt
+
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.approvals.models import RequestFormTemplate, RequestInstance
 
 from .helpers import (
     APPROVER, BASE, admin_token, auth, decide, post_json, route_for_template, token,
 )
+
+# 21:30 UTC — в Алматы уже 02:30 следующего дня: «сегодня» в поясе платформы
+# и в UTC здесь разные дни.
+BOUNDARY = dt.datetime(2026, 9, 24, 21, 30, tzinfo=dt.timezone.utc)
 
 _SCHEMA = {"fields": [
     {"type": "money", "key": "amount", "label": "Amount", "required": True,
@@ -183,3 +190,18 @@ def test_heatmap_returns_per_day_rows():
     body = resp.json()
     assert isinstance(body, list)
     assert any(row["approved"] >= 1 for row in body)
+
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
+@pytest.mark.django_db
+def test_heatmap_counts_today_at_the_day_boundary(tz, pinned_clock):
+    """Сводка датирует решение днём в поясе платформы — тем же днём его
+    обязана видеть и тепловая карта, иначе ночью «сегодня» пусто."""
+    client = Client()
+    _pid, tid = _setup(client, "Stat-HM-TZ")
+    pinned_clock(BOUNDARY, tz)
+    _submit_approved(client, tid, 100)
+
+    body = client.get(f"{BASE}/stats/heatmap", **auth(admin_token())).json()
+    assert [row["date"] for row in body if row["approved"] >= 1] == [
+        timezone.localdate().isoformat()]

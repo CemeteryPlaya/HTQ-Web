@@ -73,6 +73,48 @@ def reset_company_context(request):
                 cur.execute("SET search_path TO public")
 
 
+@pytest.fixture(autouse=True)
+def reseed_basic_role_for_transactional_tests(request):
+    """Базовая роль ``employee-basic`` на месте и в transaction=True-тестах.
+
+    С финальной волны блока I (рулинг M) создание членства
+    (``membership_service.grant_membership``) выдаёт участнику эту роль и
+    ГРОМКО падает (``UnknownRole``), если её нет в каталоге: на бою это
+    значит «миграции access не применены». В тестовой базе роль сеет
+    миграция ``access/0004``, но pytest-django чистит ``public`` TRUNCATE'ом
+    после КАЖДОГО transaction=True-теста — засеянное миграциями уходит, и
+    следующий такой тест, заводящий членство (``company_grant``,
+    ``tenancy_bootstrap --grant-all``, ``seed_group_demo``), падал бы по чужой
+    причине. Обычные ``django_db``-тесты это не задевает: pytest-django
+    ставит их ВСЕ раньше транзакционных (``get_order_number`` плагина), они
+    видят базу сразу после миграций. Поэтому пересев — только для
+    транзакционных, тем же условием, что у плагина, и сидом самой миграции,
+    а не копией её данных.
+
+    С блока L пересеваются и ``0011`` (узлы базовой роли под гейт шести
+    аппок), и ``0012`` (``services-admin``).
+    """
+    from pytest_django.plugin import validate_django_db
+
+    marker = request.node.get_closest_marker("django_db")
+    transactional = bool(marker) and any(validate_django_db(marker)[:2])
+    transactional = transactional or bool(
+        {"transactional_db", "live_server"} & set(request.fixturenames))
+    if transactional:
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        request.getfixturevalue("transactional_db")
+        importlib.import_module(
+            "apps.access.migrations.0004_seed_employee_role").seed(django_apps, None)
+        importlib.import_module(
+            "apps.access.migrations.0011_employee_basic_block_l").seed(django_apps, None)
+        importlib.import_module(
+            "apps.access.migrations.0012_seed_services_admin_role").seed(django_apps, None)
+    yield
+
+
 # Прод-режим подмен на один тест. Весь прогон идёт в strict (settings/test.py:
 # fallback поднимает FallbackNotAllowed вместо подмены), и это правильный
 # дефолт — но тесту, который проверяет ПОВЕДЕНИЕ деградации (что вьюха отдала
@@ -82,6 +124,24 @@ def reset_company_context(request):
 def fallback_log_mode(settings):
     settings.FALLBACK_MODE = "log"
     return settings
+
+
+# Часы платформы, закреплённые на моменте, и её пояс. Нужны тестам границы
+# суток: «сегодня» в поясе платформы и «сегодня» в UTC расходятся несколько
+# часов в сутки, и без закрепления такой тест краснеет только ночью.
+# Подменяется django.utils.timezone.now — через него идут timezone.localdate(),
+# auto_now-поля и сервисы; JWT считает время сам (datetime.now), поэтому
+# выданные токены остаются действительными.
+@pytest.fixture
+def pinned_clock(settings, monkeypatch):
+    from django.utils import timezone as dj_timezone
+
+    def pin(moment, tz: str):
+        settings.TIME_ZONE = tz
+        monkeypatch.setattr(dj_timezone, "now", lambda: moment)
+        return moment
+
+    return pin
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +158,38 @@ def fallback_log_mode(settings):
 # снести схему, которой в этот момент владеет другой.
 _SOLO_SLUG = "t-fixture-solo"
 _PAIR_SLUGS = ("t-fixture-alpha", "t-fixture-beta")
+
+#: Слаг компании БЕЗ физической схемы (см. фикстуру company_row).
+_ROW_SLUG = "t-fixture-row"
+
+
+@pytest.fixture
+def company_row(db):
+    """Компания одной строкой реестра, БЕЗ схемы и без миграций.
+
+    Дешёвая половина ``company_schema``: ``CompanyContextMiddleware`` требует
+    ровно строку реестра — по ней он решает, ставить ли контекст или ответить
+    404, — а ``CREATE SCHEMA`` + прогон миграций четырёх тенантных аппок
+    (минута на модуль) нужны только тем, кто реально пишет в таблицы компании.
+
+    Для чего она появилась (задача 4 блока I «Единая модель прав»): ручки под
+    ``api_view(module=…, level=…)`` требуют КОМПАНИЮ запроса, потому что прав
+    вне компании не бывает. Тестам аппок, живущих в ``public`` (``users``,
+    ``access``), из-за этого понадобился контекст компании — но не её схема.
+    ``search_path`` вида ``co_t_fixture_row, public`` в несуществующую схему
+    просто проваливается в ``public``, где в тестовой базе и лежат все
+    таблицы, поэтому чтение и запись работают как обычно.
+
+    ⚠️ Не годится тесту, который проверяет ИЗОЛЯЦИЮ схем или пишет в таблицы
+    тенантной аппки как в «свои»: без ``co_``-схемы всё уходит в ``public``, и
+    разные «компании» на этой фикстуре видели бы одни и те же строки. Для
+    этого есть ``company_schema``/``two_company_schemas``.
+    """
+    from apps.companies.models import Company, CompanyKind
+
+    Company.objects.create(slug=_ROW_SLUG, name="Компания без схемы",
+                           kind=CompanyKind.SERVICE)
+    return _ROW_SLUG
 
 
 def _setup_schema_pool(slugs):
@@ -160,6 +252,16 @@ def _truncate_schema(schema: str) -> None:
         tables = [row[0] for row in cur.fetchall()]
     if not tables:
         return
+    # Django создаёт FK-констрейнты на Postgres как DEFERRABLE INITIALLY
+    # DEFERRED — проверка откладывается до COMMIT, которого внутри теста не
+    # будет (откат в конце). Циклическая связь вроде Department.manager ->
+    # Employee оставляет в очереди непроверенное событие триггера, и
+    # TRUNCATE той же таблицы в этой же транзакции падает с «cannot TRUNCATE
+    # ... because it has pending trigger events». check_constraints()
+    # форсирует проверку сейчас (тот же приём, что у
+    # TransactionTestCase._fixture_teardown) и возвращает режим обратно в
+    # DEFERRED — так же поступают штатные механизмы Django.
+    connection.check_constraints()
     with connection.cursor() as cur:
         target = sql.SQL(", ").join(sql.Identifier(schema, t) for t in tables)
         cur.execute(sql.SQL("TRUNCATE {} CASCADE").format(target))

@@ -20,8 +20,18 @@ export interface Position {
   grade?: number;
   is_active?: boolean;
   is_system?: boolean;
+  /** Руководящая ли должность — включает участие во внешней иерархии. */
+  is_manager?: boolean;
+  /** Действует только у руководящей: командует ли нижестоящими компаниями. */
+  external_hierarchy?: 'inherit' | 'none';
+  /**
+   * Обслуживает ли должность дочерние компании: не про подчинение, а про то,
+   * с чьими данными работает должность — роли распространяются на поддерево.
+   */
+  serves_subsidiaries?: boolean;
+  // hr_level снят с записи (задача 10 блока I.2) и нигде в этом типе больше
+  // не читается — уровень живёт только в ролях apps.access.
   permissions?: {
-    hr_level?: 'junior' | 'middle' | 'senior' | 'lead' | null;
     permissions?: string[];
   } | null;
 }

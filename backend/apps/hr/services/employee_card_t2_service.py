@@ -8,15 +8,15 @@ SQLAlchemy-сессии, здесь синхронный Django ORM без се�
 Гейтинг СЕКЦИОННЫЙ, не по каждому полю отдельно: ``_SECTIONS`` — карта
 секция -> (поля, view-ключ, edit-ключ), буквальный порт исходника. Это
 единственное место, где решается, какие Т-2 поля видны/редактируемы по
-HRAccess — вьюха (``apps/hr/views.py``) не знает о секциях, только зовёт
-``read_sections``/``upsert``.
+``apps.hr.rbac.NodeAccess`` — вьюха (``apps/hr/views.py``) не знает о
+секциях, только зовёт ``read_sections``/``upsert``.
 """
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from apps.hr.access import HRAccess
 from apps.hr.models import EmployeeCard
+from apps.hr.rbac import NodeAccess
 
 _SECTIONS: dict[str, tuple[tuple[str, ...], str, str]] = {
     "financial": (("salary", "bonus", "bank_account"),
@@ -41,7 +41,7 @@ def _get(employee_id: int) -> EmployeeCard | None:
     return EmployeeCard.objects.filter(employee_id=employee_id).first()
 
 
-def read_sections(employee_id: int, access: HRAccess) -> dict:
+def read_sections(employee_id: int, access: NodeAccess) -> dict:
     card = _get(employee_id)
     out: dict = {}
     for section, (fields, view_key, _edit) in _SECTIONS.items():
@@ -53,7 +53,7 @@ def read_sections(employee_id: int, access: HRAccess) -> dict:
     return out
 
 
-def upsert(employee_id: int, patch: dict, access: HRAccess) -> dict:
+def upsert(employee_id: int, patch: dict, access: NodeAccess) -> dict:
     """Порт ``EmployeeCardT2Service.upsert``.
 
     ``card.save()`` СЛУЧАЕТСЯ ТОЛЬКО ПОСЛЕ успешного прохода всего цикла —

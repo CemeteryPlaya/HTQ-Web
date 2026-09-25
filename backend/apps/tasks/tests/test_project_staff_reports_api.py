@@ -20,6 +20,7 @@ import datetime as dt
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.tasks.models import (DailyReport, Project, ProjectSite,
                                ProjectStaffReport, ProjectStaffReportRevision,
@@ -28,6 +29,10 @@ from apps.tasks.models import (DailyReport, Project, ProjectSite,
                                WorkVolumeType)
 
 from .helpers import BASE, admin_token, auth, patch_json, post_json, token
+
+# 21:30 UTC — в Алматы уже 02:30 следующего дня: «сегодня» в поясе платформы
+# и в UTC здесь разные дни.
+BOUNDARY = dt.datetime(2026, 9, 24, 21, 30, tzinfo=dt.timezone.utc)
 
 D = dt.date
 ME = 7          # user_id обычного токена
@@ -444,12 +449,14 @@ def test_plan_without_a_role_still_counts_towards_the_block(project, block,
     assert row["roles"][0]["work_role_name"] == "Без указания роли"
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Almaty"])
 @pytest.mark.django_db
-def test_board_defaults_to_today_and_rejects_a_malformed_date(project, block):
+def test_board_defaults_to_today_and_rejects_a_malformed_date(project, block, tz, pinned_clock):
+    pinned_clock(BOUNDARY, tz)
     ok = Client().get(f"{BASE}/projects/{project.id}/staff-board",
                       **auth(admin_token()))
     assert ok.status_code == 200
-    assert ok.json()["date"] == dt.date.today().isoformat()
+    assert ok.json()["date"] == timezone.localdate().isoformat()
 
     bad = Client().get(f"{BASE}/projects/{project.id}/staff-board?date=вчера",
                        **auth(admin_token()))

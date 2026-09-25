@@ -18,14 +18,15 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import ProgrammingError
 
-from apps.companies.interface import active_company_slugs
+from apps.companies.interface import migratable_company_slugs
 from apps.companies.models import Company
 from apps.companies.services import holding_views, migration_service
 
 
 class Command(BaseCommand):
-    help = ("Довести схемы компаний до текущей версии миграций. "
-            "Без --company обрабатывает все действующие компании.")
+    help = ("Довести схемы компаний до текущей версии миграций. Без "
+            "--company обрабатывает все компании реестра — действующие и "
+            "архивные.")
 
     def add_arguments(self, parser):
         parser.add_argument("--company", help="slug одной компании")
@@ -42,10 +43,15 @@ class Command(BaseCommand):
         # fresh=True: команду запускают сразу после заведения компании, а
         # пятисекундный кэш списка отдал бы её без этой самой компании —
         # схема осталась бы пустой молча, без ошибки и следа в логе.
+        # Архивные — тоже, если у них есть схема: схема архива обязана идти
+        # в ногу с кодом, иначе её не прочесть (архив — только чтение) и не
+        # восстановить; архивную строку без схемы список пропускает сам
+        # (докстринг migratable_company_slugs). Сводки собираются только по
+        # действующим — rebuild_holding_views сам берёт active_company_slugs.
         slugs = ([opts["company"]] if opts["company"]
-                 else active_company_slugs(fresh=True))
+                 else migratable_company_slugs(fresh=True))
         if not slugs:
-            raise CommandError("Нет действующих компаний.")
+            raise CommandError("В реестре нет компаний.")
 
         # Проверка ДО сноса представлений, а не только внутри цикла: после
         # сноса холдинг остаётся без сводок до успешной пересборки, и

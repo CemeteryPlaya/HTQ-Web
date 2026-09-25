@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import type { AxiosError } from "axios";
 import { ForcePasswordChange } from "./ForcePasswordChange";
@@ -6,6 +7,11 @@ import { useActiveProfile } from "@/hooks/useActiveProfile";
 import { usePermissions } from "@/hooks/usePermissions";
 import type { RouteRequirement } from "@/app/routing/types";
 import { useTranslation } from 'react-i18next';
+import { companyFromHost } from "@/lib/auth/companySwitch";
+import { canRestoreSession, restoreSessionOnce } from "@/lib/auth/sessionRestore";
+
+/** Экран выбора компании — единственный защищённый маршрут голого домена. */
+const COMPANY_PICKER_PATH = "/companies/choose";
 
 interface RequireAuthProps {
     children: JSX.Element;
@@ -23,7 +29,34 @@ const RequireAuth = ({ children, requires, page }: RequireAuthProps) => {
     });
     const permissions = usePermissions();
 
+    // Новый поддомен компании: access-токена здесь нет (он привязан к своему
+    // origin), но refresh-cookie родительского домена видна. Прежде чем слать
+    // на /login, один раз меняем её на access — иначе человек, вошедший на
+    // голом домене, входил бы второй раз в каждой компании и терял глубокую
+    // ссылку (блок I.2, A1). Попытка одна на загрузку (sessionRestore.ts).
+    const mayRestore = !isLoggedIn && canRestoreSession();
+    const [restoreSettled, setRestoreSettled] = useState(false);
+    useEffect(() => {
+        if (!mayRestore) return;
+        let alive = true;
+        void restoreSessionOnce().then(() => {
+            // Успех виден через useActiveProfile: на перерисовке он заново
+            // читает access-токен, который обмен только что сохранил.
+            if (alive) setRestoreSettled(true);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [mayRestore]);
+
     if (!isLoggedIn) {
+        if (mayRestore && !restoreSettled) {
+            return (
+                <div className="min-h-screen bg-background flex flex-col items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary opacity-50" />
+                </div>
+            );
+        }
         return <Navigate to="/login" state={{ from: location }} replace />;
     }
 
@@ -65,6 +98,14 @@ const RequireAuth = ({ children, requires, page }: RequireAuthProps) => {
 
     if (activeProfile?.must_change_password) {
         return <ForcePasswordChange />;
+    }
+
+    // Голый домен: компания не выбрана. Любой защищённый маршрут уводит на
+    // экран выбора — на голом домене у запросов нет контекста компании, и
+    // гейт модуля ответил бы 403 (блок I.2, S4). Исходное место — в
+    // state.from: экран выбора вернёт человека туда уже на поддомене.
+    if (companyFromHost(window.location.host) === null && page !== COMPANY_PICKER_PATH) {
+        return <Navigate to={COMPANY_PICKER_PATH} replace state={{ from: location }} />;
     }
 
     // Страница — слой ВЫШЕ глубины: закрытая отменяет всё, что разрешено

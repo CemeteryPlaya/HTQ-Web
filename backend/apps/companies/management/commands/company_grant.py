@@ -12,20 +12,33 @@
 тому же ключу, что несёт ``uniq_membership``) и завершается успешно, без
 ошибки — оператор может запускать её вслепую в скрипте развёртывания.
 
-``--user`` и ``--all-users`` взаимоисключающие и оба обязательны как
-альтернативы (``add_mutually_exclusive_group(required=True)``): выдавать
-права без явного указания кому — ни одному, ни всем сразу — не тот случай,
-где имеет смысл угадывать дефолт.
+``--user``, ``--all-users`` и ``--serving`` взаимоисключающие и хотя бы один
+обязателен (``add_mutually_exclusive_group(required=True)``): выдавать права
+без явного указания кому — ни одному, ни всем сразу, ни по признаку — не тот
+случай, где имеет смысл угадывать дефолт.
+
+``--serving`` (задача 8 блока C) закрывает разрыв, ради которого написан этот
+файл: должность вышестоящей компании, помеченная обслуживающей, несёт её
+держателям права по всем дочерним (``apps.access.services.inheritance`` —
+решение заказчика 1), но БЕЗ ``CompanyMembership`` для дочерней компании
+токен для её поддомена всё равно не выпускается — признак сам по себе
+ничего не открывает. Список держателей берётся через
+``apps.access.interface.serving_holders`` — то же ядро обхода предков, что
+и у витрины «внешние держатели прав» (задача 7): семантика «держит права»
+здесь ОДНА, а не изобретена заново для этой команды.
 """
 
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.access.interface import UnknownRole, serving_holders
 from apps.companies.models import Company
 from apps.companies.services import membership_service
 
 
 class Command(BaseCommand):
-    help = "Выдать пользователю (--user) или всем активным (--all-users) членство в компании."
+    help = ("Выдать членство в компании пользователю (--user), всем активным "
+           "(--all-users) или держателям обслуживающих должностей "
+           "компаний-предков (--serving).")
 
     def add_arguments(self, parser):
         parser.add_argument("--company", required=True, dest="company_slug",
@@ -35,6 +48,10 @@ class Command(BaseCommand):
                            help="id или username конкретного пользователя.")
         group.add_argument("--all-users", action="store_true", dest="all_users",
                            help="Выдать членство всем активным пользователям платформы.")
+        group.add_argument("--serving", action="store_true", dest="serving",
+                           help="Выдать членство держателям обслуживающих "
+                                "должностей вышестоящих компаний (задача 8 "
+                                "блока C).")
 
     def handle(self, *args, **opts):
         slug = opts["company_slug"]
@@ -49,6 +66,14 @@ class Command(BaseCommand):
                     "Активных пользователей не найдено — нечего выдавать."
                 ))
                 return
+        elif opts["serving"]:
+            user_ids = serving_holders(slug)
+            if not user_ids:
+                self.stdout.write(self.style.WARNING(
+                    "Держателей обслуживающих должностей вышестоящих "
+                    "компаний не найдено — нечего выдавать."
+                ))
+                return
         else:
             identifier = opts["user"]
             user_id = membership_service.find_user_id(identifier)
@@ -59,7 +84,14 @@ class Command(BaseCommand):
         granted = 0
         already = 0
         for user_id in user_ids:
-            if membership_service.grant_membership(company, user_id):
+            try:
+                created = membership_service.grant_membership(company, user_id)
+            except UnknownRole as exc:
+                raise CommandError(
+                    f"Базовая роль не засеяна: {exc} Примените миграции access "
+                    f"(manage.py migrate_shared) и повторите команду."
+                ) from exc
+            if created:
                 granted += 1
             else:
                 already += 1

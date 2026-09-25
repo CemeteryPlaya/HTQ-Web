@@ -24,14 +24,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import api from '@/api/client';
 
 export const HRQuickActionsBar: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const { canCreateEmployee, isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Плитка ведёт на создание сотрудника — тот же узел и признак, что
+  // проверяет бэкенд (`EMPLOYEES_CREATE` → `hr.employees: create`,
+  // apps/hr/legacy_roles.py). Ранее читалось из `useHRLevel().canCreateEmployee`.
+  const canCreateEmployee = permissions.can('hr.employees', 'create');
 
   // Quick stats query for HR overview
   const { data: stats } = useQuery({

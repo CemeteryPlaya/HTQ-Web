@@ -8,7 +8,9 @@ DailyReport, WeeklyReport, MonthlyReport), поведение — TimeService.
 Авторизация — БУКВАЛЬНО как в исходнике: ВСЕ 8 эндпойнтов используют только
 ``get_current_user`` (обычный jwt), включая POST/PUT/DELETE — ни один не
 зовёт require_hr_write. Странность исходника (как и recruiting), не баг
-порта.
+порта. Исключение с финальной волны блока I (рулинг O, сознательное
+исключение №3): DELETE — под ``module="hr", level="admin"``; его тесты идут
+от держателя admin (``hr_admin_auth``).
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
   * список — конверт {items,total,page,pages,limit}, оба пути (/ и /entries/)
@@ -30,6 +32,7 @@ import datetime
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.hr.models import Department, Employee, Position, TimeEntry
 from apps.users.models import User, UserStatus
@@ -234,17 +237,24 @@ def test_update_can_change_date_field(auth, emp):
 # ── DELETE /entries/{id}/ ─────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_delete_204(auth, emp):
+def test_delete_204(hr_admin_auth, emp):
     entry = _entry(emp, datetime.date(2026, 1, 5), datetime.time(9, 0), datetime.time(17, 0))
-    resp = Client().delete(f"{BASE}/entries/{entry.id}/", **auth)
+    resp = Client().delete(f"{BASE}/entries/{entry.id}/", **hr_admin_auth)
     assert resp.status_code == 204
     assert not TimeEntry.objects.filter(id=entry.id).exists()
 
 
 @pytest.mark.django_db
-def test_delete_not_found_404(auth):
-    resp = Client().delete(f"{BASE}/entries/999999/", **auth)
+def test_delete_not_found_404(hr_admin_auth):
+    resp = Client().delete(f"{BASE}/entries/999999/", **hr_admin_auth)
     assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_delete_is_denied_to_a_plain_user(auth, emp):
+    entry = _entry(emp, datetime.date(2026, 1, 5), datetime.time(9, 0), datetime.time(17, 0))
+    assert Client().delete(f"{BASE}/entries/{entry.id}/", **auth).status_code == 403
+    assert TimeEntry.objects.filter(id=entry.id).exists()
 
 
 # ── GET /reports/daily ────────────────────────────────────────────────────
@@ -263,7 +273,7 @@ def test_daily_report_sums_minutes_minus_break(auth, emp):
 
 @pytest.mark.django_db
 def test_daily_report_defaults_to_today_when_date_omitted(auth, emp):
-    today = datetime.date.today()
+    today = timezone.localdate()
     _entry(emp, today, datetime.time(9, 0), datetime.time(10, 0))
     resp = Client().get(f"{BASE}/reports/daily?employee_id={emp.id}", **auth)
     assert resp.status_code == 200

@@ -60,6 +60,28 @@ class DepartmentHasDependents(Exception):
         super().__init__(self.detail["message"])
 
 
+class DepartmentHasSystemPositions(Exception):
+    """409: попытка удалить подразделение, содержащее системные должности.
+
+    Системные должности защищены: на них могут ссылаться маршруты согласования,
+    и молчаливое удаление привело бы к невалидным ссылкам. Пользователь должен
+    перевести системную должность в другое подразделение перед удалением.
+    """
+
+    def __init__(self, department: Department, system_titles: list[str]) -> None:
+        self.detail = {
+            "code": "department_has_system_positions",
+            "message": (
+                f"Подразделение «{department.name}» содержит системные должности, "
+                "которые нельзя удалить. Перенесите их в другое подразделение "
+                "или обратитесь к администратору."
+            ),
+            "department": {"id": department.id, "name": department.name},
+            "system_positions": system_titles,
+        }
+        super().__init__(self.detail["message"])
+
+
 def slugify_name(name: str) -> str:
     slug = "".join(_TRANSLIT.get(c, c) for c in name.lower())
     slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
@@ -203,6 +225,18 @@ def delete_department(department_id: int, *, cascade: bool = False) -> None:
     subtree_ids = list(
         Department.objects.filter(path__startswith=f"{dep.path}.").values_list("id", flat=True)
     )
+    dept_ids = [dep.id, *subtree_ids]
+
+    # Проверка системных должностей ПЕРЕД остальными блокерами — удаление
+    # системной должности запрещено всегда, даже с cascade=true, потому что
+    # на неё могут ссылаться маршруты согласования.
+    system_positions = list(
+        Position.objects.filter(department_id__in=dept_ids, is_system=True)
+        .values_list("title", flat=True)
+    )
+    if system_positions:
+        raise DepartmentHasSystemPositions(dep, system_positions)
+
     blockers = {
         "sub_departments": len(subtree_ids),
         "positions": Position.objects.filter(department_id=dep.id).count(),
@@ -214,7 +248,6 @@ def delete_department(department_id: int, *, cascade: bool = False) -> None:
         raise DepartmentHasDependents(dep, blockers)
 
     if cascade and any(blockers.values()):
-        dept_ids = [dep.id, *subtree_ids]
         employee_ids = list(
             Employee.objects.filter(department_id__in=dept_ids).values_list("id", flat=True)
         )

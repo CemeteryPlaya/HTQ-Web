@@ -47,11 +47,16 @@ from PIL import Image
 from apps.media_files import tasks, views
 from apps.media_files.models import FileMetadata
 from apps.media_files.services import upload_service
+from apps.access.tests.helpers import gate_company
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASE = "/api/media/v1/files"
+
+#: Блок L, задача 4: ручки files стоят под ``api_view(module="media")`` —
+#: гейту нужны компания запроса (заголовок + claim) и роль в ней.
+COMPANY = "t-media-gate"
 
 
 def _load(name: str) -> dict:
@@ -142,9 +147,12 @@ def admin(db):
     return u
 
 
-def _auth(user) -> dict:
-    token = issue_token_pair(user)["access"]
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+def _auth(user, level: str = "write") -> dict:
+    """Заголовки вызывающего под гейтом модуля ``media``: рядовой — ``write``
+    (уровень ``employee-basic``), администратор — ``full``."""
+    gate_company(COMPANY, {user.id: {"media": level}})
+    token = issue_token_pair(user, company_slug=COMPANY)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": COMPANY}
 
 
 def _png_bytes(size=(64, 64), color=(5, 6, 7)) -> bytes:
@@ -206,7 +214,7 @@ def test_list_response_entries_match_file_metadata_read_schema_shape(fake_storag
     )
     assert upload.status_code == 201
 
-    resp = Client().get(f"{BASE}/", **_auth(admin))
+    resp = Client().get(f"{BASE}/", **_auth(admin, "full"))
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body, list) and body

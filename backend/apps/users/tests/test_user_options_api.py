@@ -15,15 +15,44 @@ deliberate departures from that original are asserted here, both narrowing:
 Everything else is unchanged: active-only, case-insensitive matching across
 first/last name, email, username and display_name, and no admin gate on the
 route itself — a plain user can still search.
+
+**С задачи 4 блока I «Единая модель прав» у ручки есть ВХОДНОЙ гейт модуля**
+(``api_view(module="users", level="read")``): админского гейта у неё
+по-прежнему нет, но подбор отдаёт чужие имена, то есть это справочник учёток.
+Поэтому каждый пользователь этого файла заводится сразу с правом на чтение
+модуля (``_mk`` → ``assign``), а запросы идут с заголовком компании — как их
+и ставит шлюз. Сам отказ без права проверяет
+``apps/users/tests/test_module_gate.py``; здесь проверяется контракт подбора,
+а не авторизация. Рядового сотрудника гейт не задевает: системная роль
+``employee-basic`` несёт ``users.profile``, а уровень модуля считается по
+всему поддереву.
 """
 
 import pytest
 from django.test import Client
 
+from apps.access.tests.helpers import assign
 from apps.users.models import User, UserStatus
 from htqweb.authn.jwt import issue_token_pair
 
 BASE = "/api/users/v1"
+
+#: Компания запроса. Своя, а не общая фикстура ``company_row``: слаг нужен
+#: модульным помощникам (``_mk``/``_auth``), а не только телам тестов.
+SLUG = "picker-co"
+
+
+@pytest.fixture(autouse=True)
+def company(db):
+    """Строка реестра компании — прав вне компании не бывает, а гейт их спросит.
+
+    Схема не нужна: и учётки, и права живут в ``public`` (см. докстринг
+    фикстуры ``company_row`` в ``backend/conftest.py``).
+    """
+    from apps.companies.models import Company, CompanyKind
+
+    Company.objects.create(slug=SLUG, name="Подбор", kind=CompanyKind.SERVICE)
+    return SLUG
 
 
 def _mk(username: str, *, status=UserStatus.ACTIVE, **fields) -> User:
@@ -31,6 +60,7 @@ def _mk(username: str, *, status=UserStatus.ACTIVE, **fields) -> User:
                             **fields)
     u.set_password("S3cret!")
     u.save()
+    assign(SLUG, u.id, "users", "view")
     return u
 
 
@@ -71,8 +101,8 @@ def rejected_user(db):
 
 
 def _auth(user) -> dict:
-    token = issue_token_pair(user)["access"]
-    return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    token = issue_token_pair(user, company_slug=SLUG)["access"]
+    return {"HTTP_AUTHORIZATION": f"Bearer {token}", "HTTP_X_HTQ_COMPANY": SLUG}
 
 
 OPTION_FIELDS = {"id", "full_name", "email"}
@@ -114,7 +144,7 @@ def test_options_200_shape(alice, bob):
 
 @pytest.mark.django_db
 def test_options_any_authenticated_user_can_call(bob, alice):
-    """No admin gate — a plain (non-staff) user can still search."""
+    """No admin gate — a plain (non-staff) user with the module can search."""
     resp = Client().get(f"{BASE}/users/options/?query=alice", **_auth(bob))
     assert resp.status_code == 200
 

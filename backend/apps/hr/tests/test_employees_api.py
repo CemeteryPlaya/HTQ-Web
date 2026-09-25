@@ -11,11 +11,15 @@ card/groups; users/ — GET/POST через apps.users.interface.{list_users_bri
 create_user}, Р3 без S2S, см. блок ниже).
 
 Зафиксированные ловушки паритета (проверяются тестами ниже):
-  * авторизация — ТОНКАЯ роль внутри вьюх (resolve_hr_access + access.can_*),
-    а не грубый api_view(admin=True): elevated JWT (is_admin/is_staff/
-    is_superuser) -> HRAccess(level="lead", permissions={"*"}); иначе роль
-    считается из Employee.position (title/department эвристика или явный
-    permissions.hr_level);
+  * авторизация — ДВА слоя (задача 9 блока I «Единая модель прав»): вход в
+    ручку решает модульный гейт (``api_view(module="hr", level=…)``), само
+    ДЕЙСТВИЕ — проверка узла реестра ``apps.access`` через
+    ``apps.hr.rbac.NodeAccess.has(key)`` (ключ -> узел+признаки,
+    ``legacy_roles.KEY_TO_NODE``). Роль — ``RoleAssignment``/``PositionRole``
+    ``apps.access``, не эвристика по Employee.position; единственный
+    бесплатный обход (без единой роли) — ``is_superuser``, ГОЛЫЙ
+    ``is_staff``/``is_admin`` его не даёт (``admin_auth`` ниже выдаёт роль
+    ``hr-lead`` явно ради этого);
   * скрытый отдел на detail-эндпойнтах -> 404 "Employee not found" (НЕ 403) —
     намеренная приватность;
   * список без прав на "видеть всё" скоупится на свой отдел, а при чужом
@@ -62,14 +66,74 @@ def _emp(dep, pos, email, **kw):
     return Employee.objects.create(email=email, department=dep, position=pos, **kw)
 
 
-def _user_auth(email, *, is_staff=False):
+def _user_auth(email, *, is_staff=False, company_slug=None):
     user = User.objects.create(
         username=email.split("@")[0], email=email, password="x", status=UserStatus.ACTIVE,
         is_staff=is_staff,
     )
     user.set_password("S3cret!Pass1")
     user.save()
-    return user, {"HTTP_AUTHORIZATION": f"Bearer {issue_token_pair(user)['access']}"}
+    token = issue_token_pair(user, company_slug=company_slug)["access"]
+    headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+    if company_slug is not None:
+        headers["HTTP_X_HTQ_COMPANY"] = company_slug
+    return user, headers
+
+
+def _grant_seeded_role(company_slug: str, user_id: int, code: str, *,
+                       department_id: int | None = None) -> None:
+    """Назначить УЖЕ засеянную роль (``access/migrations/0005``) — блок I
+    задача 5. Писавшиеся против СТАРОЙ модели (``hr_access.resolve_hr_access``
+    по Employee/Position-эвристике) фикстуры ``junior``/``middle``/``senior``/
+    ``lead`` этой одной больше не хватает: ``module="hr", level=…`` теперь
+    стоит ПОВЕРХ старых проверок и читает РОЛИ ``apps.access``, не
+    Employee/Position. Используются РЕАЛЬНЫЕ засеянные роли
+    (``hr-junior``/``hr-middle``/``hr-senior``/``hr-lead``), как того требует
+    бриф задачи 5 — не выдуманные пресеты.
+
+    ``department_id`` (задача 9): область выдачи. В старой модели «свой отдел
+    против всех» решал ключ ``hr.employees.view.all`` (только senior/lead);
+    в новой это ОБЛАСТЬ роли (``legacy_roles.KEY_TO_NODE``, решение 1), и
+    перенос (``access_backfill_positions``) выдаёт junior/middle с областью
+    ``DEPARTMENT``, senior/lead — ``COMPANY``. Фикстуры повторяют это же
+    правило, иначе middle с областью «вся компания» видел бы чужие отделы,
+    и тесты приватности (404 за чужой отдел) проверяли бы не то.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    if department_id is None:
+        scope_kind, scope_id = ScopeKind.COMPANY, None
+    else:
+        scope_kind, scope_id = ScopeKind.DEPARTMENT, department_id
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=scope_kind, scope_id=scope_id,
+    )
+
+
+def _grant_custom_role(company_slug: str, user_id: int, code: str,
+                       nodes: dict[str, str]) -> None:
+    """Синтетическая роль с НЕСКОЛЬКИМИ узлами в одной роли — замена старой
+    «явной матрицы» ``Position.permissions`` в фикстурах (задача 9).
+
+    Отдельная от ``apps.access.tests.helpers.assign`` (та заводит по роли на
+    узел): запрет узла (пресет ``none`` — пустой набор признаков) действует
+    только ВНУТРИ той же роли, что выдала право на предка, — роли
+    складываются объединением, и запрет в одной не отменяет разрешения в
+    другой (``resolve.page_hidden``/``_nearest``). Поэтому «правит
+    сотрудников, но не финансы» — это одна роль с ``hr.employees: full`` и
+    ``hr.employees.salary: none``, а не две.
+    """
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+    from apps.access.tests.helpers import grant
+
+    role = Role.objects.create(code=code, title=code)
+    for node, preset in nodes.items():
+        grant(role, node, preset)
+    RoleAssignment.objects.create(
+        company_slug=company_slug, user_id=user_id, role=role,
+        scope_kind=ScopeKind.COMPANY, scope_id=None,
+    )
 
 
 @pytest.fixture
@@ -84,47 +148,66 @@ def other_dep(db):
 
 @pytest.fixture
 def auth(db):
-    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще."""
+    """Обычный вошедший без Employee-профиля — нет HR-доступа вообще.
+
+    Намеренно БЕЗ роли на модуль ``hr`` и без компании: employee-basic не
+    несёт ни одного узла ``hr.*`` (докстринг ``apps.access.self_service``),
+    и это ровно тот случай — модульный гейт (``api_view(module="hr",
+    level=…)``) отказывает ДО того, как запрос доходит до тела вьюхи и её
+    внутренней проверки узла (``apps.hr.rbac.NodeAccess.has``).
+    """
     _user, headers = _user_auth("plain@htq.test")
     return headers
 
 
 @pytest.fixture
-def admin_auth(db):
-    """is_staff=True — elevated -> HRAccess(level='lead', permissions={'*'})."""
-    _user, headers = _user_auth("hr-admin@htq.test", is_staff=True)
+def admin_auth(db, company_row):
+    """``is_staff=True`` — раньше (до задачи 9) elevated-токен коротился в
+    ``HRAccess(level='lead', permissions={'*'})`` безусловно.
+
+    Модульный гейт сам по себе голый ``is_staff`` не пропускает (единственный
+    бесплатный обход там — ``is_superuser``) — роль ``hr-lead`` выдана явно,
+    чтобы существующие ``admin_auth``-тесты не начали падать на гейте раньше
+    вьюхи.
+    """
+    user, headers = _user_auth("hr-admin@htq.test", is_staff=True, company_slug=company_row)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
     return headers
 
 
 @pytest.fixture
-def junior(db, hr_dep):
+def junior(db, hr_dep, company_row):
     pos = _pos("HR Assistant", hr_dep, weight=10)
-    user, headers = _user_auth("hr-junior@htq.test")
+    user, headers = _user_auth("hr-junior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-junior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-junior", department_id=hr_dep.id)
     return emp, headers
 
 
 @pytest.fixture
-def middle(db, hr_dep):
+def middle(db, hr_dep, company_row):
     pos = _pos("HR Manager", hr_dep, weight=20)
-    user, headers = _user_auth("hr-middle@htq.test")
+    user, headers = _user_auth("hr-middle@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-middle@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-middle", department_id=hr_dep.id)
     return emp, headers
 
 
 @pytest.fixture
-def senior(db, hr_dep):
+def senior(db, hr_dep, company_row):
     pos = _pos("Senior HR Manager", hr_dep, weight=30)
-    user, headers = _user_auth("hr-senior@htq.test")
+    user, headers = _user_auth("hr-senior@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-senior@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-senior")
     return emp, headers
 
 
 @pytest.fixture
-def lead(db, hr_dep):
+def lead(db, hr_dep, company_row):
     pos = _pos("HR Director", hr_dep, weight=40)
-    user, headers = _user_auth("hr-lead@htq.test")
+    user, headers = _user_auth("hr-lead@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "hr-lead@htq.test", user_id=user.id)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
     return emp, headers
 
 
@@ -135,43 +218,14 @@ def test_requires_jwt_on_list():
     assert Client().get(f"{BASE}/").status_code == 401
 
 
-@pytest.mark.django_db
-def test_requires_jwt_on_hr_level():
-    assert Client().get(f"{BASE}/hr-level/").status_code == 401
-
-
-# ── GET /hr-level/ ────────────────────────────────────────────────────────────
-
-@pytest.mark.django_db
-def test_hr_level_null_for_user_without_employee_profile(auth):
-    resp = Client().get(f"{BASE}/hr-level/", **auth)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["level"] is None
-    assert body["permissions"] == []
-    assert body["can_read_all"] is False
-    assert body["can_create_employee"] is False
-
-
-@pytest.mark.django_db
-def test_hr_level_elevated_admin_is_lead_wildcard(admin_auth):
-    body = Client().get(f"{BASE}/hr-level/", **admin_auth).json()
-    assert body["level"] == "lead"
-    assert body["permissions"] == ["*"]
-    assert body["can_read_all"] is True
-    assert body["can_delete_employee"] is True
-    assert body["scope_department_id"] is None
-
-
-@pytest.mark.django_db
-def test_hr_level_reflects_employee_role(senior):
-    _owner, headers = senior
-    body = Client().get(f"{BASE}/hr-level/", **headers).json()
-    assert body["level"] == "senior"
-    assert body["can_read_all"] is True
-    assert body["can_create_employee"] is True
-    assert body["can_delete_employee"] is False
-    assert "hr.employees.view" in body["permissions"]
+# ``GET /hr-level/`` снята задачей 9 блока I вместе со старым резолвером —
+# её 401/200-контракт теперь покрыт ``test_hr_level_endpoint_is_gone``
+# (``apps/hr/tests/test_single_rbac_guards.py``, 404 по обоим написаниям
+# пути); свой уровень/область вызывающий узнаёт из ``/api/access/v1/me``.
+# Прежние ``test_requires_jwt_on_hr_level``, ``test_hr_level_null_for_user_
+# without_employee_profile``, ``test_hr_level_elevated_admin_is_lead_
+# wildcard``, ``test_hr_level_reflects_employee_role`` удалены — их предмет
+# (сама ручка) больше не существует.
 
 
 # ── GET /me/ ──────────────────────────────────────────────────────────────────
@@ -220,7 +274,6 @@ def test_me_includes_soft_deleted_employee(junior):
 def test_list_forbidden_without_any_hr_access(auth):
     resp = Client().get(f"{BASE}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -298,7 +351,6 @@ def test_create_forbidden_without_any_hr_access(auth, hr_dep):
         f"{BASE}/", data=_create_payload(hr_dep, pos), content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -378,7 +430,6 @@ def test_get_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, pos, "target@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -435,17 +486,21 @@ def test_update_forbidden_without_any_hr_access(auth, hr_dep):
         f"{BASE}/{target.id}/", data={"first_name": "X"}, content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
 def test_update_forbidden_for_junior_write_access(junior):
+    """hr-junior несёт только чтение на модуль ``hr`` (VIEW-узлы —
+    ``access/migrations/0005``), а PATCH стоит под ``level="write"`` — гейт
+    модуля отказывает РАНЬШЕ, чем запрос доходит до тела вьюхи и её проверки
+    узла (``access.has(EMPLOYEES_EDIT)``), поэтому detail теперь "Forbidden",
+    а не "HR write access required" (см. ``test_org_api.py::test_add_
+    relation_forbidden_for_non_admin_jwt_user`` про тот же эффект)."""
     emp, headers = junior
     resp = Client().patch(
         f"{BASE}/{emp.id}/", data={"first_name": "X"}, content_type="application/json", **headers,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR write access required"
 
 
 @pytest.mark.django_db
@@ -545,7 +600,6 @@ def test_delete_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, _pos("A", hr_dep, weight=150), "d1@htq.test")
     resp = Client().delete(f"{BASE}/{target.id}/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -593,7 +647,6 @@ def test_transfer_forbidden_without_any_hr_access(auth, hr_dep):
         content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -691,15 +744,17 @@ def test_history_returns_entries_desc_ordered_with_expected_shape(admin_auth, hr
 
 
 @pytest.mark.django_db
-def test_history_404_after_soft_delete():
+def test_history_404_after_soft_delete(company_row):
     """_require_visible_employee идёт через get_employee (is_deleted=False) —
     после мягкого удаления история тоже 404, ровно как GET /{id}/ (тот же
     гейт видимости, буквальное поведение исходника)."""
     dep = _dep("HR2", "hr2")
     pos = _pos("A", dep, weight=172)
     target = _emp(dep, pos, "hist2@htq.test")
-    _user, headers = _user_auth("hist-admin@htq.test", is_staff=True)
-    Client().delete(f"{BASE}/{target.id}/", **headers)
+    user, headers = _user_auth("hist-admin@htq.test", is_staff=True, company_slug=company_row)
+    _grant_seeded_role(company_row, user.id, "hr-lead")
+    del_resp = Client().delete(f"{BASE}/{target.id}/", **headers)
+    assert del_resp.status_code == 204
     resp = Client().get(f"{BASE}/{target.id}/history", **headers)
     assert resp.status_code == 404
 
@@ -707,7 +762,7 @@ def test_history_404_after_soft_delete():
 # ── GET /me/pmos ─────────────────────────────────────────────────────────────
 #
 # Порт employees.py::my_pmos исходника (зовёт PMOService.get_employee_pmos) —
-# резолвит СВОЙ Employee ровно как /me/ (user_id||email), БЕЗ require_hr_access
+# резолвит СВОЙ Employee ровно как /me/, БЕЗ единой проверки кадрового доступа
 # (любой залогиненный с профилем видит собственные PMO-членства).
 
 @pytest.mark.django_db
@@ -747,8 +802,8 @@ def test_me_pmos_returns_active_membership_shape(junior):
 
 # ── GET /{id}/pmos ────────────────────────────────────────────────────────────
 #
-# Порт employees.py::employee_pmos исходника — та же пара require_hr_access +
-# _require_visible_employee, что и history/documents выше.
+# Порт employees.py::employee_pmos исходника — та же пара «модульный гейт +
+# _require_visible_employee», что и history/documents выше.
 
 @pytest.mark.django_db
 def test_id_pmos_forbidden_without_any_hr_access(auth, hr_dep):
@@ -820,7 +875,6 @@ def test_users_get_requires_jwt():
 def test_users_get_403_without_hr_access(auth):
     resp = Client().get(f"{BASE}/users/", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -883,7 +937,6 @@ def test_users_post_403_without_hr_access(auth):
         f"{BASE}/users/", data='{"email": "x@htq.test"}', content_type="application/json", **auth,
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -978,10 +1031,11 @@ def test_users_post_no_slash_variant(lead):
 #
 # Порт employees.py::my_employee_card исходника (зовёт EmployeeCardService.
 # build_card(employee.id, mode="full", access=...)) — резолвит СВОЙ Employee
-# ровно как /me/ и /me/pmos (user_id||email), БЕЗ require_hr_access: полная
-# карточка (email/phone/manager/subordinates/pmos) видна всегда, а секция t2
-# внутри неё гейтится ПОЛЕВЫМ RBAC (см. test_employee_card_api.py) — без
-# единого hr.card.*.view ключа t2 приходит пустым словарём, не 403.
+# ровно как /me/ и /me/pmos, БЕЗ модульного гейта и без единой проверки
+# кадрового доступа: полная карточка (email/phone/manager/subordinates/pmos)
+# видна всегда, а секция t2 внутри неё гейтится ПОЛЕВЫМ RBAC (см.
+# test_employee_card_api.py) — без единого hr.card.*.view узла t2 приходит
+# пустым словарём, не 403.
 
 @pytest.mark.django_db
 def test_me_card_404_when_no_employee_profile(auth):
@@ -1010,8 +1064,9 @@ def test_me_card_returns_full_shape_including_contacts(junior):
 
 @pytest.mark.django_db
 def test_me_card_t2_empty_without_any_card_permission(junior):
-    """junior не несёт ни одного hr.card.* ключа — t2 приходит пустым, но
-    сам эндпойнт НЕ 403: /me/card не завёрнут в require_hr_access."""
+    """junior не несёт ни одного hr.card.* узла — t2 приходит пустым, но сам
+    эндпойнт НЕ 403: /me/card не завёрнут ни в модульный гейт, ни в единую
+    проверку кадрового доступа."""
     _emp_, headers = junior
     resp = Client().get(f"{BASE}/me/card", **headers)
     assert resp.status_code == 200
@@ -1066,15 +1121,14 @@ def test_me_card_subordinates_are_direct_department_reports(hr_dep):
 
 # ── GET /{id}/card ───────────────────────────────────────────────────────────
 #
-# Порт employees.py::employee_card исходника — ТА ЖЕ пара require_hr_access +
-# _require_visible_employee, что history/documents/pmos выше.
+# Порт employees.py::employee_card исходника — ТА ЖЕ пара «модульный гейт +
+# _require_visible_employee», что history/documents/pmos выше.
 
 @pytest.mark.django_db
 def test_id_card_forbidden_without_any_hr_access(auth, hr_dep):
     target = _emp(hr_dep, _pos("C1", hr_dep, weight=290), "card-target1@htq.test")
     resp = Client().get(f"{BASE}/{target.id}/card", **auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "HR access required"
 
 
 @pytest.mark.django_db
@@ -1115,19 +1169,27 @@ def test_id_card_trailing_slash_variant(admin_auth, hr_dep):
 # ── card_t2 в теле создания/обновления (единый атомарный запрос) ────────────
 
 @pytest.fixture
-def creator_no_financial(db, hr_dep):
-    """Явная матрица прав: МОЖЕТ создавать/править сотрудников и править
-    certs, НО НЕ имеет hr.card.financial.edit. Нужна, чтобы доказать, что
-    отказ на секции Т-2 откатывает и само создание сотрудника."""
-    pos = _pos(
-        "Custom Recruiter", hr_dep, weight=250,
-        permissions={"permissions": [
-            "hr.employees.view", "hr.employees.view.all", "hr.employees.create",
-            "hr.employees.edit", "hr.card.certs.view", "hr.card.certs.edit",
-        ]},
-    )
-    user, headers = _user_auth("create-no-fin@htq.test")
+def creator_no_financial(db, hr_dep, company_row):
+    """МОЖЕТ создавать/править сотрудников, НО НЕ имеет права на финансы
+    карточки. Нужна, чтобы доказать, что отказ на секции Т-2 откатывает и
+    само создание сотрудника.
+
+    До задачи 9 блока I это была явная матрица ``Position.permissions``
+    (``hr.employees.view/view.all/create/edit`` без ``hr.card.financial.edit``
+    и без ``hr.employees.delete``) под ролью ``hr-middle`` для гейта. Теперь
+    — ОДНА синтетическая роль: ``hr.employees: edit`` (пресет ``edit`` =
+    ``{view, create, edit}`` — ровно старый набор, без delete; агрегат модуля
+    ``hr`` — ``write``, гейт проходит) плюс ЯВНЫЙ запрет ``hr.employees.
+    salary: none``. Запрет нужен, потому что узел без своей строки наследует
+    глубину предка (``resolve._nearest``) — без него ``hr.employees: edit``
+    дал бы и финансы; и он обязан лежать в ТОЙ ЖЕ роли (см.
+    ``_grant_custom_role``).
+    """
+    pos = _pos("Custom Recruiter", hr_dep, weight=250)
+    user, headers = _user_auth("create-no-fin@htq.test", company_slug=company_row)
     emp = _emp(hr_dep, pos, "create-no-fin@htq.test", user_id=user.id)
+    _grant_custom_role(company_row, user.id, "t-creator-no-financial",
+                       {"hr.employees": "edit", "hr.employees.salary": "none"})
     return emp, headers
 
 
@@ -1149,7 +1211,6 @@ def test_create_employee_with_card_t2_writes_card(admin_auth, hr_dep):
         data=_create_body(hr_dep, pos, "with-t2@htq.test", card_t2={
             "financial": {"salary": "450000", "bonus": "50000", "bank_account": "KZ42"},
             "personal": {"citizenship": "KZ", "birth_date": "1990-05-05"},
-            "certs": {"sro_permit_number": "СРО-11"},
         }),
         content_type="application/json", **admin_auth,
     )
@@ -1160,7 +1221,6 @@ def test_create_employee_with_card_t2_writes_card(admin_auth, hr_dep):
     assert str(card.salary) == "450000.00"
     assert card.citizenship == "KZ"
     assert card.birth_date == datetime.date(1990, 5, 5)
-    assert card.sro_permit_number == "СРО-11"
 
 
 @pytest.mark.django_db
@@ -1215,19 +1275,21 @@ def test_create_employee_rolls_back_on_invalid_decimal(admin_auth, hr_dep):
 
 @pytest.mark.django_db
 def test_update_employee_with_card_t2_applies_both(admin_auth, hr_dep):
+    """Правка сотрудника с секцией Т-2 меняет и сотрудника, и карточку —
+    карточка заводится, если её ещё не было."""
     pos = _pos("Инженер-5", hr_dep, weight=314)
     target = _emp(hr_dep, pos, "upd-t2@htq.test", phone="+7700")
 
     resp = Client().put(
         f"{BASE}/{target.id}/",
-        data={"phone": "+77012345678", "card_t2": {"certs": {"sro_permit_number": "СРО-88"}}},
+        data={"phone": "+77012345678", "card_t2": {"personal": {"citizenship": "KZ"}}},
         content_type="application/json", **admin_auth,
     )
     assert resp.status_code == 200, resp.content
 
     target.refresh_from_db()
     assert target.phone == "+77012345678"
-    assert EmployeeCard.objects.get(employee_id=target.id).sro_permit_number == "СРО-88"
+    assert EmployeeCard.objects.get(employee_id=target.id).citizenship == "KZ"
 
 
 @pytest.mark.django_db

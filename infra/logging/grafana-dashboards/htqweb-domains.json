@@ -19,7 +19,22 @@
     "list": []
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "company",
+        "label": "Компания",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(htqweb_hr_terminated_still_active, company)",
+        "query": { "query": "label_values(htqweb_hr_terminated_still_active, company)", "refId": "company" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "sort": 1
+      }
+    ]
   },
   "panels": [
     {
@@ -84,7 +99,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_signoff_desync",
+          "expr": "sum without (company) (htqweb_contracts_signoff_desync{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -140,7 +155,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_budget_lines_overspent",
+          "expr": "sum without (company) (htqweb_contracts_budget_lines_overspent{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -182,7 +197,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_accountable_funds_outstanding",
+          "expr": "sum without (company) (htqweb_contracts_accountable_funds_outstanding{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -234,7 +249,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_agreements",
+          "expr": "sum without (company) (htqweb_contracts_agreements{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{status}}"
         }
@@ -282,7 +297,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_awaiting_accounting",
+          "expr": "sum without (company) (htqweb_contracts_awaiting_accounting{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{kind}}"
         }
@@ -331,7 +346,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_contracts_awaiting_accounting_amount",
+          "expr": "sum without (company) (htqweb_contracts_awaiting_accounting_amount{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{kind}}"
         }
@@ -401,7 +416,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_signoff_routes_without_approvers",
+          "expr": "sum without (company) (htqweb_signoff_routes_without_approvers{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -445,7 +460,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_signoff_oldest_pending_seconds",
+          "expr": "max without (company) (htqweb_signoff_oldest_pending_seconds{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -497,7 +512,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_signoff_processes",
+          "expr": "sum without (company) (htqweb_signoff_processes{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{state}}"
         }
@@ -545,7 +560,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_signoff_pending_stale",
+          "expr": "sum without (company) (htqweb_signoff_pending_stale{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{subject_type}}"
         }
@@ -615,7 +630,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_hr_terminated_still_active",
+          "expr": "sum without (company) (htqweb_hr_terminated_still_active{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -657,7 +672,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_hr_active_without_account",
+          "expr": "sum without (company) (htqweb_hr_active_without_account{company=~\"$company\"})",
           "refId": "A"
         }
       ],
@@ -709,7 +724,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "htqweb_hr_employees",
+          "expr": "sum without (company) (htqweb_hr_employees{company=~\"$company\"})",
           "refId": "A",
           "legendFormat": "{{status}}"
         }
@@ -1261,7 +1276,124 @@
         }
       ],
       "id": 62
+    },
+    {
+      "type": "row",
+      "title": "Доступ",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 800
+    },
+    {
+      "type": "stat",
+      "title": "Держателей обслуживающей должности без членства",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 73,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(htqweb_access_serving_holders_without_membership)",
+          "refId": "A"
+        }
+      ],
+      "description": "Должность компании-предка помечена обслуживающей и реально даёт права в дочерней компании (apps.access.services.inheritance, решение заказчика 1), но у держателя ещё нет CompanyMembership — без неё токен для поддомена дочерней компании не выпускается вовсе. Не инцидент, а незавершённая настройка (поэтому без правила алерта) — закрывается `manage.py company_grant --company <slug> --serving`; ту же команду печатает `company_create` сразу при заведении компании.",
+      "id": 70
+    },
+    {
+      "type": "timeseries",
+      "title": "Разрыв по компаниям",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 73,
+        "w": 18,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "htqweb_access_serving_holders_without_membership",
+          "refId": "A",
+          "legendFormat": "{{company}}"
+        }
+      ],
+      "id": 71
     }
   ],
-  "description": "Доменные метрики семи аппок, у которых до этого не было ни одной. Считает Celery-beat раз в 60 с; ПУСТАЯ панель = сборщик не отработал, а не «ноль» (см. apps/core/metrics.py). Окно по умолчанию — неделя, а не 6 часов: эти величины меняются днями, а не минутами. Красный ноль на панелях «Согласован, но статус не переведён», «Строк бюджета в перерасходе», «Уволены, но активны» и «Этапов некому согласовать» означает нарушенный инвариант, а не нагрузку."
+  "description": "Доменные метрики семи аппок, у которых до этого не было ни одной, плюс раздел «Доступ» (задача 8 блока C: обслуживающая должность есть, членства нет). Считает Celery-beat раз в 60 с; ПУСТАЯ панель = сборщик не отработал, а не «ноль» (см. apps/core/metrics.py). Окно по умолчанию — неделя, а не 6 часов: эти величины меняются днями, а не минутами. Красный ноль на панелях «Согласован, но статус не переведён», «Строк бюджета в перерасходе», «Уволены, но активны» и «Этапов некому согласовать» означает нарушенный инвариант, а не нагрузку; «Держателей обслуживающей должности без членства» намеренно оранжевая, а не красная — это незавершённая настройка, а не авария."
 }

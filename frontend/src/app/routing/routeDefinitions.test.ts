@@ -98,6 +98,12 @@ describe('routeDefinitions', () => {
         expect(unknown).toEqual([]);
     });
 
+    it('сводка группы закрыта гейтом кадрового модуля', () => {
+        const byPath = new Map(protectedRoutes.map((r) => [r.path, r]));
+        expect(byPath.get('/holding')?.requires).toEqual({ module: 'hr', level: 'read' });
+        expect(byPath.get('/holding')?.requiresAuth).toBe(true);
+    });
+
     it('статические пути объявлены раньше параметрических в той же ветке', () => {
         const paths = protectedRoutes.map((r) => r.path);
         const idParam = paths.indexOf('/tasks/:id');

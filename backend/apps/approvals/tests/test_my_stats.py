@@ -119,7 +119,7 @@ def test_since_narrows_the_window():
 
     assert personal_stats.for_user(ME)["amount"] == "150.00"
     recent = personal_stats.for_user(
-        ME, since=timezone.now().date() - dt.timedelta(days=7))
+        ME, since=timezone.localdate() - dt.timedelta(days=7))
     assert (recent["submitted"], recent["amount"]) == (1, "50.00")
 
     resp = Client().get(f"{BASE}/stats/mine?since=not-a-date",

@@ -106,6 +106,26 @@ describe('usePermissions', () => {
     expect(result.current.atLeast('hr', 'read')).toBe(false);
   });
 
+  // ── Задача 6 блока C: источник наследованных прав ─────────────────────
+
+  it('отдаёт компании, от должности в которых пришли наследованные права', async () => {
+    getMe.mockResolvedValue({ ...ACCESS_ME_FIXTURE, inherited_from: ['hi-tech-group'] });
+
+    const { result } = renderHook(() => usePermissions(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.inheritedFrom).toEqual(['hi-tech-group']);
+  });
+
+  it('пуст, когда наследования нет', async () => {
+    getMe.mockResolvedValue(ACCESS_ME_FIXTURE);
+
+    const { result } = renderHook(() => usePermissions(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.inheritedFrom).toEqual([]);
+  });
+
   it('без токена не спрашивает права вовсе и ничего не разрешает', () => {
     // Аноним на публичном лендинге: запрос дал бы 401, а 401 для клиента —
     // «сессия протухла», то есть редирект гостя на /login.

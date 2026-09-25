@@ -59,10 +59,30 @@ export const parentDomain = (host: string): string => {
 export const REFRESH_COOKIE_DOMAIN: string =
   typeof window !== 'undefined' ? parentDomain(window.location.host) : '';
 
-/** Перейти в другую компанию, сохранив текущий путь, query-параметры и hash. */
-export const switchCompany = (slug: string): void => {
+/**
+ * Компания в адресе: короткий псевдоним, если он задан, иначе слаг (блок I.2).
+ *
+ * Слаг компании, у которой есть псевдоним, шлюз не принимает (404), поэтому
+ * адрес строится только отсюда — не подставляйте `slug` в хост напрямую.
+ */
+export const hostLabelOf = (company: { slug: string; subdomain?: string | null }): string =>
+  company.subdomain || company.slug;
+
+/**
+ * Перейти в другую компанию.
+ *
+ * Без `path` — сохранив текущий путь, query-параметры и hash (переключатель в
+ * шапке: та же страница, другая компания). С `path` — на него: экран выбора
+ * компании возвращает человека туда, куда он шёл до редиректа на выбор, а не
+ * на сам экран выбора. `path` — путь вместе с query и hash, начиная с `/`.
+ */
+export const switchCompany = (
+  company: { slug: string; subdomain?: string | null },
+  path?: string,
+): void => {
   const { host, pathname, search, hash, protocol } = window.location;
   const tail = parentDomain(host).replace(/^\./, '');
   const port = host.includes(':') ? `:${host.split(':')[1]}` : '';
-  window.location.assign(`${protocol}//${slug}.${tail}${port}${pathname}${search}${hash}`);
+  const target = path ?? `${pathname}${search}${hash}`;
+  window.location.assign(`${protocol}//${hostLabelOf(company)}.${tail}${port}${target}`);
 };

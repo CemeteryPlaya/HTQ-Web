@@ -13,6 +13,7 @@ search_path. Сброс в finally всё равно делается — что
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.db import connection
 from psycopg import sql
@@ -23,6 +24,26 @@ from .context import (
 )
 
 _PUBLIC_ONLY = sql.SQL("SET search_path TO public")
+
+#: «Соединение сейчас смотрит в схему сводок». Отдельный признак, а не
+#: проверка search_path запросом: во-первых, это лишний round-trip на каждый
+#: queryset, во-вторых, search_path меняют и миграции, и middleware, и
+#: доверять ему как признаку НАМЕРЕНИЯ нельзя.
+#:
+#: Контекст компании при этом по-прежнему НЕ ставится (см. докстринг
+#: use_holding): сводное чтение находится НАД компаниями, и код внутри него
+#: не должен считать себя работающим внутри одной из них.
+_holding: ContextVar[bool] = ContextVar("htqweb_holding", default=False)
+
+
+def holding_active() -> bool:
+    """Идёт ли сейчас чтение сводных представлений холдинга.
+
+    Спрашивают читатели схемы holding: их модели объявляют тот же db_table,
+    что и таблица компании, поэтому вызов вне use_holding() прочитал бы
+    данные ОДНОЙ компании и выдал их за групповые — без ошибки и без следа.
+    """
+    return _holding.get()
 
 
 def apply_search_path(slug: str | None, *, include_public: bool = True) -> None:
@@ -77,13 +98,15 @@ def use_holding():
     компании.
     """
     previous = current_company_or_none()
-    with connection.cursor() as cur:
-        cur.execute(
-            sql.SQL("SET search_path TO {}, public").format(
-                sql.Identifier(HOLDING_SCHEMA),
-            )
-        )
+    token = _holding.set(True)
     try:
+        with connection.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET search_path TO {}, public").format(
+                    sql.Identifier(HOLDING_SCHEMA),
+                )
+            )
         yield
     finally:
+        _holding.reset(token)
         apply_search_path(previous)

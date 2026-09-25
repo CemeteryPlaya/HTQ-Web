@@ -372,9 +372,10 @@ services:
         max-file: "3"
 
   # ─── Django backend — WSGI (весь /api/*, django-admin, static) ──────────
-  # Единый Django заменил девять FastAPI-микросервисов. migrate + идемпотентный
-  # сид админа (admin/admin12345) — ТОЛЬКО backend-web (RUN_MIGRATIONS=1);
-  # entrypoint ждёт БД и мигрирует напрямую (DB_HOST=db).
+  # Единый Django заменил девять FastAPI-микросервисов. Миграции общих аппок
+  # (manage.py migrate_shared) — ТОЛЬКО backend-web и только при RUN_MIGRATIONS=1;
+  # сид админа (admin/admin12345), collectstatic и бакеты — отдельно, по
+  # RUN_BOOTSTRAP. Схемы компаний доводит manage.py migrate_companies руками.
   backend-web:
     build:
       context: ./backend
@@ -382,7 +383,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *django-env
-      # Только `manage.py migrate`. На боевой БД держим 0 (см. корневой .env).
+      # Только `manage.py migrate_shared`. На боевой БД держим 0 (см. корневой .env).
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
       # collectstatic + бакеты хранилища + сид админа — к схеме БД отношения
       # не имеют и нужны при каждом старте, поэтому НЕ зависят от флага выше.

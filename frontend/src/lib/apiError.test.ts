@@ -108,4 +108,16 @@ describe('reportApiError', () => {
     reportApiError(collapsed(502, 'AUTHENTICATIONFAILED'), 'Не удалось подключить', { duration: 12_000 });
     expect(toast.error).toHaveBeenCalledWith('AUTHENTICATIONFAILED', { duration: 12_000 });
   });
+
+  it('не дублирует тост 403 company_archived — его уже показал api/client.ts', () => {
+    const err = Object.assign(axiosError(403, 'Компания в архиве — только чтение'),
+      { archivedReported: true });
+    reportApiError(err, 'Не удалось сохранить');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('обычный 403 без метки показывает тост как прежде', () => {
+    reportApiError(axiosError(403, 'Компания в архиве — только чтение'), 'Не удалось сохранить');
+    expect(toast.error).toHaveBeenCalledWith('Компания в архиве — только чтение', undefined);
+  });
 });

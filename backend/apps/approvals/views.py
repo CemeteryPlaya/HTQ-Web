@@ -91,13 +91,13 @@ def _instance(instance) -> schemas.InstanceResponse:
 # Instances — /instances/
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _list_instances(request):
     return [_instance(row) for row in instance_service.list_for_user(
         request.token.user_id, box=_str_param(request, "box", "inbox"))]
 
 
-@api_view(methods=("POST",), body=schemas.InstanceCreate, status=201)
+@api_view(methods=("POST",), body=schemas.InstanceCreate, status=201, module="approvals", level="write")
 @runtime_errors
 def _create_instance(request, data: schemas.InstanceCreate):
     return _instance(instance_service.create_instance(data,
@@ -112,13 +112,13 @@ def instances_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _get_instance(request, instance_id: int):
     return _instance(instance_service.get_visible_or_404(instance_id,
                                                          token=request.token))
 
 
-@api_view(methods=("PATCH",), body=schemas.InstanceUpdate)
+@api_view(methods=("PATCH",), body=schemas.InstanceUpdate, module="approvals", level="write")
 @runtime_errors
 def _update_instance(request, instance_id: int, data: schemas.InstanceUpdate):
     return _instance(instance_service.update_draft(instance_id, data,
@@ -138,14 +138,17 @@ def instance_detail(request, instance_id: int):
 # для инициатора и заперт замком согласования, здесь же замок и есть
 # условие доступа.
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 @runtime_errors
 def _stage_values_get(request, instance_id: int):
     return schemas.StageValuesRead.model_validate(
         instance_service.stage_fillable(instance_id, token=request.token))
 
 
-@api_view(methods=("PATCH",), body=schemas.StageValuesUpdate)
+# Уровень read, как у прежних действий согласующего: пускает держателя
+# любой роли модуля, а кто вправе заполнять — решает сервис по рабочему
+# шагу (``instance_service.fill_stage_values``).
+@api_view(methods=("PATCH",), body=schemas.StageValuesUpdate, module="approvals", level="read")
 @runtime_errors
 def _stage_values_patch(request, instance_id: int, data: schemas.StageValuesUpdate):
     return _instance(instance_service.fill_stage_values(
@@ -165,13 +168,13 @@ def stage_values(request, instance_id: int):
 # ``/submit`` в contracts). Обновлённую заявку клиент перечитывает: её
 # статус изменил колбэк движка, а не эта вьюха.
 
-@api_view(methods=("POST",), status=201)
+@api_view(methods=("POST",), status=201, module="approvals", level="write")
 @runtime_errors
 def submit_instance(request, instance_id: int):
     return instance_service.submit(instance_id, token=request.token)
 
 
-@api_view(methods=("POST",), status=201)
+@api_view(methods=("POST",), status=201, module="approvals", level="write")
 @runtime_errors
 def resubmit_instance(request, instance_id: int):
     return instance_service.submit(instance_id, token=request.token,
@@ -188,14 +191,14 @@ def resubmit_instance(request, instance_id: int):
 # Projects — /projects/
 # ─────────────────────────────────────────────────────────────────────────
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _list_projects(request):
     from .models import RequestProject
     return [schemas.ProjectResponse.model_validate(row)
             for row in RequestProject.objects.order_by("-created_at")]
 
 
-@api_view(methods=("POST",), body=schemas.ProjectCreate, admin=True, status=201)
+@api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, module="approvals", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
     from .models import RequestProject
     payload = data.model_dump()
@@ -226,12 +229,12 @@ def _project_or_404(project_id: int):
     return project
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _get_project(request, project_id: int):
     return schemas.ProjectResponse.model_validate(_project_or_404(project_id))
 
 
-@api_view(methods=("PATCH",), body=schemas.ProjectUpdate)
+@api_view(methods=("PATCH",), body=schemas.ProjectUpdate, module="approvals", level="write")
 def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     project = _project_or_404(project_id)
     permissions.ensure_can_manage_project(project_id, request.token)
@@ -248,7 +251,7 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     return schemas.ProjectResponse.model_validate(project)
 
 
-@api_view(methods=("DELETE",), admin=True, status=204)
+@api_view(methods=("DELETE",), status=204, module="approvals", level="admin")
 def _delete_project(request, project_id: int):
     _project_or_404(project_id).delete()
     return _no_content()
@@ -264,7 +267,7 @@ def project_detail(request, project_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _list_members(request, project_id: int):
     from .models import RequestProjectMember
     return [schemas.MemberResponse.model_validate(row)
@@ -272,7 +275,7 @@ def _list_members(request, project_id: int):
             .filter(project_id=project_id).order_by("user_id")]
 
 
-@api_view(methods=("POST",), body=schemas.MemberAdd, status=201)
+@api_view(methods=("POST",), body=schemas.MemberAdd, status=201, module="approvals", level="write")
 def _add_member(request, project_id: int, data: schemas.MemberAdd):
     from .models import RequestProjectMember
     _project_or_404(project_id)
@@ -324,7 +327,7 @@ def _template_or_404(template_id: int):
     return tpl
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _list_templates(request):
     from .models import RequestFormTemplate, TemplateStatus
     project_id, err = _int_param(request, "project_id")
@@ -336,7 +339,7 @@ def _list_templates(request):
     return [schemas.TemplateResponse.model_validate(t) for t in qs]
 
 
-@api_view(methods=("POST",), body=schemas.TemplateCreate, status=201)
+@api_view(methods=("POST",), body=schemas.TemplateCreate, status=201, module="approvals", level="write")
 def _create_template(request, data: schemas.TemplateCreate):
     from .models import RequestFormTemplate
 
@@ -363,12 +366,12 @@ def templates_collection(request):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def _get_template(request, template_id: int):
     return schemas.TemplateResponse.model_validate(_template_or_404(template_id))
 
 
-@api_view(methods=("PATCH",), body=schemas.TemplateUpdate)
+@api_view(methods=("PATCH",), body=schemas.TemplateUpdate, module="approvals", level="write")
 def _update_template(request, template_id: int, data: schemas.TemplateUpdate):
     tpl = _template_or_404(template_id)
     permissions.ensure_can_manage_template(tpl.project_id, request.token)
@@ -378,7 +381,7 @@ def _update_template(request, template_id: int, data: schemas.TemplateUpdate):
     return schemas.TemplateResponse.model_validate(tpl)
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="approvals", level="write")
 def _delete_template(request, template_id: int):
     """Soft-delete: the template is hidden and the form is blocked, but its
     data table / reference data is kept. Owner + process admins retain
@@ -416,7 +419,7 @@ def template_detail(request, template_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("POST",))
+@api_view(methods=("POST",), module="approvals", level="write")
 def deactivate_template(request, template_id: int):
     from .models import TemplateStatus
 
@@ -428,7 +431,7 @@ def deactivate_template(request, template_id: int):
     return schemas.TemplateResponse.model_validate(tpl)
 
 
-@api_view(methods=("POST",))
+@api_view(methods=("POST",), module="approvals", level="write")
 def activate_template(request, template_id: int):
     from django.http import Http404
 
@@ -443,7 +446,7 @@ def activate_template(request, template_id: int):
     return schemas.TemplateResponse.model_validate(tpl)
 
 
-@api_view(methods=("POST",), body=schemas.VersionPublish, status=201)
+@api_view(methods=("POST",), body=schemas.VersionPublish, status=201, module="approvals", level="write")
 def publish_version(request, template_id: int, data: schemas.VersionPublish):
     from django.db.models import Max
 
@@ -468,7 +471,7 @@ def publish_version(request, template_id: int, data: schemas.VersionPublish):
     return schemas.VersionResponse.model_validate(version)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def get_version(request, template_id: int, version_id: int):
     from django.http import Http404
 
@@ -479,7 +482,7 @@ def get_version(request, template_id: int, version_id: int):
     return schemas.VersionResponse.model_validate(version)
 
 
-@api_view(methods=("POST",), body=schemas.PreviewRequest)
+@api_view(methods=("POST",), body=schemas.PreviewRequest, module="approvals", level="write")
 def preview_template(request, data: schemas.PreviewRequest):
     schema, graph, err = _validated_or_422(data.schema_json, data.workflow_json)
     if err is not None:
@@ -492,8 +495,9 @@ def preview_template(request, data: schemas.PreviewRequest):
 # Statistics — /stats/*  (see the original's spec §6 for the five cuts)
 # ─────────────────────────────────────────────────────────────────────────
 #
-# Ported from ``services/requests/app/api/v1/stats.py``. Read-only, any
-# authenticated user (no admin gate in the original either). NOTE the two
+# Ported from ``services/requests/app/api/v1/stats.py``. Read-only, gated
+# ``module="approvals", level="read"`` (block L; the original had no admin
+# gate either, only authentication). NOTE the two
 # quirks carried over byte-for-byte from the source: ``overview`` and
 # ``by-actor`` both compute a ``from``/``to`` default window but never
 # actually apply it as a filter on the underlying query -- only ``heatmap``
@@ -505,7 +509,7 @@ _PROJECT_STATUSES = ("draft", "pending", "approved", "rejected", "cancelled", "r
 
 
 def _default_from(days: int) -> dt.date:
-    return timezone.now().date() - dt.timedelta(days=days)
+    return timezone.localdate() - dt.timedelta(days=days)
 
 
 def _date_param(request, name: str):
@@ -522,13 +526,14 @@ def _date_param(request, name: str):
 # ── Статистика ────────────────────────────────────────────────────────
 #
 # ЛИЧНАЯ сводка доступна каждому и всегда про самого себя; ОБЩИЕ разрезы —
-# только администратору (``admin=True``). Раньше общие вьюхи гейта не имели
+# только администратору (уровень ``admin`` модуля — роль
+# ``services-admin``; до блока L — ``admin=True``). Раньше общие вьюхи гейта не имели
 # вовсе: страница /requests/stats пряталась ролью на фронте, но эндпоинты
 # отвечали любому — включая ``stats/by-actor``, то есть «кто сколько подал»
 # по всей компании. Фронт зовёт их ровно с той админской страницы, так что
 # гейт ничего законного не ломает.
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def stats_mine(request):
     """Личная аналитика: только заявки вызывающего.
 
@@ -542,7 +547,7 @@ def stats_mine(request):
         personal_stats.for_user(request.token.user_id, since=since))
 
 
-@api_view(methods=("GET",), admin=True)
+@api_view(methods=("GET",), module="approvals", level="admin")
 def stats_overview(request):
     from .models import RequestInstance
 
@@ -553,7 +558,7 @@ def stats_overview(request):
     if err is not None:
         return err
     frm = frm or _default_from(30)
-    end = to or timezone.now().date()
+    end = to or timezone.localdate()
 
     rows = (RequestInstance.objects.filter(submitted_at__isnull=False)
             .values("status")
@@ -566,7 +571,7 @@ def stats_overview(request):
     return {"from": frm.isoformat(), "to": end.isoformat(), "by_status": by_status}
 
 
-@api_view(methods=("GET",), admin=True)
+@api_view(methods=("GET",), module="approvals", level="admin")
 def stats_by_project(request):
     from .models import RequestInstance, RequestProject, RequestStatus
 
@@ -606,7 +611,7 @@ def stats_by_project(request):
     }
 
 
-@api_view(methods=("GET",), admin=True)
+@api_view(methods=("GET",), module="approvals", level="admin")
 def stats_by_template(request):
     from .models import RequestInstance
 
@@ -651,7 +656,7 @@ def stats_by_template(request):
     ]
 
 
-@api_view(methods=("GET",), admin=True)
+@api_view(methods=("GET",), module="approvals", level="admin")
 def stats_by_actor(request):
     from .models import ApprovalAction, RequestInstance
 
@@ -720,7 +725,7 @@ def stats_by_actor(request):
     ]
 
 
-@api_view(methods=("GET",), admin=True)
+@api_view(methods=("GET",), module="approvals", level="admin")
 def stats_heatmap(request):
     from .models import RequestStatsDaily
 
@@ -731,7 +736,7 @@ def stats_heatmap(request):
     if err is not None:
         return err
     frm = frm or _default_from(30)
-    end = to or timezone.now().date()
+    end = to or timezone.localdate()
 
     rows = (RequestStatsDaily.objects.filter(date__range=(frm, end))
             .values("date")
@@ -793,7 +798,7 @@ async def stream(request):
     return response
 
 
-@api_view(methods=("DELETE",), status=204)
+@api_view(methods=("DELETE",), status=204, module="approvals", level="write")
 def remove_member(request, project_id: int, user_id: int):
     from django.http import Http404
 
@@ -812,10 +817,11 @@ def remove_member(request, project_id: int, user_id: int):
 # ─────────────────────────────────────────────────────────────────────────
 #
 # Ported from ``services/requests/app/api/v1/reference.py``. Management
-# (create/update/delete a source, add/remove rows) is platform-admin only
-# (``admin=True`` -- ``htqweb.authn.rbac.require_admin``, i.e. ``is_elevated``,
-# the same predicate the original's own ``_require_admin`` checked); reading
-# a source's metadata/rows and ``options`` needs only authentication.
+# (create/update/delete a source, add/remove rows) is gated
+# ``module="approvals", level="admin"`` by role (block L; before it --
+# ``admin=True``, i.e. ``is_elevated``, the predicate the original's own
+# ``_require_admin`` checked); reading a source's metadata/rows and
+# ``options`` is ``module="approvals", level="read"``.
 #
 # A template's auto-maintained data table (``template_id`` set) is the one
 # exception: its rows, and the ``my-data-tables``/``access`` endpoints, are
@@ -841,14 +847,14 @@ def _source_dto(src) -> schemas.ReferenceSourceResponse:
     return schemas.ReferenceSourceResponse.model_validate(src)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def list_sources(request):
     from .models import RequestReferenceSource
     qs = RequestReferenceSource.objects.order_by("name")
     return [_source_dto(s) for s in qs]
 
 
-@api_view(methods=("POST",), body=schemas.ReferenceSourceCreate, admin=True, status=201)
+@api_view(methods=("POST",), body=schemas.ReferenceSourceCreate, status=201, module="approvals", level="admin")
 def create_source(request, data: schemas.ReferenceSourceCreate):
     from .models import RequestReferenceSource
 
@@ -880,7 +886,7 @@ def _data_table_dto(src, request) -> schemas.DataTableResponse:
     )
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def my_data_tables(request):
     """Template data tables the current user may see: created by them, a
     process admin of the template, explicitly granted access, or a platform
@@ -897,7 +903,7 @@ def my_data_tables(request):
     return out
 
 
-@api_view(methods=("PATCH",), body=schemas.AccessUpdate)
+@api_view(methods=("PATCH",), body=schemas.AccessUpdate, module="approvals", level="write")
 def set_data_table_access(request, source_id: int, data: schemas.AccessUpdate):
     src = _source_or_404(source_id)
     if src.template_id is None:
@@ -910,12 +916,12 @@ def set_data_table_access(request, source_id: int, data: schemas.AccessUpdate):
     return _data_table_dto(src, request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def get_source(request, source_id: int):
     return _source_dto(_source_or_404(source_id))
 
 
-@api_view(methods=("PATCH",), body=schemas.ReferenceSourceUpdate, admin=True)
+@api_view(methods=("PATCH",), body=schemas.ReferenceSourceUpdate, module="approvals", level="admin")
 def update_source(request, source_id: int, data: schemas.ReferenceSourceUpdate):
     src = _source_or_404(source_id)
     if data.name is not None:
@@ -926,7 +932,7 @@ def update_source(request, source_id: int, data: schemas.ReferenceSourceUpdate):
     return _source_dto(src)
 
 
-@api_view(methods=("DELETE",), admin=True, status=204)
+@api_view(methods=("DELETE",), status=204, module="approvals", level="admin")
 def delete_source(request, source_id: int):
     _source_or_404(source_id).delete()
     return _no_content()
@@ -942,7 +948,7 @@ def source_detail(request, source_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def list_rows(request, source_id: int):
     from .models import RequestReferenceRow
 
@@ -955,7 +961,7 @@ def list_rows(request, source_id: int):
     return [schemas.ReferenceRowResponse.model_validate(r) for r in qs]
 
 
-@api_view(methods=("POST",), body=schemas.ReferenceRowCreate, admin=True, status=201)
+@api_view(methods=("POST",), body=schemas.ReferenceRowCreate, status=201, module="approvals", level="admin")
 def add_row(request, source_id: int, data: schemas.ReferenceRowCreate):
     from .models import RequestReferenceRow
 
@@ -972,7 +978,7 @@ def rows_collection(request, source_id: int):
     return _method_not_allowed(request)
 
 
-@api_view(methods=("DELETE",), admin=True, status=204)
+@api_view(methods=("DELETE",), status=204, module="approvals", level="admin")
 def delete_row(request, source_id: int, row_id: int):
     from django.http import Http404
 
@@ -985,7 +991,7 @@ def delete_row(request, source_id: int, row_id: int):
     return _no_content()
 
 
-@api_view(methods=("GET",))
+@api_view(methods=("GET",), module="approvals", level="read")
 def reference_options(request, slug: str):
     """Distinct values of ``column`` from the named source, optionally
     filtered where ``filter_col`` == ``filter_val`` (drives dependent

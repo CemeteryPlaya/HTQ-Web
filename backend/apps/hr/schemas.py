@@ -46,19 +46,35 @@ class DepartmentUpdate(BaseModel):
 
 # ── positions — порт services/hr/app/schemas/position.py ────────────────────
 
-HRLevelLiteral = Literal["junior", "middle", "senior", "lead"]
+ExternalHierarchyLiteral = Literal["inherit", "none"]
 
 
 class PositionPermissions(BaseModel):
     """Матрица прав, прикреплённая к несистемной должности.
 
-    ``permissions`` — авторитетный набор ключей (проверяется исходником в
-    ``app.auth.hr_access``, который в porту ещё не появился — см. брифы
-    employees). ``hr_level`` — UI/миграционный пресет: выбор уровня
-    заполняет ``permissions`` соответствующим пресетом (apps.hr.permissions).
+    С задачи 9 блока I «Единая модель прав» ``permissions`` здесь МЕРТВО для
+    авторизации кадрового домена — права считает ``apps.hr.rbac`` по узлам
+    ``apps.access``, эту форму не читая. Запись через API должностей
+    остаётся намеренно (Ruling B, ``apps/hr/tests/test_single_rbac_guards.py``):
+    ``permissions`` — единственный оставшийся путь, которым в колонку
+    попадают ключи ``contracts.*`` (читает их
+    ``apps.hr.interface.user_has_permission`` — контракт с ``apps.contracts``
+    до их перехода на узлы ``access``, roadmap §6.4).
+
+    ``hr_level`` (задача 10 блока I.2) СНЯТО с записи: кадровый уровень
+    теперь живёт только в ролях ``apps.access`` (``hr-junior…hr-lead``), а
+    эта колонка — не второй источник истины для него. Поле намеренно не
+    объявлено здесь, а не объявлено с ``ge=...``/запретом: класс не задаёт
+    ``model_config`` (``extra`` не выставлен), поэтому у Pydantic v2 это
+    означает поведение по умолчанию ``extra="ignore"`` — лишний ключ
+    ``hr_level`` в теле запроса молча отбрасывается при парсинге, а не
+    роняет запрос 422. Это осознанный выбор (не ``extra="forbid"``): старый
+    клиент, ещё шлющий ``hr_level`` (например, закэшированный фронт), не
+    ломается — просто значение больше никуда не попадает, включая колонку
+    ``Position.permissions``. Ответ API продолжает отдавать ``hr_level`` из
+    старых строк — см. ``position_service._serialize_permissions``.
     """
 
-    hr_level: HRLevelLiteral | None = None
     permissions: list[str] = Field(default_factory=list)
 
 
@@ -70,6 +86,9 @@ class PositionCreate(BaseModel):
     requirements: dict | None = None
     is_active: bool = True
     weight: int = Field(default=100, ge=0)
+    is_manager: bool = False
+    external_hierarchy: ExternalHierarchyLiteral = "inherit"
+    serves_subsidiaries: bool = False
     # НЕ поле модели: level в БД — кэш, вычисляемый из веса. Здесь это способ
     # выбрать вес («поставь должность на уровень L3»): сервис подбирает
     # свободный вес внутри диапазона порога, а level, как и прежде, приходит
@@ -90,6 +109,9 @@ class PositionUpdate(BaseModel):
     requirements: dict | None = None
     is_active: bool | None = None
     weight: int | None = Field(default=None, ge=0)
+    is_manager: bool | None = None
+    external_hierarchy: ExternalHierarchyLiteral | None = None
+    serves_subsidiaries: bool | None = None
     level: int | None = Field(default=None, ge=1)  # см. PositionCreate.level
     permissions: PositionPermissions | None = None
 
@@ -133,6 +155,39 @@ class LevelThresholdUpdate(BaseModel):
     weight_to: int | None = Field(default=None, ge=0)
     label: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+
+
+class SubstitutionCreate(OrderedDates):
+    substitute_position_id: int
+    kind: Literal["primary", "reserve"] = "primary"
+    basis: str = Field(..., min_length=1, max_length=255)
+    note: str | None = Field(default=None, max_length=255)
+    valid_from: date
+    valid_to: date | None = None
+
+
+class SubstitutionUpdate(OrderedDates):
+    """Патч через ``exclude_unset``: поле, которого нет в запросе, строку не
+    трогает. Но ``substitute_position_id``/``kind``/``basis``/``valid_from``
+    — колонки NOT NULL, и явный ``null`` в присланном поле доехал бы до
+    ``IntegrityError`` → 500 мимо любой проверки сервиса (он видит только
+    ``exclude_unset``, а явный null неотличим от отсутствия поля в питоновском
+    ``None``). ``note`` и ``valid_to`` — legitimate ``null`` (снять примечание,
+    сделать бессрочным), их проверка не касается."""
+
+    substitute_position_id: int | None = None
+    kind: Literal["primary", "reserve"] | None = None
+    basis: str | None = Field(default=None, min_length=1, max_length=255)
+    note: str | None = Field(default=None, max_length=255)
+    valid_from: date | None = None
+    valid_to: date | None = None
+
+    @model_validator(mode="after")
+    def _no_explicit_null_on_not_null_columns(self):
+        for field in ("substitute_position_id", "kind", "basis", "valid_from"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} не может быть null")
+        return self
 
 
 # ── employees — порт services/hr/app/schemas/employee.py ────────────────────
@@ -527,7 +582,7 @@ class TimeDailyReportQuery(BaseModel):
     """Порт Query(employee_id, date) роутера ``GET /time-tracking/reports/daily``.
 
     ``date`` опционален (default_factory=date.today в исходнике) — здесь
-    ``None`` и подстановка ``date.today()`` в вьюхе, тот же эффект.
+    ``None`` и подстановка ``timezone.localdate()`` в вьюхе, тот же эффект.
 
     ``report_date``/``alias="date"`` — та же защита от самозатеняющегося
     поля под postponed evaluation, что и TimeEntryUpdate.entry_date выше."""
@@ -988,3 +1043,38 @@ class IdentityApproverRequest(BaseModel):
     руководителю отдела (спека §6.2)."""
 
     user_id: int | None = None
+
+
+# ── сводка по группе (блок H) — GET /holding/headcount ──────────────────────
+
+class HoldingCompanyRow(BaseModel):
+    """Одна строка сводки — действующая компания группы.
+
+    Форма — 1:1 с ``apps.hr.services.holding_service.headcount_by_company()``
+    плюс ``company_name`` из реестра (сервис отдаёт только слаг, имена не его
+    забота)."""
+
+    company_slug: str
+    company_name: str
+    employees_active: int
+    employees_total: int
+    departments_active: int
+    positions_active: int
+    staffing_headcount: float
+    staffing_payroll_fund: float
+
+
+class HoldingTotals(BaseModel):
+    """Сумма строк сводки. Только те поля, что осмысленно складывать —
+    ``departments_active``/``positions_active`` каждой компании про свою
+    структуру, а не про группу, поэтому в totals их нет."""
+
+    employees_active: int
+    employees_total: int
+    staffing_headcount: float
+    staffing_payroll_fund: float
+
+
+class HoldingHeadcountOut(BaseModel):
+    companies: list[HoldingCompanyRow]
+    totals: HoldingTotals

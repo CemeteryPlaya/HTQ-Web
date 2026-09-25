@@ -12,6 +12,23 @@
 (спека §4.1, риск 2). Привязки же — ролей к должности и личных назначений —
 операции внутри одной компании и гейтятся обычным ``admin=True``.
 
+**Гейт модуля** (блок I «Единая модель прав», задача 4) — ``api_view(
+module="access", level=…)`` на каждой ручке, кроме трёх, объявленных в реестре
+``apps.access.self_service``: ``MeView.get`` (самообслуживание, ``self``),
+``RoleCollectionView.get`` и ``PositionRolesView.get`` (``open`` — их читает
+кадровый экран должностей, и до перевода их читал любой вошедший; подробности
+и обоснование — в реестре). Уровень выбирается по
+операции: чтение — ``read``, создание и правка — ``write``, удаление и
+администрирование — ``admin`` (то же правило, что в ``depth.legacy_level``).
+Правка общего каталога ролей (создание, переименование, копия, матрица прав)
+— администрирование в чистом виде: ``admin`` (T4 финальной волны; внутри
+``deny_unless_platform_admin``, поведение от этого не меняется).
+Ручки, уже стоявшие под ``admin=True``, флаг СОХРАНЯЮТ: платформенный
+админ-гейт и гейт модуля отвечают на разные вопросы («пускают ли его в
+администрирование платформы» и «есть ли у него права на этот модуль в этой
+компании»), и снятие первого расширило бы доступ, чего задача делать не
+должна. Обе двери проверяются подряд, в этом порядке (``htqweb/http.py``).
+
 **Компания берётся из контекста запроса**, а не из тела и не из query-параметра:
 иначе слаг компании становится значением, которое можно подставить, и изоляция
 превращается в вежливую просьбу.
@@ -19,14 +36,17 @@
 
 from __future__ import annotations
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.utils.decorators import method_decorator
 
 from htqweb.http import ApiView, api_view, json_error
+from htqweb.tenancy import archive
 from htqweb.tenancy.context import current_company_or_none
 
 from . import schemas
-from .models import Role
+from .models import Level, LEVEL_ORDER, Role
+from apps.access import depth as depth_flags
 from apps.access import registry
 from .services import assignment, catalog, holders as holders_svc, resolve
 from .services import hierarchy
@@ -35,6 +55,7 @@ from .services.errors import (
     RoleConflict,
     RoleInUse,
     RoleIsSystem,
+    RoleNotInCompany,
     ScopeInvalid,
     SystemRoleCodeLocked,
     UnknownModule,
@@ -43,16 +64,32 @@ from .services.errors import (
 
 # 422 — тело корректно по форме, но противоречит состоянию каталога.
 # Отдельно от 409: «нет такой роли» и «такого модуля не существует» — это
-# неверные ЗНАЧЕНИЯ, а не конфликт с состоянием данных.
+# неверные ЗНАЧЕНИЯ, а не конфликт с состоянием данных. RoleNotInCompany —
+# туда же: роль существует, но принадлежит другой компании (блок I.2, R2).
 INVALID = (RoleConflict, UnknownModule, UnknownRole, ScopeInvalid,
-           DepthNotApplicable)
+           DepthNotApplicable, RoleNotInCompany)
 
-read = method_decorator(api_view(methods=("GET",), auth="jwt"))
+#: Модуль реестра прав, к которому относятся ручки этой аппки
+#: (``apps/access/access_functions.py``, узлы ``access.*``).
+MODULE = "access"
+
+read = method_decorator(api_view(methods=("GET",), auth="jwt",
+                                 module=MODULE, level="read"))
 
 
-def write(method: str, body=None, status: int = 200, admin: bool = True):
+def write(method: str, body=None, status: int = 200, admin: bool = True,
+          level: str = "write"):
+    """Изменяющая ручка домена прав.
+
+    ``level`` объявляется КАЖДЫМ вызовом явно там, где он не ``write``, а не
+    выводится из ``admin``: правило «удаление и администрирование — ``admin``»
+    решает операция ручки, и связывать его с платформенным флагом значило бы
+    сделать один гейт молчаливой функцией другого — два разных вопроса
+    (см. докстринг модуля) снова слиплись бы в один.
+    """
     return method_decorator(api_view(methods=(method,), auth="jwt",
-                                     body=body, status=status, admin=admin))
+                                     body=body, status=status, admin=admin,
+                                     module=MODULE, level=level))
 
 
 class AccessView(ApiView):
@@ -85,12 +122,37 @@ class AccessView(ApiView):
             )
         return None
 
+    def role_or_404(self, role_id: int) -> Role:
+        """Роль другой компании по id — 404, как несуществующая (спека R2, I-1).
+
+        ``GET roles`` уже прячет чужую именную роль из каталога; соседние
+        чтения (глубина роли, держатели) не должны сводить это сужение на
+        нет простым перебором id. Общие роли (``company_slug`` пуст) и
+        собственная роль компании отдаются как обычно; суперпользователь
+        видит всё (R2: «суперпользователь — все, с меткой компании»).
+        """
+        from django.http import Http404
+
+        try:
+            role = Role.objects.get(id=role_id)
+        except Role.DoesNotExist as exc:
+            raise Http404("Роль не найдена") from exc
+        if (role.company_slug and not self.request.token.is_superuser
+                and role.company_slug != current_company_or_none()):
+            raise Http404("Роль не найдена")
+        return role
+
 
 class FunctionsView(AccessView):
     """``GET functions`` — реестр функций деревом.
 
-    Читать может любой вошедший: это справочник экранов платформы, а не данные.
-    Без него редактор ролей нечем нарисовать — матрица прав строится по нему.
+    Справочник экранов платформы, а не данные: без него редактор ролей нечем
+    нарисовать — матрица прав строится по нему. Читатель поэтому тот же, что у
+    самого редактора: ``module="access", level="read"`` (задача 4 блока I). До
+    неё ручку читал любой вошедший; в реестр исключений
+    (``apps.access.self_service``) она не внесена намеренно — это материал
+    редактора ролей, а не общий справочник вроде оргдерева, и человеку без
+    единого права на модуль доступа он ничего не даёт.
     """
 
     @read
@@ -109,14 +171,35 @@ class FunctionsView(AccessView):
 
 
 class RoleCollectionView(AccessView):
-    """``GET|POST roles`` — плоский каталог, общий для всех компаний (§4.1)."""
+    """``GET|POST roles`` — плоский каталог, общий для всех компаний (§4.1).
 
-    @read
+    **Чтение — БЕЗ гейта модуля** (реестр ``apps.access.self_service``,
+    причина ``open``, раунд правок 1 задачи 4 блока I). Список ролей читает
+    любой вошедший, и так было до перевода: его показывает не только редактор
+    ролей, но и кадровый экран должностей (``HRPositions.tsx`` →
+    ``PositionRolesDialog.tsx`` — из чего выбирать роли должности). Гейт
+    ``module="access"`` отобрал бы его у кадровика, а выдать кадровым ролям
+    узел ``access.*`` нельзя: уровень модуля считается по ВСЕМУ поддереву
+    (``resolve.permissions_for``), то есть один узел открыл бы им весь домен
+    прав, включая правку каталога. Сужать это — отдельное решение, его
+    задача 4 не принимает: она переносит как есть.
+    """
+
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
-        return [schemas.RoleRead.model_validate(row)
-                for row in Role.objects.all()]
+        # Роль компании видна только в ней самой: её название — это название
+        # должности (блок I.2, R2). Общие роли (company_slug пуст) видны
+        # везде; платформенный администратор видит всё.
+        rows = Role.objects.all()
+        if not request.token.is_superuser:
+            company = current_company_or_none()
+            rows = rows.filter(Q(company_slug__isnull=True) | Q(company_slug=company))
+        return [schemas.RoleRead.model_validate(row) for row in rows]
 
-    @write("POST", body=schemas.RoleIn, status=201, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("POST", body=schemas.RoleIn, status=201, admin=False, level="admin")
     def post(self, request, data: schemas.RoleIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -130,7 +213,10 @@ class RoleCollectionView(AccessView):
 class RoleItemView(AccessView):
     """``PATCH|DELETE roles/<id>``."""
 
-    @write("PATCH", body=schemas.RolePatchIn, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("PATCH", body=schemas.RolePatchIn, admin=False, level="admin")
     def patch(self, request, role_id: int, data: schemas.RolePatchIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -145,7 +231,8 @@ class RoleItemView(AccessView):
             return json_error(str(exc) or "invalid", 422)
         return schemas.RoleRead.model_validate(role)
 
-    @write("DELETE", admin=False)
+    # Удаление — ``admin``: разрушающая операция (``depth.legacy_level``).
+    @write("DELETE", admin=False, level="admin")
     def delete(self, request, role_id: int):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -174,6 +261,7 @@ class RoleHoldersView(AccessView):
 
     @read
     def get(self, request, role_id: int):
+        self.role_or_404(role_id)
         return holders_svc.holders(role_id)
 
 
@@ -185,7 +273,10 @@ class RoleCopyView(AccessView):
     роль без единого права — от настоящей она неотличима, а даёт ноль.
     """
 
-    @write("POST", body=schemas.RoleIn, status=201, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("POST", body=schemas.RoleIn, status=201, admin=False, level="admin")
     def post(self, request, role_id: int, data: schemas.RoleIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -203,9 +294,13 @@ class RolePermissionsView(AccessView):
 
     @read
     def get(self, request, role_id: int):
+        self.role_or_404(role_id)
         return catalog.permissions_of(role_id)
 
-    @write("PUT", body=schemas.PermissionsIn, admin=False)
+    # Правка ОБЩЕГО каталога ролей — администрирование, ``admin`` (T4
+    # финальной волны блока I): поведение не меняется — метод и так пускает
+    # только суперпользователя, — но уровень честно называет операцию.
+    @write("PUT", body=schemas.PermissionsIn, admin=False, level="admin")
     def put(self, request, role_id: int, data: schemas.PermissionsIn):
         if (denied := self.deny_unless_platform_admin()):
             return denied
@@ -232,13 +327,17 @@ class PositionRolesView(AccessView):
         if not hr.get_positions_brief([position_id]):
             raise Http404("Должность не найдена в этой компании")
 
-    @read
+    # БЕЗ гейта модуля (реестр self_service, причина ``open``): роли
+    # должности показывает кадровый экран должностей, а не только редактор
+    # ролей, и до перевода их читал любой вошедший — см. докстринг
+    # RoleCollectionView.
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request, position_id: int):
         company = self.company_or_404()
         self.position_or_404(position_id)
         return assignment.position_roles(company, position_id)
 
-    @write("PUT", body=schemas.PositionRolesIn)
+    @write("PUT", body=schemas.PositionRolesIn, level="admin")
     def put(self, request, position_id: int, data: schemas.PositionRolesIn):
         company = self.company_or_404()
         self.position_or_404(position_id)
@@ -256,7 +355,7 @@ class UserAssignmentsView(AccessView):
     def get(self, request, user_id: int):
         return assignment.user_assignments(self.company_or_404(), user_id)
 
-    @write("PUT", body=schemas.AssignmentsIn)
+    @write("PUT", body=schemas.AssignmentsIn, level="admin")
     def put(self, request, user_id: int, data: schemas.AssignmentsIn):
         company = self.company_or_404()
         try:
@@ -267,24 +366,86 @@ class UserAssignmentsView(AccessView):
         return assignment.user_assignments(company, user_id)
 
 
+def cap_for_archive(permissions: dict, depth_map: dict) -> tuple[dict, dict]:
+    """Архив — только чтение (спека архива §7.1): понижает права в ОТВЕТЕ.
+
+    Сервер на уровень не опирается — запись в архив закрыта
+    ``CompanyContextMiddleware`` для всех; это лишь то, что видит интерфейс.
+
+    ``permissions``: ``admin``/``write`` → ``read``, ``read`` без изменений;
+    ``scope`` каждой записи сохраняется как есть.
+
+    ``depth_map``: узел с ``view`` → ``[view]``; узел БЕЗ ``view`` (явный
+    запрет узла) остаётся с пустым списком, а не выбрасывается — фронт
+    (``depthFor``) трактует отсутствующий ключ как «взять права предка», а
+    пустой список — как явный запрет; выбросить ключ здесь значило бы
+    превратить запрет в наследование.
+    """
+    permissions = {
+        module: ({**entry, "level": Level.READ}
+                 if LEVEL_ORDER[entry["level"]] > LEVEL_ORDER[Level.READ]
+                 else entry)
+        for module, entry in permissions.items()
+    }
+    depth_map = {node: ([depth_flags.VIEW] if depth_flags.VIEW in flags else [])
+                 for node, flags in depth_map.items()}
+    return permissions, depth_map
+
+
 class MeView(AccessView):
     """``GET me`` — права текущего пользователя (§4.5).
 
     Без контекста компании отвечает пустой картой, а НЕ ошибкой: это штатный
     переходный режим подпроекта 1, а не сбой.
+
+    Считает роли пользователя РОВНО ОДИН РАЗ (``resolve.resolve_for``) и
+    передаёт готовый контекст во все четыре обращения ниже — иначе каждый
+    вызов ``page_hidden`` (их 32, по числу узлов-страниц) пересчитывал бы
+    роли заново (задача 4 плана B, ``test_resolution_context.py``).
+    Суперпользователю контекст не строится вовсе: у него ответ уже не стоит
+    ни одного запроса, и вызов ``resolve_for`` тут же вернул бы в горячий
+    путь ровно те запросы, которые эта оптимизация убирает.
+
+    **Без гейта модуля** — единственная такая ручка аппки (реестр
+    ``apps.access.self_service``, причина ``self``): отдаёт РОВНО права
+    предъявителя токена, параметра, которым можно указать на чужого
+    пользователя, у неё нет. Нужна КАЖДОМУ вошедшему, включая держателя
+    ``employee-basic``, у которой нет ни одного узла ``access.*``, — под
+    ``@read`` (``module="access"``) он не узнал бы даже, что ему доступно.
+    Декоратор поэтому объявлен здесь ЛИТЕРАЛЬНО, а не взят общий: ручка без
+    гейта обязана быть видна отдельным вызовом ``api_view(...)`` — и человеку,
+    и сторожу ``apps/access/tests/test_gate.py``, который разбирает файл
+    текстом (тот же приём, что у ``MyCompaniesView.get`` в ``apps.companies``).
     """
 
-    @read
+    @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
         company = self.company
+        resolution = (None if request.token.is_superuser
+                      else resolve.resolve_for(request.token, company))
+        permissions = resolve.permissions_for(request.token, company,
+                                              resolution=resolution)
+        depth_map = resolve.depth_map(request.token, company, resolution=resolution)
+        archived = archive.is_archived(getattr(request, "company", None))
+        if archived:
+            # Архив — только чтение (спека архива §7.1). Сюда доходит лишь
+            # суперпользователь (api_view), но правило не завязано на это.
+            permissions, depth_map = cap_for_archive(permissions, depth_map)
         return schemas.MeRead(
             company=company,
-            permissions=resolve.permissions_for(request.token, company),
-            depth=resolve.depth_map(request.token, company),
+            permissions=permissions,
+            depth=depth_map,
             hidden_pages=[
                 row["route"] for row in registry.page_nodes()
-                if resolve.page_hidden(request.token, row["route"], company)
+                if resolve.page_hidden(request.token, row["route"], company,
+                                       resolution=resolution)
             ],
             subordinate_companies=hierarchy.subordinate_companies(
                 request.token, company),
+            # Суперпользователю ``resolution`` не строится вовсе (полный
+            # доступ уже без единого запроса) — его права ниоткуда не
+            # наследуются, поэтому [] и без обращения к resolution.
+            inherited_from=(list(resolution.inherited_from)
+                            if resolution is not None else []),
+            company_archived=archived,
         )

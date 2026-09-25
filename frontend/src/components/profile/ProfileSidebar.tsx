@@ -42,6 +42,7 @@ import {
     X,
     ChevronRight,
     Volume2,
+    LayoutDashboard,
     type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -53,13 +54,19 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
-import { useHRLevel } from '@/hooks/useHRLevel';
 import { usePermissions } from '@/hooks/usePermissions';
+import { hrNavVisible } from '@/app/navigation/hrNavAccess';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
 
 type Props = {
+    /**
+     * Роли аккаунта. Сайдбар их больше не читает (задача 10 блока I: HR-пункты
+     * открываются правами из `usePermissions`, а не кадровым уровнем), проп
+     * оставлен, чтобы не трогать вызывающих — `MyProfile`/`Settings` его
+     * передают.
+     */
     roles?: string[];
     department?: string;
     position?: string;
@@ -230,7 +237,7 @@ const SidebarSection: React.FC<SectionProps> = ({ id, title, children, count, fo
     );
 };
 
-export const ProfileSidebar: React.FC<Props> = ({ roles, department, position }) => {
+export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const { t } = useTranslation();
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -242,8 +249,21 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     const admin = permissions.atLeast('users', 'admin');
     const elevated = permissions.atLeast('tasks', 'admin');
     const hasTasksAccess = permissions.atLeast('tasks', 'read');
-    const { level, hasHrAccess } = useHRLevel({ enabled: Boolean(roles?.length) });
-    const showHrItem = (levels: string[]) => admin || !hasHrAccess || (level ? levels.includes(level) : false);
+    const hasMessenger = permissions.atLeast('messenger', 'read');
+    const hasConference = permissions.atLeast('conference', 'read');
+    const hasMail = permissions.atLeast('mail', 'read');
+    // Ссылки модерации — по уровню ИХ модулей, ровно как требуют маршруты
+    // /admin/chats (messenger:admin) и /admin/mailboxes (mail:admin), а не по
+    // users:admin: держатель services-admin без users:admin иначе ссылок не
+    // видел бы, а users:admin без services-admin получал бы 403 (финальное
+    // ревью блока L, M-3).
+    const chatsAdmin = permissions.atLeast('messenger', 'admin');
+    const mailboxesAdmin = permissions.atLeast('mail', 'admin');
+    // Кадровые пункты — по тому же правилу, что и навигация самого HR-модуля
+    // (`HRLayout`): `hrNavVisible` читает права из `usePermissions`, а не
+    // кадровый уровень (задача 10 блока I). Администратор платформы видит
+    // всё — как и раньше.
+    const showHrItem = (route: string) => admin || hrNavVisible(permissions, route);
 
     const { isDisabled } = useServiceStatus();
     const [blockedService, setBlockedService] = useState<string | null>(null);
@@ -261,17 +281,19 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     ], [t]);
 
     const communicationItems: ItemConfig[] = useMemo(() => [
-        { id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') },
-        { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
-        { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
-        { id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') },
+        ...(hasMessenger ? [{ id: 'messenger', to: '/messenger', icon: MessageSquare, label: t('profile.sidebar.messenger', 'Мессенджер') }] : []),
+        ...(hasConference ? [
+            { id: 'conference', to: '/conference', icon: Video, label: t('profile.sidebar.conference', 'Видеоконференция'), onClick: gateService('conference') },
+            { id: 'conference-history', to: '/conference/history', icon: History, label: t('profile.sidebar.conferenceHistory', 'История конференций'), onClick: gateService('conference') },
+        ] : []),
+        ...(hasMail ? [{ id: 'email', to: '/email', icon: Mail, label: t('profile.sidebar.email', 'Почта') }] : []),
         // `isDisabled` В ЗАВИСИМОСТЯХ ОБЯЗАТЕЛЕН. Без него мемо считался один раз,
         // на первом рендере — когда ответ реестра ещё не пришёл и действовал
         // локальный фолбэк. Обработчик клика застывал на том состоянии и
         // блокировал раздел навсегда, даже после успешного ответа: именно так
         // «Видеоконференция» показывала «Функция временно отключена» при
         // включённом сервисе.
-    ], [t, isDisabled]);
+    ], [t, isDisabled, hasMessenger, hasConference, hasMail]);
 
     const workItems: ItemConfig[] = useMemo(() => {
         const items: ItemConfig[] = [
@@ -319,34 +341,62 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
     }, [t, editor]);
 
     const hrItems: ItemConfig[] = useMemo(() => {
-        if (!hrManager && !hasHrAccess) return [];
+        if (!hrManager) return [];
         const items: ItemConfig[] = [];
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-employees', to: '/hr/employees', icon: Users, label: t('hr.nav.employees') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-departments', to: '/hr/departments', icon: Building2, label: t('hr.nav.structure') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-positions', to: '/hr/positions', icon: Briefcase, label: t('hr.nav.positions') });
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-org', to: '/hr/org-chart', icon: Network, label: t('hr.nav.orgChart') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-pmo', to: '/hr/pmo', icon: Handshake, label: t('hr.nav.pmo') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-share', to: '/hr/share-links', icon: Link2, label: t('hr.nav.shareLinks') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-time', to: '/hr/time-tracking', icon: Clock, label: t('hr.nav.timeTracking') });
-        if (showHrItem(['middle', 'senior', 'lead'])) items.push({ id: 'hr-recruitment', to: '/hr/recruitment', icon: ClipboardList, label: t('hr.nav.recruitment') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-archive', to: '/hr/archive', icon: Archive, label: t('hr.nav.archive') });
-        if (showHrItem(['junior', 'middle', 'senior', 'lead'])) items.push({ id: 'hr-docs', to: '/hr/documents', icon: FileText, label: t('hr.nav.documents') });
-        if (showHrItem(['senior', 'lead'])) items.push({ id: 'hr-history', to: '/hr/history', icon: History, label: t('hr.nav.history') });
-        if (showHrItem(['lead'])) items.push({ id: 'hr-accounts', to: '/hr/accounts', icon: KeyRound, label: t('hr.nav.accounts') });
+        if (showHrItem('/hr/employees')) items.push({ id: 'hr-employees', to: '/hr/employees', icon: Users, label: t('hr.nav.employees') });
+        if (showHrItem('/hr/departments')) items.push({ id: 'hr-departments', to: '/hr/departments', icon: Building2, label: t('hr.nav.structure') });
+        if (showHrItem('/hr/positions')) items.push({ id: 'hr-positions', to: '/hr/positions', icon: Briefcase, label: t('hr.nav.positions') });
+        if (showHrItem('/hr/org-chart')) items.push({ id: 'hr-org', to: '/hr/org-chart', icon: Network, label: t('hr.nav.orgChart') });
+        if (showHrItem('/hr/pmo')) items.push({ id: 'hr-pmo', to: '/hr/pmo', icon: Handshake, label: t('hr.nav.pmo') });
+        if (showHrItem('/hr/share-links')) items.push({ id: 'hr-share', to: '/hr/share-links', icon: Link2, label: t('hr.nav.shareLinks') });
+        if (showHrItem('/hr/time-tracking')) items.push({ id: 'hr-time', to: '/hr/time-tracking', icon: Clock, label: t('hr.nav.timeTracking') });
+        if (showHrItem('/hr/recruitment')) items.push({ id: 'hr-recruitment', to: '/hr/recruitment', icon: ClipboardList, label: t('hr.nav.recruitment') });
+        if (showHrItem('/hr/archive')) items.push({ id: 'hr-archive', to: '/hr/archive', icon: Archive, label: t('hr.nav.archive') });
+        if (showHrItem('/hr/documents')) items.push({ id: 'hr-docs', to: '/hr/documents', icon: FileText, label: t('hr.nav.documents') });
+        if (showHrItem('/hr/history')) items.push({ id: 'hr-history', to: '/hr/history', icon: History, label: t('hr.nav.history') });
+        if (showHrItem('/hr/accounts')) items.push({ id: 'hr-accounts', to: '/hr/accounts', icon: KeyRound, label: t('hr.nav.accounts') });
         return items;
-    }, [t, hrManager, hasHrAccess, admin, level]);
+    }, [t, hrManager, admin, permissions]);
 
     const adminItems: ItemConfig[] = useMemo(() => {
-        if (!admin) return [];
-        return [
-            { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
-            // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
-            // на неё не было нигде — до неё можно было добраться только набрав
-            // адрес руками, то есть для всех, кроме автора, её не существовало.
-            { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
-            { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
-            { id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') },
-            { id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') },
+        // «Сводка группы» держит СВОЙ гейт, отдельный от остального списка:
+        // маршрут /holding и обе ручки-читателя требуют только `hr:read`
+        // (routeDefinitions.ts: `requires: { module: 'hr', level: 'read' }`),
+        // а не уровень платформенного администратора — тот же уровень, что
+        // уже открывает кадровые пункты в hrItems выше (`hrManager`). Держать
+        // ссылку видимой только для `admin` пряталo бы её от кадрового
+        // руководителя холдинга, которому сервер отвечает 200. Место пункта
+        // в списке — то же, что и раньше (внутри adminItems, между
+        // «Компании группы» и «Роли и права»): меняется условие показа, а не
+        // местоположение.
+        if (!admin && !hrManager && !chatsAdmin && !mailboxesAdmin) return [];
+        const items: ItemConfig[] = [];
+        if (admin) {
+            items.push(
+                { id: 'admin-users', to: '/admin/users', icon: UserCog, label: t('profile.sidebar.manageUsers', 'Управление пользователями') },
+                { id: 'companies', to: '/companies', icon: Building2, label: t('profile.sidebar.companies', 'Компании группы') },
+            );
+        }
+        if (admin || hrManager) {
+            items.push({ id: 'holding', to: '/holding', icon: LayoutDashboard, label: t('profile.sidebar.holding', 'Сводка группы') });
+        }
+        if (admin) {
+            items.push(
+                // Каталог ролей. Страница существовала с самой стадии 2, но ссылки
+                // на неё не было нигде — до неё можно было добраться только набрав
+                // адрес руками, то есть для всех, кроме автора, её не существовало.
+                { id: 'access-roles', to: '/access/roles', icon: ShieldCheck, label: t('profile.sidebar.accessRoles', 'Роли и права') },
+                { id: 'admin-registrations', to: '/admin/registrations', icon: UserPlus, label: t('profile.sidebar.registrations'), badge: <PendingRegistrationsBadge /> },
+            );
+        }
+        if (chatsAdmin) {
+            items.push({ id: 'admin-chats', to: '/admin/chats', icon: MessagesSquare, label: t('profile.sidebar.manageChats', 'Управление чатами') });
+        }
+        if (mailboxesAdmin) {
+            items.push({ id: 'admin-mailboxes', to: '/admin/mailboxes', icon: MailIcon, label: t('profile.sidebar.manageMailboxes', 'Корпоративные ящики') });
+        }
+        if (!admin) return items;
+        items.push(
             { id: 'admin-infra', to: '/admin/infrastructure', icon: ServerCog, label: t('profile.sidebar.infrastructure', 'Инфраструктура') },
             {
                 id: 'admin-django',
@@ -356,8 +406,9 @@ export const ProfileSidebar: React.FC<Props> = ({ roles, department, position })
                 badge: <ExternalLink className="h-3 w-3 text-muted-foreground" />,
                 external: true,
             },
-        ];
-    }, [t, admin]);
+        );
+        return items;
+    }, [t, admin, hrManager, chatsAdmin, mailboxesAdmin]);
 
     const monitoringItems: ItemConfig[] = useMemo(() => {
         if (!admin) return [];

@@ -1,0 +1,315 @@
+"""Правка, архив и восстановление через HTTP: гейты и коды."""
+
+import pytest
+from django.db import connection
+from django.test import Client
+
+from apps.access.models import Role, RoleAssignment, ScopeKind
+from apps.access.tests.helpers import grant as grant_permission
+from apps.companies.models import Company, CompanyKind, CompanyStatus
+from apps.companies.tests.api_helpers import (
+    BASE, auth, headers, patch_json, post_json, staff_token, superuser_token, token,
+)
+
+
+def _company_write_token(user_id: int, own_slug: str) -> str:
+    """Токен пользователя, у которого есть НАСТОЯЩИЙ write на ``companies`` —
+    но только в СВОЕЙ компании ``own_slug``. Копия приёма из
+    ``apps/access/tests/test_gate.py::_grant`` (RolePermission на голый узел
+    модуля + RoleAssignment с областью «вся компания»)."""
+    role = Role.objects.create(code=f"companies-writer-{user_id}", title="Реестр — запись")
+    grant_permission(role, "companies", "write")
+    RoleAssignment.objects.create(company_slug=own_slug, user_id=user_id, role=role,
+                                  scope_kind=ScopeKind.COMPANY, scope_id=None)
+    return token(user_id=user_id, sub=str(user_id), company=own_slug)
+
+
+def _drop_holding_schema() -> None:
+    with connection.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS holding CASCADE")
+
+
+@pytest.fixture
+def two_companies(two_company_schemas):
+    """``two_company_schemas`` уже заводит строки реестра для обеих схем —
+    здесь только уборка holding на выходе (сам fixture из conftest.py
+    чистит только данные внутри схем компаний, про схему holding не знает).
+    Копия ``two_companies`` из ``test_company_archive.py`` — тесты соседних
+    файлов не делят фикстуры, а тест ниже пересобирает сводки холдинга так
+    же, как команды ``company_archive``/``company_restore``."""
+    try:
+        yield two_company_schemas
+    finally:
+        _drop_holding_schema()
+
+
+@pytest.fixture
+def client():
+    return Client()
+
+
+@pytest.fixture
+def pair(db):
+    holding = Company.objects.create(slug="hi-tech-group", name="Group", kind=CompanyKind.HOLDING)
+    htq = Company.objects.create(slug="hi-tech-qazaqstan", name="HTQ", kind=CompanyKind.REGIONAL)
+    return holding, htq
+
+
+@pytest.mark.django_db
+def test_patch_sets_kind_and_parent_of_the_transition_company(client, pair):
+    """Сценарий roadmap §3 п.6: единственная компания получает kind и родителя правкой."""
+    res = patch_json(client, f"{BASE}/companies/hi-tech-qazaqstan",
+                     {"kind": "construction", "parent_slug": "hi-tech-group", "country": "KZ"},
+                     **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["kind"] == "construction"
+    assert res.json()["parent_slug"] == "hi-tech-group"
+    assert res.json()["country"] == "KZ"
+
+
+@pytest.mark.django_db
+def test_patch_rejects_cycle_unknown_parent_and_bad_kind(client, pair):
+    holding, htq = pair
+    htq.parent = holding
+    htq.save()
+    res = patch_json(client, f"{BASE}/companies/hi-tech-group", {"parent_slug": "hi-tech-qazaqstan"},
+                     **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "parent_cycle"
+
+    res = patch_json(client, f"{BASE}/companies/hi-tech-group", {"parent_slug": "nope"},
+                     **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "parent_not_found"
+
+    res = patch_json(client, f"{BASE}/companies/hi-tech-group", {"kind": "branch"},
+                     **auth(superuser_token()))
+    assert res.status_code == 422  # схема отбивает до сервиса
+
+
+@pytest.mark.django_db
+def test_patch_is_closed_without_write_level(client, pair):
+    assert patch_json(client, f"{BASE}/companies/hi-tech-group", {"name": "X"},
+                      **auth(token())).status_code == 403
+
+
+@pytest.mark.django_db
+def test_patch_of_other_company_is_forbidden_for_company_scoped_writer(client, pair):
+    """Критическая находка финального ревью: ``companies`` write в СВОЕЙ
+    компании не даёт править чужую строку реестра. ``@write(...)`` считает
+    уровень в компании звонящего (``hi-tech-group``) и ничего не знает про
+    ``hi-tech-qazaqstan`` из URL — без ``deny_unless_platform_admin`` этот
+    PATCH бы прошёл."""
+    holding, htq = pair
+    tok = _company_write_token(101, holding.slug)
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"name": "Hijacked"},
+                     **headers(holding.slug, tok))
+    assert res.status_code == 403
+    htq.refresh_from_db()
+    assert htq.name == "HTQ"
+
+
+@pytest.mark.django_db
+def test_module_patch_of_other_company_is_forbidden_for_company_scoped_writer(client, pair):
+    """Тот же разрыв на ``CompanyModuleItemView.patch`` — гейт снаружи тот же
+    ``module="companies", level="write"``, поэтому владелец write в
+    ``hi-tech-group`` не должен выключать модуль соседней компании."""
+    holding, htq = pair
+    tok = _company_write_token(102, holding.slug)
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}/modules/tasks",
+                     {"enabled": False}, **headers(holding.slug, tok))
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_show_external_holders_is_editable_only_by_platform_admin(client, pair):
+    """Задача 7 блока C, решение заказчика 4: настройка видимости внешних
+    держателей правится ровно тем же гейтом, что и остальные поля реестра —
+    ``deny_unless_platform_admin`` в ``CompanyItemView.patch``. Проверяем это
+    тестом, а не предполагаем: обычный токен без прав получает 403, поле не
+    меняется; платформенный администратор меняет его, и PATCH/GET оба видят
+    новое значение."""
+    holding, htq = pair
+    assert htq.show_external_holders is True  # умолчание — включено (решение 7 плана)
+
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}",
+                     {"show_external_holders": False}, **auth(token()))
+    assert res.status_code == 403
+    htq.refresh_from_db()
+    assert htq.show_external_holders is True
+
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}",
+                     {"show_external_holders": False}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["show_external_holders"] is False
+    htq.refresh_from_db()
+    assert htq.show_external_holders is False
+
+    res = client.get(f"{BASE}/companies/{htq.slug}", **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["show_external_holders"] is False
+
+
+@pytest.mark.django_db
+def test_superuser_still_writes_across_companies(client, pair):
+    """Платформенный администратор не привязан к «своей» компании — новая
+    проверка бьёт только company-scoped роли, не is_superuser."""
+    holding, htq = pair
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"name": "Renamed"},
+                     **auth(superuser_token()))
+    assert res.status_code == 200
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}/modules/tasks",
+                     {"enabled": False}, **auth(superuser_token()))
+    assert res.status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
+def test_archive_and_restore_are_platform_operations(client, two_companies):
+    alpha, beta = two_companies
+    # staff — админ платформы «широкого» толка, но не суперпользователь: 403.
+    assert client.post(f"{BASE}/companies/{alpha}/archive",
+                       **auth(staff_token())).status_code == 403
+
+    res = client.post(f"{BASE}/companies/{alpha}/archive", **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["status"] == "archived"
+    assert res.json()["archived_at"] is not None
+
+    # Повтор — идемпотентно, 200 с тем же состоянием.
+    assert client.post(f"{BASE}/companies/{alpha}/archive",
+                       **auth(superuser_token())).status_code == 200
+
+    # beta теперь единственная действующая — гейт режима перехода.
+    res = client.post(f"{BASE}/companies/{beta}/archive", **auth(superuser_token()))
+    assert res.status_code == 409
+    assert res.json()["code"] == "last_active"
+    assert Company.objects.get(slug=beta).status == CompanyStatus.ACTIVE
+
+    res = client.post(f"{BASE}/companies/{alpha}/restore", **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["status"] == "active"
+    assert res.json()["archived_at"] is None
+
+
+@pytest.mark.django_db
+def test_patch_sets_keeps_and_clears_subdomain(client, pair):
+    """Блок I.2, задача 3: ключа нет — «не трогать», ``""``/``null`` — снять
+    псевдоним (как ``parent_slug`` через ``UNSET``)."""
+    _holding, htq = pair
+    url = f"{BASE}/companies/{htq.slug}"
+    res = patch_json(client, url, {"subdomain": "htq"}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] == "htq"
+
+    res = patch_json(client, url, {"name": "HTQ 2"}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] == "htq"
+
+    res = patch_json(client, url, {"subdomain": ""}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] is None
+
+    patch_json(client, url, {"subdomain": "htq"}, **auth(superuser_token()))
+    res = patch_json(client, url, {"subdomain": None}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["subdomain"] is None
+
+
+@pytest.mark.django_db
+def test_patch_subdomain_validation_errors_are_422(client, pair):
+    """Ошибка ``Company.clean()`` доходит до клиента 422 с текстом, а не 500."""
+    holding, htq = pair
+    url = f"{BASE}/companies/{htq.slug}"
+    res = patch_json(client, url, {"subdomain": "api"}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "invalid"
+    assert "subdomain" in res.json()["detail"]
+
+    # Чужой слаг псевдонимом — тоже 422.
+    res = patch_json(client, url, {"subdomain": holding.slug}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert "subdomain" in res.json()["detail"]
+    htq.refresh_from_db()
+    assert htq.subdomain is None
+
+
+@pytest.mark.django_db
+def test_patch_duplicate_subdomain_names_the_field_humanly(client, pair):
+    """Дубль псевдонима — 422, и в тексте поле названо по-человечески
+    («Короткий адрес», ``verbose_name``), а не ``Subdomain`` (блок I.2, B6)."""
+    holding, htq = pair
+    Company.objects.filter(pk=holding.pk).update(subdomain="grp")
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"subdomain": "grp"},
+                     **auth(superuser_token()))
+    assert res.status_code == 422
+    assert "Короткий адрес" in res.json()["detail"], res.json()
+    htq.refresh_from_db()
+    assert htq.subdomain is None
+
+
+@pytest.mark.django_db
+def test_patch_subdomain_is_platform_admin_only(client, pair):
+    """Правка псевдонима — та же проверка, что у остальных платформенных
+    полей: write в своей компании не даёт её, 403 и поле не меняется."""
+    holding, htq = pair
+    tok = _company_write_token(103, htq.slug)
+    res = patch_json(client, f"{BASE}/companies/{htq.slug}", {"subdomain": "htq"},
+                     **headers(htq.slug, tok))
+    assert res.status_code == 403
+    htq.refresh_from_db()
+    assert htq.subdomain is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bankrupt_is_a_platform_operation(client, two_companies):
+    dead, heir = two_companies
+    body = {"successor": heir}
+    assert post_json(client, f"{BASE}/companies/{dead}/bankrupt", body,
+                     **auth(staff_token())).status_code == 403
+
+    res = post_json(client, f"{BASE}/companies/{dead}/bankrupt",
+                    {"successor": heir, "dry_run": True}, **auth(superuser_token()))
+    assert res.status_code == 200
+    assert res.json()["dry_run"] is True
+    assert Company.objects.get(slug=dead).status == CompanyStatus.ACTIVE
+
+    res = post_json(client, f"{BASE}/companies/{dead}/bankrupt", body,
+                    **auth(superuser_token()))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["company"]["status"] == "archived"
+    assert data["company"]["successor_slug"] == heir
+    assert data["successor"]["slug"] == heir
+    assert {"members_total", "members_granted", "members_already", "archived"} <= data.keys()
+    assert data["archived"] is True
+
+
+@pytest.mark.django_db
+def test_bankrupt_errors_keep_the_envelope(client, pair):
+    holding, htq = pair
+    res = post_json(client, f"{BASE}/companies/{htq.slug}/bankrupt",
+                    {"successor": htq.slug}, **auth(superuser_token()))
+    assert res.status_code == 422
+    assert res.json()["code"] == "successor_invalid"
+
+    res = post_json(client, f"{BASE}/companies/no-such/bankrupt",
+                    {"successor": htq.slug}, **auth(superuser_token()))
+    assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_bankrupt_with_other_successor_is_a_conflict(client, pair):
+    """Спека §7: другой преемник — 409 ``successor_conflict``. Схемы компаний
+    не нужны: проверка конфликта стоит раньше подсчёта участников и архива,
+    до пересборки сводок вызов не доходит."""
+    holding, htq = pair
+    third = Company.objects.create(slug="t-third", name="Third", kind=CompanyKind.SERVICE)
+    Company.objects.filter(pk=htq.pk).update(successor=holding)
+
+    res = post_json(client, f"{BASE}/companies/{htq.slug}/bankrupt",
+                    {"successor": third.slug}, **auth(superuser_token()))
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "successor_conflict"
+    htq.refresh_from_db()
+    assert htq.successor_id == holding.pk and htq.status == CompanyStatus.ACTIVE

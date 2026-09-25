@@ -7,11 +7,14 @@
  * в отказ: иначе каждый заход на защищённую страницу выбрасывал бы на профиль
  * раньше, чем приедет ответ.
  */
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
+import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccessLevel } from '@/lib/auth/permissions';
+
+import { resetSessionRestoreForTests } from '@/lib/auth/sessionRestore';
 
 import RequireAuth from './RequireAuth';
 
@@ -24,6 +27,14 @@ const activeProfile = {
 
 const useActiveProfile = vi.fn();
 const permissionsSpy = vi.fn();
+const refreshSpy = vi.fn();
+
+// Обмен refresh → access — единственная функция интерцептора; здесь она
+// подменена, чтобы тест видел, сколько раз RequireAuth её позвал.
+vi.mock('@/api/client', () => ({
+  default: {},
+  refreshAccessToken: () => refreshSpy(),
+}));
 
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => useActiveProfile(),
@@ -72,7 +83,25 @@ const renderGate = (requires?: { module: string; level: AccessLevel }) =>
     </MemoryRouter>,
   );
 
+/**
+ * Хост страницы. RequireAuth уводит с голого домена на экран выбора компании
+ * (блок I.2), а jsdom по умолчанию стоит на голом `localhost:3000` — поэтому
+ * тесты гейта по модулю живут на поддомене компании, как и настоящие страницы
+ * за гейтом. Без этого каждый из них проверял бы редирект на выбор компании,
+ * а не то, что заявлено в названии.
+ */
+const stubHost = (host: string) => {
+  vi.stubGlobal('location', {
+    host, hostname: host.split(':')[0], pathname: '/gated', search: '', hash: '', protocol: 'http:',
+  });
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 beforeEach(() => {
+  stubHost('htq.localhost:3000');
   useActiveProfile.mockReturnValue({
     activeProfile,
     isLoading: false,
@@ -144,5 +173,186 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
     renderGate({ module: 'hr', level: 'read' });
 
     expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+  });
+});
+
+describe('RequireAuth — голый домен (блок I.2)', () => {
+  // Маршруты приложения передают `page`, а с ним RequireAuth спрашивает
+  // `pageHidden` — здесь ни одна страница не закрыта.
+  beforeEach(() => {
+    permissionsSpy.mockReturnValue({ ...permissionsOf({ hr: 'write' }), pageHidden: () => false });
+  });
+
+  const PickerProbe = () => {
+    const location = useLocation();
+    const from = (location.state as { from?: { pathname: string } } | null)?.from;
+    return <div>выбор компании; шёл на {from?.pathname ?? '—'}</div>;
+  };
+
+  const renderAt = (path: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route
+            path="/gated"
+            element={
+              <RequireAuth page="/gated">
+                <div>содержимое страницы</div>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/companies/choose"
+            element={
+              // Как в App.tsx: `page` — путь своего маршрута.
+              <RequireAuth page="/companies/choose">
+                <PickerProbe />
+              </RequireAuth>
+            }
+          />
+          <Route path="/login" element={<div>страница входа</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+  it('уводит на экран выбора компании и помнит, куда человек шёл', () => {
+    stubHost('localhost:3000');
+
+    renderAt('/gated');
+
+    expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+    expect(screen.getByText('выбор компании; шёл на /gated')).toBeInTheDocument();
+  });
+
+  it('сам экран выбора на голом домене не уводит по кругу', () => {
+    stubHost('htq.group');
+
+    renderAt('/companies/choose');
+
+    expect(screen.getByText('выбор компании; шёл на —')).toBeInTheDocument();
+  });
+
+  it('неаутентифицированного ведёт на вход, а не на выбор компании', () => {
+    stubHost('htq.group');
+    useActiveProfile.mockReturnValue({
+      activeProfile: null,
+      isLoading: false,
+      error: null,
+      isLoggedIn: false,
+      clearAuthStorage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderAt('/gated');
+
+    expect(screen.getByText('страница входа')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Переезд сессии на поддомен компании (блок I.2, A1). Вошёл на голом домене —
+ * на поддомене access-токена нет, но refresh-cookie родительского домена
+ * видна. RequireAuth обязан обменять её ДО редиректа на /login, иначе человек
+ * входит второй раз в каждой компании и теряет глубокую ссылку.
+ */
+describe('RequireAuth — восстановление сессии по refresh-cookie', () => {
+  let loggedIn = false;
+
+  const clearRefreshCookie = () => {
+    document.cookie = 'refresh=; Max-Age=0; Path=/';
+  };
+
+  beforeEach(() => {
+    loggedIn = false;
+    resetSessionRestoreForTests();
+    refreshSpy.mockReset();
+    window.localStorage.clear();
+    // На поддомене только refresh-cookie: access-токена нет ни в
+    // localStorage, ни в cookie этого origin.
+    document.cookie = 'refresh=refresh-from-parent-domain; Path=/';
+    permissionsSpy.mockReturnValue({ ...permissionsOf({ hr: 'write' }), pageHidden: () => false });
+    // Как настоящий useActiveProfile: «вошёл» — это наличие access-токена,
+    // который появляется только после успешного обмена.
+    useActiveProfile.mockImplementation(() => ({
+      activeProfile: loggedIn ? activeProfile : null,
+      isLoading: false,
+      error: null,
+      isLoggedIn: loggedIn,
+      clearAuthStorage: vi.fn(),
+      refetch: vi.fn(),
+    }));
+  });
+
+  afterEach(() => {
+    clearRefreshCookie();
+    useActiveProfile.mockReset();
+  });
+
+  const renderDeepLink = () =>
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/gated']}>
+          <Routes>
+            <Route
+              path="/gated"
+              element={
+                <RequireAuth page="/gated">
+                  <div>содержимое страницы</div>
+                </RequireAuth>
+              }
+            />
+            <Route path="/login" element={<div>страница входа</div>} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+  it('на поддомене с одной refresh-cookie обменивает её и открывает маршрут, а не /login', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockImplementation(async () => {
+      loggedIn = true;
+      return 'fresh-access';
+    });
+
+    renderDeepLink();
+
+    expect(await screen.findByText('содержимое страницы')).toBeInTheDocument();
+    expect(screen.queryByText('страница входа')).not.toBeInTheDocument();
+  });
+
+  it('неудачный обмен ведёт на /login', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockRejectedValue(new Error('refresh expired'));
+
+    renderDeepLink();
+
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+    expect(screen.queryByText('содержимое страницы')).not.toBeInTheDocument();
+  });
+
+  it('обмен вызывается один раз на загрузку — и в StrictMode, и при повторном заходе после неудачи', async () => {
+    stubHost('htq.localhost:3000');
+    refreshSpy.mockRejectedValue(new Error('refresh expired'));
+
+    renderDeepLink();
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+
+    // Повторный заход на защищённый маршрут в той же загрузке страницы:
+    // обмен не повторяется, цикла «обмен → /login → обмен» нет.
+    cleanup();
+    renderDeepLink();
+    expect(await screen.findByText('страница входа')).toBeInTheDocument();
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('без refresh-cookie обмена нет — сразу вход', () => {
+    stubHost('htq.localhost:3000');
+    clearRefreshCookie();
+
+    renderDeepLink();
+
+    expect(screen.getByText('страница входа')).toBeInTheDocument();
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 });

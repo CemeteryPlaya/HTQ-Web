@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { useHRLevel } from '@/hooks/useHRLevel';
+import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Plus, Pencil, Trash2, Building2, Briefcase, Search } from 'lucide-react';
 
@@ -40,7 +40,20 @@ interface Department {
 const HRDepartments = () => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { isSenior } = useHRLevel();
+  const permissions = usePermissions();
+  // Удаление отдела (`DELETE /departments/{id}` — `module="hr",
+  // level="admin"`, каскад необратим) и должности (`admin=True` +
+  // `level="admin"`), apps/hr/views.py: кнопки показываются по уровню
+  // модуля `hr`, который проверяет сервер. Старый `isSenior` (write +
+  // область company) показал бы их и тому, кому сервер ответит 403.
+  // ⚠️ Паритет с сервером — только по УРОВНЮ МОДУЛЯ. Удаление должности стоит ещё и
+  // под `admin=True` (`token.is_elevated`: is_staff/is_admin/is_superuser,
+  // htqweb/http.py), а этого флага в `usePermissions` нет — hr-lead без
+  // платформенного admin увидит кнопки и получит 403. Дыра pre-existing
+  // (старый `isSenior` её не закрывал) и здесь честно не закрыта: зеркала
+  // `is_elevated` во фронтовых правах нет, тянуть `useActiveProfile` ради
+  // него — отдельное решение (ревью задачи 10, minor 2).
+  const hrAdmin = permissions.atLeast('hr', 'admin');
 
   /* ---- Data ---- */
   const { data: departments, isLoading, error } = useQuery({
@@ -294,7 +307,7 @@ const HRDepartments = () => {
                   <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-xl" onClick={() => startEditDept(dept)} title={t('common.edit')}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                  {isSenior && (
+                  {hrAdmin && (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -319,7 +332,7 @@ const HRDepartments = () => {
                         <Button size="sm" variant="ghost" onClick={() => startEditPos(pos)}>
                           <Pencil className="h-3 w-3" />
                         </Button>
-                        {isSenior && (
+                        {hrAdmin && (
                           <Button
                             size="sm"
                             variant="ghost"
