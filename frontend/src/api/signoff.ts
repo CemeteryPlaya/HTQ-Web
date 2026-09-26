@@ -24,6 +24,7 @@ import type {
   InboxItem,
   ProcessTask,
   ReworkInput,
+  RouteFlagsInput,
   RouteStage,
   SignoffEnums,
   StageInput,
@@ -53,9 +54,10 @@ export const signoffApi = {
   listRoutes: (params?: { subject_type?: string; is_active?: boolean; scope?: string }) =>
     api.get<ApprovalRoute[]>(path('routes'), { params }),
   getRoute: (id: number) => api.get<ApprovalRoute>(path(`routes/${id}`)),
-  createRoute: (data: { subject_type: string; name: string; is_active?: boolean; scope?: string }) =>
+  createRoute: (data: { subject_type: string; name: string; is_active?: boolean; scope?: string }
+    & RouteFlagsInput) =>
     api.post<ApprovalRoute>(path('routes'), data),
-  updateRoute: (id: number, data: { name?: string; is_active?: boolean }) =>
+  updateRoute: (id: number, data: { name?: string; is_active?: boolean } & RouteFlagsInput) =>
     api.patch<ApprovalRoute>(path(`routes/${id}`), data),
   deleteRoute: (id: number) => api.delete(path(`routes/${id}`)),
 
@@ -90,6 +92,10 @@ export const signoffApi = {
    */
   reworkProcess: (id: number, data: ReworkInput = {}) =>
     api.post<ApprovalProcess>(path(`processes/${id}/rework`), data),
+  /** Ещё раз поискать исполнителей этапам «Нет исполнителя» (администратор). */
+  retryExecutors: (id: number) =>
+    api.post<{ found: number; process: ApprovalProcess }>(
+      path(`processes/${id}/retry-executors`)),
 
   // ─── Решения ───────────────────────────────────────────────────────────
   /** Персональная очередь спрашивающего. Чужую бэкенд не отдаёт ни по

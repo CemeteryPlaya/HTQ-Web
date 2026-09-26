@@ -80,7 +80,10 @@ export type StageState =
   | 'approved'
   | 'rejected'
   | 'rework'
-  | 'skipped';
+  | 'skipped'
+  /** На роль этапа не назначен ни один действующий исполнитель (ТЗ §16.1
+   *  п.5) — документ ждёт; только у маршрутов с `lazy_resolution`. */
+  | 'no_executor';
 
 export type TaskState = 'pending' | 'approved' | 'rejected' | 'rework' | 'skipped';
 
@@ -215,6 +218,22 @@ export interface RouteStage {
   requirement_label: string | null;
 }
 
+/** Должность в подписи флагов маршрута. */
+export interface PositionBrief {
+  id: number;
+  title: string;
+}
+
+/** Флаги маршрута, которые принимают ручки маршрута. */
+export interface RouteFlagsInput {
+  forbid_self_approval?: boolean;
+  reject_comment_min?: number;
+  lazy_resolution?: boolean;
+  no_executor_notify_position_ids?: number[];
+  escalation_position_id?: number | null;
+  self_skip_notify_position_ids?: number[];
+}
+
 export interface ApprovalRoute {
   id: number;
   subject_type: string;
@@ -225,6 +244,16 @@ export interface ApprovalRoute {
   name: string;
   /** Активный маршрут на тип ровно один — частичный уникальный индекс. */
   is_active: boolean;
+  /** Флаги маршрута (мастер-план БЗО, D-21) — все выключены по умолчанию. */
+  forbid_self_approval: boolean;
+  reject_comment_min: number;
+  lazy_resolution: boolean;
+  no_executor_notify_position_ids: number[];
+  escalation_position_id: number | null;
+  self_skip_notify_position_ids: number[];
+  no_executor_notify_positions: PositionBrief[];
+  escalation_position: PositionBrief | null;
+  self_skip_notify_positions: PositionBrief[];
   stages: RouteStage[];
   /** Только в карточке ОДНОГО маршрута: схема его области — факты для
    *  условий и ключи «назначает объект». */
@@ -303,6 +332,8 @@ export interface ProcessStage {
   requires_comment: boolean;
   requirement_key: string;
   requirement_label: string | null;
+  /** Когда этап стал активным. */
+  activated_at?: string | null;
   decided_at: string | null;
   tasks: ProcessTask[];
 }

@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 
 import { EmployeePicker } from '@/components/common/EmployeePicker';
 import { PositionPicker } from '@/components/signoff/PositionPicker';
+import { RouteFlagsCard } from '@/components/signoff/RouteFlagsCard';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
 import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
@@ -363,6 +364,8 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
               <Loader2 className="h-4 w-4 animate-spin mb-3 text-muted-foreground" />
             )}
           </div>
+
+          <RouteFlagsCard route={route} />
 
           {(route.coverage_gaps?.length ?? 0) > 0 && (
             <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3">

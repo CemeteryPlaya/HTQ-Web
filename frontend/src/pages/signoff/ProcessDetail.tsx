@@ -166,6 +166,21 @@ const ProcessDetail = () => {
     onError: (err) => reportApiError(err, t('signoff.detail.withdrawError')),
   });
 
+  /** Этапы, которые ждут назначения исполнителя (ТЗ §16.1 п.5). */
+  const waitingStages = process?.state === 'pending'
+    ? process.stages.filter((stage) => stage.state === 'no_executor')
+    : [];
+
+  const retryExecutors = useMutation({
+    mutationFn: () => signoffApi.retryExecutors(processId).then((r) => r.data),
+    onSuccess: ({ found }) => {
+      if (found) toast.success(t('signoff.detail.executorsFound', 'Исполнитель найден — этап на рассмотрении'));
+      else toast.info(t('signoff.detail.executorsStillMissing', 'Исполнителя по-прежнему нет — назначьте сотрудника или временного исполнителя должности'));
+      queryClient.invalidateQueries({ queryKey: ['signoff'] });
+    },
+    onError: (err) => reportApiError(err, t('signoff.detail.retryError', 'Не удалось проверить исполнителей')),
+  });
+
   /** Мой запрос на активном этапе — если он есть, решение за мной.
    *
    *  Вместе с задачей нужен и её ЭТАП: требование документа объявлено на
@@ -307,6 +322,25 @@ const ProcessDetail = () => {
                 неприжатом состоянии занимает 5rem. Меньший отступ загнал бы
                 панель под неё. */}
             <aside className="min-w-0 space-y-4 lg:order-2 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pb-2">
+              {waitingStages.length > 0 && (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 space-y-2">
+                  <p className="text-sm font-medium">
+                    {t('signoff.detail.noExecutorTitle', 'Нет исполнителя')}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('signoff.detail.noExecutorText',
+                      'Этап «{{stages}}» ждёт: на его должность не назначен ни один действующий сотрудник. Назначьте сотрудника или временного исполнителя должности — этап продолжится сам в течение 15 минут.',
+                      { stages: waitingStages.map((stage) => stage.name).join('», «') })}
+                  </p>
+                  {isAdmin && (
+                    <Button size="sm" variant="outline" disabled={retryExecutors.isPending}
+                      onClick={() => retryExecutors.mutate()}>
+                      {t('signoff.detail.retryExecutors', 'Проверить сейчас')}
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {(myPending || canCancel || canRework) && (
                 <div className="flex flex-wrap gap-2">
                   {/* Все действия над согласованием собраны в одно меню
