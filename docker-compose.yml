@@ -126,6 +126,14 @@ x-django-env: &django-env
   # Пусто = сводка молча не отправляется.
   TELEGRAM_DIGEST_CHAT_ID: ${TELEGRAM_DIGEST_CHAT_ID:-}
 
+  # ── Антивирус загрузок (ТЗ §21 [Л], htqweb/antivirus.py) ─────────────────
+  # По умолчанию ВЫКЛЮЧЕН: мастер-план БЗО, D-31 — «задел под ClamAV, по
+  # умолчанию без проверки» (ответ Q-B25), включение — задача A7.4. Включить:
+  # ANTIVIRUS_CLAMD_HOST=clamav в .env и поднять сервис clamav его профилем
+  # (`--profile antivirus`). Включённый, но недоступный сканер отвечает
+  # загрузке документов 503, а не пропускает файл.
+  ANTIVIRUS_CLAMD_HOST: ${ANTIVIRUS_CLAMD_HOST:-}
+
 services:
   # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
   # (адрес обязателен в .env, умолчания нет), а Django ходит в Postgres напрямую —
@@ -370,6 +378,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ─── ClamAV: антивирус загрузок (ТЗ §21 [Л]) ────────────────────────────
+  # clamd на :3310 только внутри сети стека (порт наружу не публикуется),
+  # freshclam в том же контейнере обновляет базы сам. Базы — в томе: иначе
+  # каждый перезапуск заново качал бы ~300 МБ и минуты не принимал файлы.
+  # Память: ~1,5 ГБ на загруженные сигнатуры.
+  # ⚠️ Первый запуск: пока базы не скачаны, clamd не отвечает, и загрузка
+  # документов получает 503 «проверка недоступна» — так задумано (fail-closed).
+  # ⚠️ database.clamav.net отдаёт базы не во все страны; если freshclam в
+  # логах получает 403, нужен зеркальный источник (DatabaseMirror).
+  clamav:
+    image: clamav/clamav:1.4
+    # Только по запросу (D-31): без профиля сервис не стартует и не держит
+    # 1,5 ГБ памяти, пока проверка выключена.
+    profiles: ["antivirus"]
+    restart: unless-stopped
+    environment:
+      # Предел потока: по умолчанию 25M, а документы бывают больше (шлюз
+      # пускает в /api/media/ до 100M). Больше предела clamd отвечает ERROR,
+      # и файл не принимается как непроверенный.
+      CLAMD_CONF_StreamMaxLength: 100M
+    volumes:
+      - clamav_db:/var/lib/clamav
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   # ─── Django backend — WSGI (весь /api/*, django-admin, static) ──────────
   # Единый Django заменил девять FastAPI-микросервисов. Миграции общих аппок
@@ -906,6 +940,7 @@ services:
         max-file: "3"
 
 volumes:
+  clamav_db:
   static_files:
   media_files:
   wt_certs:

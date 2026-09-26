@@ -4,6 +4,9 @@ export const API_ENDPOINTS = {
   hr: 'hr/v1',
   tasks: 'tasks/v1',
   mediaFiles: 'media/v1/files',
+  // Файловая подсистема ТЗ §21 (Django app apps.files): документы любого
+  // объекта-владельца — заявки, договора, … — с версиями и «Заменён».
+  files: 'files/v1',
   email: 'email/v1',
   messenger: 'messenger/v1',
   requests: 'requests/v1',

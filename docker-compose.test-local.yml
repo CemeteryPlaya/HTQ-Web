@@ -87,6 +87,12 @@ x-django-env: &django-env
   TELEGRAM_BOT_TOKEN: ""
   TELEGRAM_DIGEST_CHAT_ID: ""
 
+  # Антивирус загрузок — см. docker-compose.yml: по умолчанию выключен (D-31).
+  # Включить: ANTIVIRUS_CLAMD_HOST=clamav в окружении и `--profile antivirus`
+  # (clamav держит в памяти ~1,5 ГБ сигнатур и при первом запуске несколько
+  # минут качает их из сети — всё это время документы получают 503).
+  ANTIVIRUS_CLAMD_HOST: ${ANTIVIRUS_CLAMD_HOST:-}
+
 services:
   # ─── PostgreSQL (локальная, одноразовая) ────────────────────────────────────
   # Публикуется на :55432, а НЕ на :5432 — на Windows-хостах :5432 занят
@@ -218,6 +224,32 @@ services:
 
   # ─── Django backend — WSGI (весь /api/*, django-admin, статика) ─────────────
   # ТОЛЬКО этот процесс мигрирует и сидит админа (admin/admin12345).
+  # ─── ClamAV: антивирус загрузок (ТЗ §21 [Л]) ────────────────────────────
+  # clamd на :3310 только внутри сети стека (порт наружу не публикуется),
+  # freshclam в том же контейнере обновляет базы сам. Базы — в томе: иначе
+  # каждый перезапуск заново качал бы ~300 МБ и минуты не принимал файлы.
+  # Память: ~1,5 ГБ на загруженные сигнатуры.
+  # ⚠️ Первый запуск: пока базы не скачаны, clamd не отвечает, и загрузка
+  # документов получает 503 «проверка недоступна» — так задумано (fail-closed).
+  # ⚠️ database.clamav.net отдаёт базы не во все страны; если freshclam в
+  # логах получает 403, нужен зеркальный источник (DatabaseMirror).
+  clamav:
+    image: clamav/clamav:1.4
+    # Только по запросу (D-31): без профиля сервис не стартует и не держит
+    # 1,5 ГБ памяти, пока проверка выключена.
+    profiles: ["antivirus"]
+    restart: unless-stopped
+    environment:
+      # Предел потока: по умолчанию 25M, а документы бывают больше (шлюз
+      # пускает в /api/media/ до 100M). Больше предела clamd отвечает ERROR,
+      # и файл не принимается как непроверенный.
+      CLAMD_CONF_StreamMaxLength: 100M
+    volumes:
+      - clamav_db:/var/lib/clamav
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   backend-web:
     build:
       context: ./backend
@@ -732,6 +764,7 @@ services:
 
 
 volumes:
+  clamav_db:
   postgres_data:
   minio_data:
   loki_data:

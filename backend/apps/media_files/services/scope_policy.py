@@ -32,6 +32,31 @@ class ScopePolicy:
     max_mb: int | None = None  # None = fall back to global setting
     mimes: tuple[str, ...] = ()  # empty = allow all (subject to global allow-list)
     variants: tuple[str, ...] = ()
+    # Раскладка ключа «папка на владельца»: ``<scope>/<folder>/<uuid>/…``
+    # вместо ``<scope>/<yyyy>/<mm>/<uuid>/…``. Раскладка — свойство scope, а
+    # не вызова: у такого scope папка ОБЯЗАТЕЛЬНА, у остальных запрещена
+    # (``upload_service._resolve_folder``), иначе в одном префиксе смешались
+    # бы две схемы и ``file_object/2026/`` читался бы и как год, и как папка.
+    folder_layout: bool = False
+    # Хранить присланные байты как есть, без перекодирования картинок
+    # (``STRIP_EXIF``). Нужен там, где в метаданных фиксируется SHA-256
+    # документа: хэш считается по ИСХОДНЫМ байтам, и после перекодирования он
+    # описывал бы файл, которого в хранилище нет.
+    keep_original: bool = False
+    # Доступ решает объект-владелец, а не media. Обычный приватный файл media
+    # отдаёт загрузившему и любому администратору по JWT и подписывает им
+    # ссылку (``views._can_access_private`` / ``issue_signed_url``). Для
+    # документов ТЗ §21 это «вторая дверь» в обход прав на объект: счёт или
+    # договор по одному UUID. У такого scope файл отдаётся ТОЛЬКО по
+    # подписанной ссылке, которую выдаёт владелец (``apps.files``) после
+    # своей проверки, а подписать ссылку через media нельзя никому.
+    owner_gated: bool = False
+    # Проверять ли байты антивирусом до записи (ТЗ §21 [Л], htqweb/antivirus.py).
+    # Флаг scope, а не вызов в одной аппке: так проверку проходят и загрузка,
+    # и перенос старых файлов (``interface.copy_file``), и любой будущий путь
+    # записи в этот scope. Настроенный, но недоступный сканер закрывает приём
+    # (503), а не пропускает файл непроверенным.
+    antivirus: bool = False
 
 
 _POLICIES: dict[str, ScopePolicy] = {
@@ -91,13 +116,56 @@ _POLICIES: dict[str, ScopePolicy] = {
         max_mb=25,
         mimes=("application/pdf",),
         variants=(),
+        # PDF, которые согласующие прикладывают к шагу, — в том числе «Счёт
+        # на оплату» закупщика: документы, по которым платят, проверяются.
+        antivirus=True,
     ),
+    # Документы объектов по ТЗ §21 (заявка, договор, …) — байты файловой
+    # подсистемы ``apps.files`` (таблица ``file_object`` из ТЗ). «1 объект =
+    # 1 папка»: ключ ``file_object/<компания>/<владелец>/<id>/<uuid>/original``
+    # (``folder_layout``). Здесь — ПОТОЛОК: объединение форматов всех типов
+    # и максимум размера; узкие правила конкретного типа файла (справочник
+    # «Типы файлов») ``apps.files`` проверяет до записи. Картинки не
+    # перекодируются (``keep_original``): SHA-256 в карточке файла должен
+    # описывать хранимые байты. ``owner_gated`` — отдаются только по ссылке,
+    # выданной ``apps.files`` после проверки прав на объект-владельца (см.
+    # поле в ``ScopePolicy``). ``antivirus`` — ТЗ §21: «антивирусная проверка
+    # при загрузке». Не в RESTRICTED_SCOPES по той же причине, что
+    # signoff_doc: права на запись проверяет владелец, а прямая загрузка
+    # через POST /api/media/v1/files/ сюда не пройдёт — без папки этот scope
+    # файл не примет.
+    "file_object": ScopePolicy(
+        name="file_object",
+        public=False,
+        max_mb=20,
+        mimes=(
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "image/jpeg",
+            "image/png",
+            # Счёт-фактура (D-31, Q-C28). Отдаётся attachment: xml нет в
+            # списке inline (views._disposition_for).
+            "application/xml",
+        ),
+        variants=(),
+        folder_layout=True,
+        keep_original=True,
+        owner_gated=True,
+        antivirus=True,
+    ),
+    # Сюда же падает любой неизвестный scope (``get_policy``). Документы
+    # договорного контура — сканы счетов, актов, накладных, платёжных
+    # поручений, авансовых отчётов — пишутся именно сюда, поэтому scope
+    # проверяется антивирусом целиком. Предела размера у него нет, шлюз
+    # режет на 100 МБ — столько же принимает clamd (StreamMaxLength в compose).
     "generic": ScopePolicy(
         name="generic",
         public=False,
         max_mb=None,
         mimes=(),
         variants=(),
+        antivirus=True,
     ),
 }
 

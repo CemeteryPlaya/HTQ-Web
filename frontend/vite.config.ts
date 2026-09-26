@@ -364,6 +364,13 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // Файловая подсистема ТЗ §21 (apps.files). Легаси-путей без /v1/ нет —
+    // одной строки достаточно; без неё загрузка документа ушла бы в сам
+    // dev-сервер (см. предупреждение у /api/access/ выше).
+    "^/api/files/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,
