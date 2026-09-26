@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from apps.core.services import require_service
 
-from .services import center
+from .services import center, digest
 
 
 def notify(*, recipients: list[int], event: str, title: str, text: str = "", url: str = "",
@@ -47,3 +49,15 @@ def mark_all_read(user_id: int, *, company_slug: str | None) -> None:
 def delete(notification_id: str, user_id: int) -> None:
     require_service("notifications")
     center.delete(notification_id, user_id)
+
+
+def register_digest_source(key: str, fn: Callable[[int], list[dict]], *, tenant: bool) -> None:
+    """Зарегистрировать источник ежедневной сводки: ``fn(user_id)`` возвращает
+    ``[{title, url, since}]``; ``tenant=True`` — вызывается в контексте каждой
+    действующей компании пользователя.
+
+    Зовётся из ``AppConfig.ready()`` источника. ``require_service`` здесь нет
+    намеренно: регистрация не трогает БД, а выключенный центр не должен ронять
+    старт соседней аппки — сводку гейтит сама задача ``send_daily_digest``.
+    """
+    digest.register(key, fn, tenant=tenant)

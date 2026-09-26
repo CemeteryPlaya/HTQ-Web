@@ -12,3 +12,11 @@ def deliver(self, delivery_id: int) -> None:
         delivery.deliver(delivery_id)
     except delivery.RetryLater as exc:
         raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+@shared_task
+def send_daily_digest() -> int:
+    require_service("notifications")
+    from apps.notifications.services import digest
+
+    return digest.send()
