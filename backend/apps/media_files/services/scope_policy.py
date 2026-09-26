@@ -92,6 +92,23 @@ _POLICIES: dict[str, ScopePolicy] = {
         mimes=("application/pdf",),
         variants=(),
     ),
+    # Файлы документов модуля БЗО (ТЗ §21). Типы, размеры и число файлов
+    # по типу документа проверяет сам модуль (apps/bpp/services/core/files.py);
+    # здесь — общий верхний предел и список форматов. XML — для счетов-фактур
+    # (отдаётся вложением, в браузере не открывается). В RESTRICTED_SCOPES:
+    # пишет только сервер модуля, проверив права на документ.
+    "bpp_doc": ScopePolicy(
+        name="bpp_doc",
+        public=False,
+        max_mb=20,
+        mimes=(
+            "application/pdf", "image/jpeg", "image/png",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/xml", "text/xml", "text/plain", "text/csv",
+        ),
+        variants=(),
+    ),
     "generic": ScopePolicy(
         name="generic",
         public=False,
@@ -155,7 +172,7 @@ def resolve_is_public(scope: str, requested: bool | None) -> bool:
 # effectively user-writable in practice — ``news`` covers go through admin
 # news endpoints, ``chat``/``avatar``/``generic`` are ordinary user content —
 # so no extra check is added for them here.
-RESTRICTED_SCOPES = frozenset({"hr_doc", "hr_department", "task_attachment"})
+RESTRICTED_SCOPES = frozenset({"hr_doc", "hr_department", "task_attachment", "bpp_doc"})
 
 
 def authorize_scope_write(scope: str, *, is_elevated: bool) -> None:

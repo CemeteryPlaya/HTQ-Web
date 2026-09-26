@@ -139,8 +139,9 @@ def _png_bytes() -> bytes:
 # ─── pure seam unit tests ────────────────────────────────────────────────────
 
 
-def test_restricted_scopes_are_exactly_the_three_unmigrated_domains():
-    assert RESTRICTED_SCOPES == {"hr_doc", "hr_department", "task_attachment"}
+def test_restricted_scopes_are_exactly_the_listed_domains():
+    """Три домена переноса плюс ``bpp_doc`` (модуль БЗО пишет только сервером)."""
+    assert RESTRICTED_SCOPES == {"hr_doc", "hr_department", "task_attachment", "bpp_doc"}
 
 
 @pytest.mark.parametrize("scope", sorted(RESTRICTED_SCOPES))
