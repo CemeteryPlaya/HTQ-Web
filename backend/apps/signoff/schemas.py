@@ -251,6 +251,9 @@ class TaskRead(BaseModel):
     # даже там, если media выключен (см. attachments.file_url).
     file_id: Optional[str] = None
     file_url: Optional[str] = None
+    # Голос за вариант, когда было из чего выбирать (ТЗ §12.4).
+    option_key: Optional[str] = None
+    option_label: Optional[str] = None
 
 
 class ProcessStageRead(BaseModel):
@@ -301,6 +304,9 @@ class ProcessRead(BaseModel):
     # Имя инициатора (из apps.users) — только в обогащённой карточке; сосед
     # через interface получает по-прежнему один initiator_id.
     initiator_name: Optional[str] = None
+    # Варианты для решения «согласовать» у идущего процесса: исходный
+    # документ и его альтернативы. Пусто или один — выбирать не из чего.
+    options: list[dict] = Field(default_factory=list)
 
 
 # ── Решения ─────────────────────────────────────────────────────────────
@@ -310,6 +316,9 @@ class Decision(BaseModel):
     # отказе, но объект остаётся правимым (``models.ApprovalState``).
     decision: str = Field(..., pattern="^(approve|reject|rework)$")
     comment: str = Field("", max_length=2000)
+    # Ключ варианта из ``ProcessRead.options`` — обязателен у «согласовать»,
+    # когда вариантов больше одного.
+    option_key: str = Field("", max_length=64)
 
 
 class Rework(BaseModel):

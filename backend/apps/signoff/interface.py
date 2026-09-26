@@ -31,6 +31,7 @@ from apps.signoff.models import (
     ApprovalProcess,
     ApprovalRoute,
     ApprovalState,
+    ApprovalTask,
     ProcessState,
     StageState,
     TaskState,
@@ -38,6 +39,9 @@ from apps.signoff.models import (
 from apps.signoff.services import attachments, engine, presentation, registry
 from apps.signoff.services.engine import (
     AlreadyInApproval,
+    OptionError,
+    OptionRejected,
+    OptionRequired,
     ProcessStillRunning,
     RouteNotConfigured,
     RouteUnusable,
@@ -63,6 +67,9 @@ __all__ = [
     # аппки, и брать его ей больше неоткуда.
     "SubjectLocked",
     "ProcessStillRunning",
+    "OptionError",
+    "OptionRequired",
+    "OptionRejected",
     "UnknownSubject",
     "RouteConflict",
     "configure_route",
@@ -72,6 +79,7 @@ __all__ = [
     "rework_process",
     "get_process",
     "get_process_for",
+    "final_option",
     "approval_state_of",
     "count_awaiting",
     "has_active_route",
@@ -174,6 +182,38 @@ def get_process_for(subject_type: str, subject_id: int, *,
                .filter(subject_type=subject_type, subject_id=subject_id)
                .order_by("-created_at", "-id").first())
     return None if process is None else serialize_process(process, enrich=enrich)
+
+
+def final_option(subject_type: str, subject_id: int) -> dict | None:
+    """Какой вариант принят последним согласованным кругом объекта.
+
+    Голос последнего этапа — решающий (ТЗ §12.4: «если голоса разошлись,
+    решающим является голос ГД на последнем этапе»; при единогласии он
+    совпадает с остальными). Внутри этапа — последний по времени голос
+    «согласовать». ``{"key", "label", "actor_id", "acted_at"}``; ``None`` —
+    согласованного круга нет или выбирать было не из чего (ключ пуст).
+
+    Зовётся из ``on_approved`` предметной аппки: к этому моменту процесс уже
+    помечен согласованным (``engine._finish``), а транзакция та же.
+    """
+    require_service("signoff")
+
+    process = (ApprovalProcess.objects
+               .filter(subject_type=subject_type, subject_id=subject_id,
+                       state=ProcessState.APPROVED)
+               .order_by("-created_at", "-id").first())
+    if process is None:
+        return None
+    last_order = (process.stages.order_by("-order")
+                  .values_list("order", flat=True).first())
+    task = (ApprovalTask.objects
+            .filter(stage__process=process, stage__order=last_order,
+                    state=TaskState.APPROVED)
+            .order_by("-acted_at", "-id").first())
+    if task is None or not task.option_key:
+        return None
+    return {"key": task.option_key, "label": task.option_label,
+            "actor_id": task.user_id, "acted_at": task.acted_at}
 
 
 def approval_state_of(subject_type: str, subject_id: int) -> str:

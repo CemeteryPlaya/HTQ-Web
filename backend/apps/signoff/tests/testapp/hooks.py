@@ -18,6 +18,8 @@ CALLS: list[tuple[str, int]] = []
 def reset() -> None:
     CALLS.clear()
     EVENTS.clear()
+    OPTIONS.clear()
+    OPTION_VOTES.clear()
 
 
 def _on_started(subject_id: int) -> None:
@@ -131,6 +133,29 @@ def _check_requirement(subject_id: int, key: str) -> str | None:
 EVENTS: list[tuple[int, str, dict]] = []
 
 
+# ── варианты голоса (исходный документ и его альтернативы) ─────────────
+#
+# ``OPTIONS`` — какие варианты объявлены у документа: {pk: [{key, label}]}.
+# Пусто — выбирать не из чего (так у всех документов, пока тест не
+# объявил варианты). ``OPTION_VOTES`` — доменная запись голосов (D-26).
+
+OPTIONS: dict[int, list[dict]] = {}
+OPTION_VOTES: list[tuple[int, int, int, str]] = []
+OPTION_BLOCKED = "blocked"
+
+
+def _options(subject_id: int) -> list[dict]:
+    return OPTIONS.get(subject_id, [])
+
+
+def _check_option(subject_id: int, key: str) -> str | None:
+    return "за этот вариант голосовать нельзя" if key == OPTION_BLOCKED else None
+
+
+def _on_option(subject_id: int, stage_order: int, user_id: int, option_key: str) -> None:
+    OPTION_VOTES.append((subject_id, stage_order, user_id, option_key))
+
+
 def _on_event(subject_id: int, kind: str, payload: dict) -> None:
     EVENTS.append((subject_id, kind, payload))
 
@@ -155,4 +180,7 @@ def register() -> None:
         on_event=_on_event,
         requirement_fields=_requirement_fields,
         check_requirement=_check_requirement,
+        options=_options,
+        check_option=_check_option,
+        on_option=_on_option,
     )

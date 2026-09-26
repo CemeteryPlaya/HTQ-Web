@@ -202,6 +202,26 @@ class CommentRequired(SignoffError):
     """
 
 
+class OptionError(SignoffError):
+    """Голос за вариант не принят. 422, а не 409 (мастер-план БЗО, B1.3):
+    запрос не противоречит состоянию процесса — в нём не хватает или
+    неверно поле ``option_key``."""
+
+
+class OptionRequired(OptionError):
+    """У объекта есть варианты (исходный документ и его альтернативы), а
+    «согласовать» не назвало, какой. Молча согласовать исходный значило бы
+    отдать голос против предложения, которого человек, может быть, и не
+    видел — поэтому выбор обязателен, в том числе у пакетного «одобрить
+    всё»."""
+
+
+class OptionRejected(OptionError):
+    """Неизвестный ключ варианта или предметная аппка объяснила, почему за
+    него голосовать нельзя (альтернатива дороже, а остатка статьи не
+    хватает)."""
+
+
 def _now() -> datetime:
     return datetime.now(_tz.utc)
 
@@ -504,8 +524,14 @@ def _active_user_ids(user_ids) -> set[int]:
 
 @transaction.atomic
 def act(*, task_id: int, actor_id: int, decision: str,
-        comment: str = "") -> ApprovalProcess:
+        comment: str = "", option_key: str = "") -> ApprovalProcess:
     """Принять решение по запросу и продвинуть процесс.
+
+    ``option_key`` — ключ варианта, когда предметная аппка предложила выбор
+    (``registry.options_for``): «согласовать» тогда означает «согласовать
+    ЭТОТ вариант». Голос хранится в запросе и уходит предметной аппке
+    (``on_option``); какой вариант в итоге принят, решает она сама по
+    голосам (``interface.final_option``).
 
     Возвращает процесс в состоянии ПОСЛЕ решения.
     """
@@ -566,19 +592,47 @@ def act(*, task_id: int, actor_id: int, decision: str,
         if reason:
             raise SubjectRequirementUnmet(
                 f"На этапе «{stage.name}» сначала нужно: {reason}")
+    # Выбор варианта — тем же порядком: только на согласовании и ДО записи.
+    chosen_key, chosen_label = "", ""
+    if decision == APPROVE:
+        options = registry.options_for(process.subject_type, process.subject_id)
+        if len(options) > 1:
+            labels = {item["key"]: item["label"] for item in options}
+            if not option_key:
+                raise OptionRequired(
+                    "К документу поданы альтернативы — выберите, какой вариант "
+                    "вы согласуете: исходный или одну из альтернатив")
+            if option_key not in labels:
+                raise OptionRejected(
+                    "Этого варианта больше нет среди предложенных — обновите "
+                    "страницу и выберите снова")
+            reason = registry.check_option_for(
+                process.subject_type, process.subject_id, option_key)
+            if reason:
+                raise OptionRejected(reason)
+            chosen_key, chosen_label = option_key, labels[option_key]
 
     task.state = (TaskState.APPROVED if decision == APPROVE
                   else _DECISION_OUTCOME[decision][0])
     task.comment = comment
+    task.option_key = chosen_key
+    task.option_label = chosen_label[:300]
     task.acted_at = _now()
-    task.save(update_fields=["state", "comment", "acted_at"])
+    task.save(update_fields=["state", "comment", "option_key", "option_label", "acted_at"])
+    if chosen_key:
+        # Доменная запись голоса (D-26) — в этой же транзакции: упади она,
+        # откатится и решение.
+        registry.on_option_for(process.subject_type, process.subject_id,
+                               stage.order, actor_id, chosen_key)
 
-    _log(process, _EVENT_KIND[decision], actor_id=actor_id,
-         payload={"stage": stage.name, "task_id": task.pk, "comment": comment,
-                  # Какой именно документ подписан — часть ответа на «на
-                  # основании чего согласовано», и искать его в другом месте
-                  # журнала не должно быть нужно.
-                  "file_id": task.file_id or None})
+    payload = {"stage": stage.name, "task_id": task.pk, "comment": comment,
+               # Какой именно документ подписан — часть ответа на «на
+               # основании чего согласовано», и искать его в другом месте
+               # журнала не должно быть нужно.
+               "file_id": task.file_id or None}
+    if chosen_key:
+        payload.update({"option_key": chosen_key, "option_label": chosen_label})
+    _log(process, _EVENT_KIND[decision], actor_id=actor_id, payload=payload)
     _emit(process, "task_decided", {"task_id": task.pk, "decision": decision,
                                     "actor_id": actor_id, "stage": stage.name})
 

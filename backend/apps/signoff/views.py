@@ -50,7 +50,7 @@ from .models import (
 )
 from .services import attachments, engine, presentation, registry
 from .services import route_service as routes
-from .services.engine import SignoffError
+from .services.engine import OptionError, SignoffError
 from .services.registry import UnknownSubject
 from .services.route_service import RouteConflict
 
@@ -413,7 +413,12 @@ class TaskDecisionView(SignoffView):
         try:
             process = engine.act(task_id=task_id,
                                  actor_id=request.token.user_id,
-                                 decision=data.decision, comment=data.comment)
+                                 decision=data.decision, comment=data.comment,
+                                 option_key=data.option_key)
+        except OptionError as exc:
+            # Не хватает или неверно поле option_key — 422, а не 409
+            # (мастер-план БЗО, B1.3). Раньше CONFLICTS: OptionError — его наследник.
+            return json_error(str(exc), 422)
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.ProcessRead.model_validate(

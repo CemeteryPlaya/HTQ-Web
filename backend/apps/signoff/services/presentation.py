@@ -20,6 +20,7 @@ from apps.signoff.models import (
     ApprovalProcess,
     ApprovalProcessStage,
     ApprovalTask,
+    ProcessState,
     StageState,
     TaskState,
 )
@@ -84,6 +85,12 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         ],
     }
 
+    if enrich and process.state == ProcessState.PENDING:
+        # Между чем выбирает тот, чей ход: без этого кнопке «Согласовать»
+        # нечего предложить. Только у идущего процесса — у завершённого
+        # выбор уже сделан и лежит в голосах.
+        card["options"] = registry.options_for(process.subject_type, process.subject_id)
+
     if enrich:
         described = describe_many([(process.subject_type, process.subject_id)])
         card_info = described.get((process.subject_type, process.subject_id), {})
@@ -121,6 +128,10 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
         "comment": task.comment,
         "acted_at": task.acted_at,
         "file_id": task.file_id or None,
+        # За какой вариант отдан голос, если был выбор (исходный документ или
+        # альтернатива) — следующие этапы видят голоса предыдущих (ТЗ §12.4).
+        "option_key": task.option_key or None,
+        "option_label": task.option_label or None,
     }
     if urls and task.file_id:
         card["file_url"] = attachments.file_url(task.file_id)

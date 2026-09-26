@@ -103,6 +103,37 @@ class CheckRequirement(Protocol):
         """
 
 
+class Options(Protocol):
+    def __call__(self, subject_id: int) -> list[dict]:
+        """Варианты, между которыми выбирает согласующий: ``[{"key", "label"}]``.
+
+        Первый — «как есть» (исходный документ), остальные — предложенные
+        замены (альтернативы снабженца, ТЗ §12). Пока вариант один или список
+        пуст, выбирать не из чего, и «согласовать» работает как всегда. Когда
+        их больше одного, решение «согласовать» обязано назвать ключ
+        (``option_key``) — он сохраняется в запросе и виден следующим этапам.
+        """
+
+
+class CheckOption(Protocol):
+    def __call__(self, subject_id: int, key: str) -> str | None:
+        """Можно ли отдать голос за вариант ``key``. ``None`` — можно; строка —
+        почему нет, для человека (альтернатива дороже, а остатка статьи не
+        хватает). Тот же контракт, что у ``CheckRequirement``."""
+
+
+class OnOption(Protocol):
+    def __call__(self, subject_id: int, stage_order: int, user_id: int,
+                 option_key: str) -> None:
+        """Голос за вариант записан — в той же транзакции, что решение.
+
+        Доменная запись голоса (мастер-план БЗО, D-26: «гибрид — доменная
+        запись голоса + общая возможность signoff»): предметная аппка ведёт
+        свой журнал голосов, signoff — свой, на запросе. Исключение
+        откатывает решение целиком.
+        """
+
+
 @dataclass(frozen=True)
 class Subject:
     """Что предметная аппка рассказала signoff о своём типе объектов.
@@ -183,6 +214,9 @@ class Subject:
     on_event: OnEvent | None = None
     requirement_fields: RequirementFields | None = None
     check_requirement: CheckRequirement | None = None
+    options: Options | None = None
+    check_option: CheckOption | None = None
+    on_option: OnOption | None = None
     takes_scope_fact_fields: bool = False
     takes_scope_approver_fields: bool = False
     takes_scope_requirement_fields: bool = False
@@ -206,7 +240,10 @@ def register_subject(subject_type: str, *, label: str, model: type,
                      approver_fields: ApproverFields | None = None,
                      on_event: OnEvent | None = None,
                      requirement_fields: RequirementFields | None = None,
-                     check_requirement: CheckRequirement | None = None) -> Subject:
+                     check_requirement: CheckRequirement | None = None,
+                     options: Options | None = None,
+                     check_option: CheckOption | None = None,
+                     on_option: OnOption | None = None) -> Subject:
     """Объявить тип объектов согласуемым.
 
     Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
@@ -264,6 +301,13 @@ def register_subject(subject_type: str, *, label: str, model: type,
             f"«{subject_type}»: requirement_fields объявлены без "
             f"check_requirement — требование будет некому проверить"
         )
+    if (check_option is not None or on_option is not None) and options is None:
+        # Та же пара, что requirement_fields/check_requirement: голосовать
+        # не за что, а проверка или журнал голоса объявлены.
+        raise ValueError(
+            f"«{subject_type}»: check_option/on_option объявлены без options — "
+            f"вариантов для голоса нет"
+        )
     # Сами ``fact_fields()`` здесь НЕ вызываются: регистрация идёт из
     # AppConfig.ready(), где обращаться в БД нельзя (см. докстринг
     # interface.py), а варианты выбора приходят как раз из справочника.
@@ -278,6 +322,7 @@ def register_subject(subject_type: str, *, label: str, model: type,
         approvers=approvers, approver_fields=approver_fields,
         on_event=on_event,
         requirement_fields=requirement_fields, check_requirement=check_requirement,
+        options=options, check_option=check_option, on_option=on_option,
         takes_scope_fact_fields=_takes_scope(fact_fields),
         takes_scope_approver_fields=_takes_scope(approver_fields),
         takes_scope_requirement_fields=_takes_scope(requirement_fields),
@@ -389,6 +434,36 @@ def check_requirement_for(subject_type: str, subject_id: int, key: str) -> str |
         return None
     reason = subject.check_requirement(subject_id, key)
     return str(reason) if reason else None
+
+
+def options_for(subject_type: str, subject_id: int) -> list[dict]:
+    """Варианты выбора на согласовании; пусто — выбирать не из чего.
+
+    Ошибку не глушим: список решает, что именно согласуют, и сломанный
+    колбэк обязан быть виден, а не молча превращать выбор в «как есть».
+    """
+    subject = get_subject(subject_type)
+    if subject.options is None:
+        return []
+    return [{"key": str(item["key"]), "label": str(item["label"])}
+            for item in (subject.options(subject_id) or [])]
+
+
+def check_option_for(subject_type: str, subject_id: int, key: str) -> str | None:
+    subject = get_subject(subject_type)
+    if subject.check_option is None:
+        return None
+    reason = subject.check_option(subject_id, key)
+    return str(reason) if reason else None
+
+
+def on_option_for(subject_type: str, subject_id: int, stage_order: int,
+                  user_id: int, option_key: str) -> None:
+    """Сообщить предметной аппке голос за вариант (``OnOption``). Ошибку не
+    глушим: доменная запись голоса — часть решения, а не его украшение."""
+    subject = get_subject(subject_type)
+    if subject.on_option is not None:
+        subject.on_option(subject_id, stage_order, user_id, option_key)
 
 
 def scope_for(subject_type: str, subject_id: int) -> str:

@@ -346,6 +346,7 @@ const ProcessDetail = () => {
                                 attachedFileId: myPending.task.file_id,
                                 stageName: myPending.stage.name,
                                 requirementLabel: myPending.stage.requirement_label,
+                                options: process.options ?? [],
                               })
                             }
                           >

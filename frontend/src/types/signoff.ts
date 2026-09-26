@@ -274,6 +274,10 @@ export interface ProcessTask {
   /** Подписанная ссылка на него — короткоживущая, и её может не быть даже
    *  при непустом `file_id`, если media недоступен. */
   file_url: string | null;
+  /** За какой вариант отдан голос «согласовать», когда было из чего выбирать
+   *  (исходный документ или альтернатива, ТЗ §12.4). */
+  option_key?: string | null;
+  option_label?: string | null;
 }
 
 export interface ProcessStage {
@@ -327,6 +331,9 @@ export interface ApprovalProcess {
    *  если инициатор неизвестен или пользователь удалён — тогда остаётся
    *  только `initiator_id`. */
   initiator_name: string | null;
+  /** Варианты для «согласовать» у идущего процесса: исходный документ и его
+   *  альтернативы. Меньше двух — выбирать не из чего. */
+  options?: { key: string; label: string }[];
 }
 
 /** Строка списка «ждёт моего решения». */
@@ -418,6 +425,9 @@ export interface DecisionInput {
    *  для правки. Не то же, что `reject` (см. `ProcessState`). */
   decision: 'approve' | 'reject' | 'rework';
   comment?: string;
+  /** Ключ варианта из `ApprovalProcess.options` — обязателен у «согласовать»,
+   *  когда вариантов больше одного. */
+  option_key?: string;
 }
 
 /** Возврат на доработку по УЖЕ ЗАКРЫТОМУ кругу (`POST /processes/:id/rework`).

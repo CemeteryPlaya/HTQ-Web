@@ -729,6 +729,12 @@ class ApprovalTask(models.Model):
     # Живёт на задаче, а не на предметном объекте, потому что это
     # свидетельство КОНКРЕТНОГО решения: «вот что подписал этот человек на
     # этом этапе». Перепишет ли предметная аппка ссылку себе — её дело.
+    # Вариант, за который отдан голос «согласовать», когда предметная аппка
+    # предложила выбор (``registry.options_for``: исходный документ или его
+    # альтернатива, ТЗ §12). Ключ и подпись — снимком: предложение могут
+    # отозвать, а голос обязан остаться читаемым.
+    option_key = models.CharField(max_length=64, blank=True, default="", db_default="")
+    option_label = models.CharField(max_length=300, blank=True, default="", db_default="")
     file_id = models.CharField(max_length=64, null=True, blank=True,
                                verbose_name="Приложенный документ")
     acted_at = models.DateTimeField(null=True, blank=True)
