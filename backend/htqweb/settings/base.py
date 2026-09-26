@@ -136,7 +136,7 @@ INSTALLED_APPS = [
     "apps.refdata",        # справочники, public · /api/refdata/v1/
     "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
     "apps.project",        # «Проект» · /api/project/v1/
-    "apps.bpp",            # закупки и оплаты · /api/bpp/v1/
+    "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
@@ -145,7 +145,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —

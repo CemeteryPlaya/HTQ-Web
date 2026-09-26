@@ -7,4 +7,11 @@
 Здесь — только ``include`` подмодулей.
 """
 
-urlpatterns: list = []
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path("history/<str:object_type>/<str:object_id>", views.object_history),
+    path("history/<str:object_type>/<str:object_id>/", views.object_history),
+]

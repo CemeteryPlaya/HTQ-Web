@@ -27,5 +27,7 @@ def test_drop_is_idempotent():
 
 
 @pytest.mark.django_db
-def test_tenant_apps_are_the_four_domain_apps(settings):
-    assert settings.TENANT_APPS == ("hr", "tasks", "contracts", "signoff")
+def test_tenant_apps_are_the_fixed_domain_apps(settings):
+    # Состав фиксирован архитектурным решением: новая тенантная аппка
+    # добавляется сюда осознанно (модуль БЗО — bpp, мастер-план D-01).
+    assert settings.TENANT_APPS == ("hr", "tasks", "contracts", "signoff", "bpp")

@@ -29,7 +29,9 @@ def test_json_snapshot_lists_registry_and_both_schemas(company_schema):
     assert "contracts_agreement" in data["schemas"]["public"]["tables"]
     assert "contracts_agreement" in data["schemas"][schema]["tables"]
     assert "signoff_approvalroute" in data["schemas"][schema]["tables"]
-    assert set(data["schemas"][schema]["apps"]) == {"hr", "tasks", "contracts", "signoff"}
+    from django.conf import settings
+
+    assert set(data["schemas"][schema]["apps"]) == set(settings.TENANT_APPS)
     assert data["exact"] is False
 
 
