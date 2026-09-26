@@ -135,7 +135,7 @@ INSTALLED_APPS = [
     # но в TENANT_APPS попадают вместе с первой миграцией (задачи A1.3, A1.1).
     "apps.refdata",        # справочники, public · /api/refdata/v1/
     "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
-    "apps.project",        # «Проект» · /api/project/v1/
+    "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
     "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
 ]
 
@@ -145,7 +145,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —

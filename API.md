@@ -1378,6 +1378,22 @@ schema the platform can run on.
 
 ---
 
+## `apps.project` — `/api/project/v1`
+
+«Проект» модуля БЗО (тенантная аппка, D-02). Гейт `module="project"`; поверх
+него — узлы: создание и правка — `project.projects` (`create`/`edit`),
+участники — `project.members` (`edit`), иначе 403 `E-ACC-01`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET projects` (`?q=`, `?mine=1`) | Поиск без архива; `mine=1` — только где я участник |
+| `POST projects` | Создать; повтор кода — 422 `E-PRJ-01` |
+| `GET` / `PATCH projects/<id>` | Карточка / правка (смена руководителя добавляет его в участники) |
+| `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
+| `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
+
+---
+
 ## `apps.refdata` — `/api/refdata/v1`
 
 Общие справочники модуля БЗО: одна копия на группу в схеме `public` (D-03).

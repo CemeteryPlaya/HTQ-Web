@@ -132,6 +132,26 @@ def find_project_by_name(name: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def projects_without_ref() -> list[dict]:
+    """Проекты доски без ссылки на «Проект» БЗО — для ``project_link_tasks``.
+
+    Ровно ``id`` и ``name``: своего кода у доски нет, код «Проекта» команда
+    выводит из ``id``.
+    """
+    require_service("tasks")
+    from .models import Project
+
+    return list(Project.objects.filter(project_ref="").order_by("id").values("id", "name"))
+
+
+def set_project_ref(project_id: int, project_ref: str) -> None:
+    """Записать ссылку доски на «Проект» БЗО (строка UUID, не FK)."""
+    require_service("tasks")
+    from .models import Project
+
+    Project.objects.filter(pk=project_id).update(project_ref=project_ref)
+
+
 class ContractorLinkConflict(Exception):
     """Связать партнёра с контрагентом нельзя: партнёр уже за другим
     контрагентом, БИН/ИИН пары расходится и т. п. Текст — для человека,

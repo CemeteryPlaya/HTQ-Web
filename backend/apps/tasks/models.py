@@ -652,6 +652,10 @@ class Project(models.Model):
     # Р2: FK-less — users/hr own these rows, resolved via their interface.
     owner_id = models.IntegerField(null=True, blank=True, db_index=True)
     department_id = models.IntegerField(null=True, blank=True, db_index=True)
+    # Ссылка на «Проект» модуля БЗО (apps.project, D-02): строка UUID, не FK —
+    # межаппный FK запрещён. Пусто у проектов, ещё не связанных командой
+    # manage.py project_link_tasks.
+    project_ref = models.CharField(max_length=36, default="", blank=True, db_default="")
 
     # Объекты, на которых идёт проект. Многие-ко-многим, а не FK на Site:
     # один объект обслуживает несколько проектов, в том числе
