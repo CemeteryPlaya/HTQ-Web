@@ -6,6 +6,8 @@
 > - исполнитель A — [2026-09-26-bpp-stage0-executor-a.md](2026-09-26-bpp-stage0-executor-a.md);
 > - исполнитель B — [2026-09-26-bpp-stage0-executor-b.md](2026-09-26-bpp-stage0-executor-b.md).
 >
+> Этап 1: [A](2026-09-27-bpp-stage1-executor-a.md), [B](2026-09-27-bpp-stage1-executor-b.md).
+>
 > Детальные планы следующих этапов опираются на уже написанный код предыдущих — поэтому пишутся не заранее, а к старту этапа.
 
 **Goal:** Реализовать модуль «Бюджет, закупки и оплаты по проектам» по ТЗ v1.0: лимиты по статьям бюджета проекта → заявки → план закупок → договоры и счета → решение ФД и оплата → сверка с банковской выпиской, плюс альтернативы снабженца и KPI. Двумя исполнителями, параллельно, без пересечения файлов.
@@ -36,7 +38,7 @@
 
 **Правила:**
 1. **Ветки не создаём** (CLAUDE.md). Каждый работает только в своей ветке. Код соседа берём так: `git fetch origin && git merge origin/new-module-BPP-<сосед>`.
-2. **Точки стыковки (handoff)** перечислены в каждом этапе. Выпускающий исполнитель пушит ветку и пишет соседу, какие интерфейсы готовы. Принимающий мерджит к себе до того, как начнёт зависимую задачу.
+2. **Мерджит ветки пользователь** (решение 26.09): сначала выполняются этапы, потом мердж. Исполнители не мерджат ветки друг друга. Зависимости внутри этапа делаются через контракты §2.6 и через регистрацию (источник сводки signoff регистрируется в центре уведомлений, только если тот установлен). Точки стыковки в этапах ниже значат «что нужно слить до старта зависимой задачи» — когда синхронизировать ветки, решает пользователь.
 3. **Изменения signoff** делает B и присылает A на подтверждение до мерджа (ответ Q-A02). Изменения `access`/`htqweb`/`core` делает A и присылает B на ревью, если они меняют контракт, который B использует.
 4. **Миграции:**
    - одна цепочка на аппку;
@@ -315,9 +317,11 @@ def member_project_ids(user_id: int) -> list[str]: ...
 def search_projects(query: str, *, user_id: int, only_member: bool, limit: int = 20) -> list[dict]: ...
 
 # apps/notifications/interface.py  (A1.5)
-def notify(*, recipients: list[int], event: str, title: str, text: str, url: str,
-           company_slug: str | None, target_type: str, target_id: str,
-           actor_id: int | None = None) -> None: ...          # запись + outbox после коммита
+def notify(*, recipients: list[int], event: str, title: str, text: str = "", url: str = "",
+           company_slug: str | None, target_type: str = "", target_id: str = "",
+           actor_id: int | None = None, actor_avatar_url: str | None = None,
+           dedupe_window_seconds: int | None = None) -> list[str]: ...  # запись + outbox после коммита
+def register_digest_source(key: str, fn, *, tenant: bool) -> None: ...  # fn(user_id) -> [{title, url, since}]; signoff регистрирует pending_for_user (B1.3)
 
 # apps/hr/interface.py  (B1.1)
 def resolve_position_users(position_ids, *, on_date: date | None = None) -> dict[int, list[int]]: ...  # + временные исполнители
