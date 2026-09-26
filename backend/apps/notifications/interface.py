@@ -1,5 +1,49 @@
-"""Межаппный интерфейс центра уведомлений.
+"""Межаппный интерфейс центра уведомлений (мастер-план §2.6)."""
 
-``notify(...)`` появляется в задаче A1.5 (сигнатура — мастер-план §2.6);
-первой строкой зовёт ``require_service("notifications")``.
-"""
+from __future__ import annotations
+
+from apps.core.services import require_service
+
+from .services import center
+
+
+def notify(*, recipients: list[int], event: str, title: str, text: str = "", url: str = "",
+           company_slug: str | None, target_type: str = "", target_id: str = "",
+           actor_id: int | None = None, actor_avatar_url: str | None = None) -> list[str]:
+    require_service("notifications")
+    return center.notify(recipients=recipients, event=event, title=title, text=text, url=url,
+                         company_slug=company_slug, target_type=target_type,
+                         target_id=target_id, actor_id=actor_id,
+                         actor_avatar_url=actor_avatar_url)
+
+
+def latest(user_id: int, *, company_slug: str | None, limit: int = 50) -> list[dict]:
+    require_service("notifications")
+    return center.latest(user_id, company_slug=company_slug, limit=limit)
+
+
+def history(user_id: int, *, company_slug: str | None, page: int = 1, limit: int = 25,
+            status: str = "all", target_type: str | None = None) -> dict:
+    require_service("notifications")
+    return center.history(user_id, company_slug=company_slug, page=page, limit=limit,
+                          status=status, target_type=target_type)
+
+
+def mark_read(notification_id: str, user_id: int) -> None:
+    require_service("notifications")
+    center.mark_read(notification_id, user_id)
+
+
+def mark_unread(notification_id: str, user_id: int) -> None:
+    require_service("notifications")
+    center.mark_unread(notification_id, user_id)
+
+
+def mark_all_read(user_id: int, *, company_slug: str | None) -> None:
+    require_service("notifications")
+    center.mark_all_read(user_id, company_slug=company_slug)
+
+
+def delete(notification_id: str, user_id: int) -> None:
+    require_service("notifications")
+    center.delete(notification_id, user_id)

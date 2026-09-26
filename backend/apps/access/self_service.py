@@ -603,10 +603,14 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     "approvals": {},
     # Модуль БЗО (docs/plans/2026-09-26-bpp-master-plan.md): аппки рождаются
     # под гейтом — каждая ручка с первого дня под api_view(module=…, level=…).
-    # Центр уведомлений — самообслуживание: записи "self" заводит задача A1.5
-    # вместе с ручками.
     "project": {},
     "refdata": {},
-    "notifications": {},
+    # Центр уведомлений (задача A1.5): лента, прочтение и каналы — строго
+    # свои, получатель всегда request.token.user_id, параметра «чей» нет.
+    "notifications": {
+        "feed": "self", "feed_history": "self", "read_one": "self",
+        "unread_one": "self", "read_all": "self", "delete_one": "self",
+        "_prefs_get": "self", "_prefs_patch": "self", "telegram_link": "self",
+    },
     "bpp": {},
 }

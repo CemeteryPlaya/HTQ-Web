@@ -28,6 +28,7 @@ For context, the platform's history is a full circle: it started as a Django mon
   - справочники (НДС, МРП, валюты, статьи) ведёт управляющая компания;
   - отдельный центр уведомлений;
   - доработки signoff — только флагами маршрута, кадровые `hr.*` не затрагиваются.
+- **Центр уведомлений** `apps.notifications` (`public`): соседи шлют через `notifications.interface.notify(...)`; доставка по e-mail/Telegram — outbox `Delivery` с повтором Celery, уже отправленная не дублируется. Бот пользователей — ОТДЕЛЬНЫЙ от бота алертов (`NOTIFY_TELEGRAM_BOT_TOKEN/_BOT_NAME/_WEBHOOK_SECRET`, проброшены во все три compose-файла); вебхук `telegram/webhook` без секрета отвечает 403.
 - **Роли модуля** — восемь системных ролей `bpp-*` (ФД, ТД, ОД, ГД, БУХ, СН, ПМ, АДМ; `access/0014`, матрица [docs/plans/2026-09-27-bpp-roles-matrix.md](docs/plans/2026-09-27-bpp-roles-matrix.md), утверждает Алгазы). Узлы-операции `bpp.*.*` и группы статей несут явную строку у КАЖДОЙ роли. Выдача должностям компании — `manage.py bpp_assign_roles --company <slug> [--dry-run]`; `bpp-adm` — лично.
   
   Пилот — управляющая компания. Выкатка — после готовности модуля, данные `contracts` переносятся командой с репетицией на дампе.

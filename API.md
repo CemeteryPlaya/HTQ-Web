@@ -1394,6 +1394,25 @@ schema the platform can run on.
 
 ---
 
+## `apps.notifications` — `/api/notifications/v1`
+
+Центр уведомлений платформы (`public`). Все ручки — самообслуживание
+(`self` в `apps/access/self_service.py`): получатель всегда
+`request.token.user_id`, параметра «чьи» нет; чужое уведомление — 404. Лента
+на поддомене компании — уведомления этой компании плюс общие.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET notifications` (`?limit=`, ≤200) | Последние уведомления |
+| `GET notifications/history` (`?page=&limit=&status=all\|unread\|read&target_type=`) | Страница истории + `unread_total` |
+| `POST notifications/<id>/read`, `…/unread`, `POST notifications/read-all` | Прочтение, 204 |
+| `DELETE notifications/<id>/delete` | Удалить своё, 204 |
+| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked`; выключить все — 422 `E-NTF-01` |
+| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин) |
+| `POST telegram/webhook` | Вебхук бота, `auth=None`; без верного `X-Telegram-Bot-Api-Secret-Token` — 403 |
+
+---
+
 ## `apps.refdata` — `/api/refdata/v1`
 
 Общие справочники модуля БЗО: одна копия на группу в схеме `public` (D-03).

@@ -405,6 +405,12 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 # Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
 # сводку когда-нибудь захотят слать другим ботом.
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# Бот уведомлений пользователей (D-24, Q-E20) — ОТДЕЛЬНЫЙ от бота алертов
+# Grafana: токен алертов не должен попадать в пользовательский контур.
+# Пусто — канал Telegram выключен для всех (доставки помечаются skipped).
+NOTIFY_TELEGRAM_BOT_TOKEN = env("NOTIFY_TELEGRAM_BOT_TOKEN", "")
+NOTIFY_TELEGRAM_BOT_NAME = env("NOTIFY_TELEGRAM_BOT_NAME", "")
+NOTIFY_TELEGRAM_WEBHOOK_SECRET = env("NOTIFY_TELEGRAM_WEBHOOK_SECRET", "")
 # А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
 # contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
 # там), и продублировать его ещё и здесь значило бы завести вторую правду о
