@@ -9,7 +9,6 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 import { Bell, Mail, Send } from 'lucide-react';
 
 import {
@@ -22,6 +21,7 @@ import { Header } from '@/components/Header';
 import { BackToProfile } from '@/components/BackToProfile';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { reportApiError } from '@/lib/apiError';
 
 type Channel = 'bell' | 'email' | 'telegram';
 
@@ -39,7 +39,7 @@ export default function NotificationSettings() {
   const save = useMutation({
     mutationFn: async (body: NotificationPrefsPatch) => (await notificationsApi.savePrefs(body)).data,
     onSuccess: (next: NotificationPrefs) => queryClient.setQueryData(QUERY_KEY, next),
-    onError: () => toast.error(t('notifications.settings.saveError', 'Не удалось сохранить настройки')),
+    onError: (error) => reportApiError(error, t('notifications.settings.saveError', 'Не удалось сохранить настройки')),
   });
 
   const link = useMutation({
@@ -47,7 +47,7 @@ export default function NotificationSettings() {
     onSuccess: ({ url }) => {
       window.open(url, '_blank', 'noopener,noreferrer');
     },
-    onError: () => toast.error(t('notifications.settings.linkError', 'Не удалось получить ссылку на бота')),
+    onError: (error) => reportApiError(error, t('notifications.settings.linkError', 'Не удалось получить ссылку на бота')),
   });
 
   const enabledCount = prefs ? [prefs.bell, prefs.email, prefs.telegram].filter(Boolean).length : 0;
