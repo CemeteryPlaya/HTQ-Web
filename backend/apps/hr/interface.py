@@ -328,15 +328,23 @@ def legacy_key_nodes() -> dict[str, tuple[str, tuple[str, ...]]]:
     return {key: (node, tuple(flags)) for key, (node, flags) in KEY_TO_NODE.items()}
 
 
-def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
+def resolve_position_users(position_ids: list[int], *,
+                           on_date: date | None = None) -> dict[int, list[int]]:
     """Resolve HR positions to their current, usable platform accounts.
 
     The answer deliberately contains only employees who are active, not soft
     deleted, linked to an account, and whose account is active.  This keeps a
     route declarative ("financial controller") while a live approval task
     remains attributable to one concrete JWT identity.
+
+    Кроме держателей — временные исполнители должности, действующие на
+    ``on_date`` (по умолчанию сегодня; мастер-план БЗО, D-22): так этап
+    должности, чей держатель в отпуске или ещё не назначен, получает
+    исполнителя. Держатели идут первыми, исполнители — за ними, без дублей.
     """
     require_service("hr")
+    from apps.hr.services import acting_service
+
     ids = list(dict.fromkeys(position_ids))
     if not ids:
         return {}
@@ -350,15 +358,37 @@ def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
             position__is_active=True,
         ).values("position_id", "user_id")
     )
+    acting = acting_service.active_user_ids(ids, on_date or timezone.localdate())
+    candidates: dict[int, list[int]] = {position_id: [] for position_id in ids}
+    for row in rows:
+        candidates[row["position_id"]].append(row["user_id"])
+    for position_id, user_ids in acting.items():
+        candidates[position_id].extend(user_ids)
+
     briefs = {row["id"]: row for row in users.get_users_brief(
-        [row["user_id"] for row in rows]
+        [user_id for user_ids in candidates.values() for user_id in user_ids]
     )}
     resolved: dict[int, list[int]] = {position_id: [] for position_id in ids}
-    for row in rows:
-        brief = briefs.get(row["user_id"])
-        if brief and brief.get("is_active"):
-            resolved[row["position_id"]].append(row["user_id"])
+    for position_id, user_ids in candidates.items():
+        for user_id in dict.fromkeys(user_ids):
+            brief = briefs.get(user_id)
+            if brief and brief.get("is_active"):
+                resolved[position_id].append(user_id)
     return resolved
+
+
+def acting_holders(position_id: int, on_date: date) -> list[int]:
+    """Учётные записи временных исполнителей должности на дату (D-22) —
+    только активные, как у ``resolve_position_users``; держатели сюда не
+    входят. Пусто — на эту дату должность никто временно не исполняет."""
+    require_service("hr")
+    from apps.hr.services import acting_service
+
+    user_ids = acting_service.active_user_ids([position_id], on_date)[position_id]
+    if not user_ids:
+        return []
+    active = {row["id"] for row in users.get_users_brief(user_ids) if row.get("is_active")}
+    return [user_id for user_id in user_ids if user_id in active]
 
 
 def link_employee_user(employee_id: int, user_id: int) -> bool:
