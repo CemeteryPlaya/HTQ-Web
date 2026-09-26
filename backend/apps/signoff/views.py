@@ -48,9 +48,9 @@ from .models import (
     StageState,
     TaskState,
 )
-from .services import attachments, engine, presentation, registry
+from .services import attachments, batch, engine, presentation, registry
 from .services import route_service as routes
-from .services.engine import OptionError, SignoffError
+from .services.engine import InvalidDecision, SelfApprovalForbidden, SignoffError
 from .services.registry import UnknownSubject
 from .services.route_service import RouteConflict
 
@@ -163,7 +163,8 @@ class RouteDetailView(SignoffView):
     @write("PATCH", body=schemas.RouteUpdate)
     def patch(self, request, route_id: int, data: schemas.RouteUpdate):
         try:
-            route = routes.update_route(route_id, **data.model_dump())
+            # Только присланные поля: у должности эскалации null значит «убрать».
+            route = routes.update_route(route_id, **data.model_dump(exclude_unset=True))
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.RouteRead.model_validate(routes.serialize_route(route))
@@ -303,6 +304,24 @@ class ProcessCancelView(SignoffView):
             presentation.serialize_process(process, enrich=True))
 
 
+class ProcessRetryExecutorsView(SignoffView):
+    """Ещё раз поискать исполнителей этапам «Нет исполнителя» (ТЗ §16.1 п.5).
+
+    Администратор назначил сотрудника или временного исполнителя и не хочет
+    ждать периодической задачи (``signoff.retry_no_executor_dispatch``).
+    Отвечает карточкой процесса и числом оживших этапов.
+    """
+
+    @write("POST")
+    def post(self, request, process_id: int):
+        if not ApprovalProcess.objects.filter(pk=process_id).exists():
+            raise Http404("Процесс согласования не найден")
+        found = engine.retry_no_executor(process_id, actor_id=request.token.user_id)
+        process = ApprovalProcess.objects.get(pk=process_id)
+        card = presentation.serialize_process(process, enrich=True)
+        return {"found": found, "process": schemas.ProcessRead.model_validate(card).model_dump(mode="json")}
+
+
 class ProcessReworkView(SignoffView):
     """«Вернуть на доработку» по УЖЕ ЗАКРЫТОМУ кругу — администратором или
     согласующим, который действительно принял решение в этом процессе.
@@ -421,10 +440,14 @@ class TaskDecisionView(SignoffView):
                                  actor_id=request.token.user_id,
                                  decision=data.decision, comment=data.comment,
                                  option_key=data.option_key)
-        except OptionError as exc:
-            # Не хватает или неверно поле option_key — 422, а не 409
-            # (мастер-план БЗО, B1.3). Раньше CONFLICTS: OptionError — его наследник.
+        except InvalidDecision as exc:
+            # Решение составлено неверно (вариант голоса, короткий комментарий
+            # BR-060) — 422, а не 409 (мастер-план БЗО). Раньше CONFLICTS:
+            # InvalidDecision — его наследник.
             return json_error(str(exc), 422)
+        except SelfApprovalForbidden as exc:
+            # BR-061: автор не согласует свой документ — 403 (ТЗ §23).
+            return json_error(str(exc), 403)
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.ProcessRead.model_validate(
@@ -441,14 +464,7 @@ class TaskBatchDecisionView(SignoffView):
 
     @write("POST", body=schemas.BatchDecision, admin=False)
     def post(self, request, data: schemas.BatchDecision):
-        results = []
-        for task_id in data.task_ids:
-            try:
-                engine.act(task_id=task_id, actor_id=request.token.user_id,
-                           decision=data.decision, comment=data.comment)
-                results.append({"task_id": task_id, "ok": True})
-            except (Http404, *CONFLICTS) as exc:
-                results.append({"task_id": task_id, "ok": False, "error": str(exc)})
+        results = batch.decide_many(actor_id=request.token.user_id, items=data.as_items())
         return [schemas.BatchDecisionResult.model_validate(row) for row in results]
 
 

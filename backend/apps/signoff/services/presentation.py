@@ -58,6 +58,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         "created_at": process.created_at,
         "finished_at": process.finished_at,
         "subject_facts": process.subject_facts or {},
+        "route_flags": process.route_flags or {},
         "stages": [
             {
                 "id": stage.pk,
@@ -75,6 +76,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "requires_comment": stage.requires_comment,
                 "requirement_key": stage.requirement_key or "",
                 "requirement_label": requirement_labels.get(stage.requirement_key or ""),
+                "activated_at": stage.activated_at,
                 "decided_at": stage.decided_at,
                 "tasks": [
                     serialize_task(task, names=names, urls=enrich)

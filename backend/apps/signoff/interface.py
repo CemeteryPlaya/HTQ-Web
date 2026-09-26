@@ -39,12 +39,16 @@ from apps.signoff.models import (
 from apps.signoff.services import attachments, engine, presentation, registry
 from apps.signoff.services.engine import (
     AlreadyInApproval,
+    CommentTooShort,
+    InvalidDecision,
     OptionError,
     OptionRejected,
     OptionRequired,
     ProcessStillRunning,
     RouteNotConfigured,
+    PreapprovalMismatch,
     RouteUnusable,
+    SelfApprovalForbidden,
     SignoffError,
     SubjectLocked,
 )
@@ -67,6 +71,9 @@ __all__ = [
     # аппки, и брать его ей больше неоткуда.
     "SubjectLocked",
     "ProcessStillRunning",
+    "InvalidDecision",
+    "CommentTooShort",
+    "SelfApprovalForbidden",
     "OptionError",
     "OptionRequired",
     "OptionRejected",
@@ -75,6 +82,10 @@ __all__ = [
     "configure_route",
     "register_subject",
     "start_process",
+    "decide_many",
+    "current_holders",
+    "pending_for_user",
+    "PreapprovalMismatch",
     "cancel_process",
     "rework_process",
     "get_process",
@@ -119,7 +130,8 @@ def has_active_route(subject_type: str, scope: str = "") -> bool:
 
 def start_process(*, subject_type: str, subject_id: int | str,
                   initiator_id: int | None = None,
-                  enrich: bool = False, scope: str | None = None) -> dict:
+                  enrich: bool = False, scope: str | None = None,
+                  preapproved: list[dict] | None = None) -> dict:
     """Отправить объект на согласование. Возвращает карточку процесса.
 
     Поднимает ``engine.RouteNotConfigured`` / ``AlreadyInApproval`` /
@@ -132,12 +144,48 @@ def start_process(*, subject_type: str, subject_id: int | str,
 
     ``subject_id`` — целое, строка или ``UUID``: движок приводит его к
     канонической строке ключа модели.
+
+    ``preapproved`` — ``[{position_id, actor_id, label}]`` (мастер-план БЗО,
+    D-26): группы этих должностей уже согласованы — задач им не будет, этап
+    из одних таких групп закроется сразу с событием ``stage_preapproved``.
+    Должность, которой нет в маршруте, — ``engine.PreapprovalMismatch`` (409).
     """
     require_service("signoff")
 
     process = engine.start(subject_type=subject_type, subject_id=subject_id,
-                           initiator_id=initiator_id, scope=scope)
+                           initiator_id=initiator_id, scope=scope,
+                           preapproved=preapproved)
     return serialize_process(process, enrich=enrich)
+
+
+def decide_many(*, actor_id: int, items: list[dict]) -> list[dict]:
+    """Массовое решение (B1.3): ``[{task_id, decision, comment?, option_key?}]``
+    → ``[{task_id, ok, error?}]``. Каждый элемент — в своей транзакции, отказ
+    по одному не откатывает остальные."""
+    require_service("signoff")
+    from apps.signoff.services import batch
+
+    return batch.decide_many(actor_id=actor_id, items=items)
+
+
+def current_holders(subject_type: str, subject_ids) -> dict[str, dict]:
+    """«Сейчас у» (ТЗ §16.2): ``{subject_id: {stage, users: [{id, name}],
+    position, since, no_executor}}`` по идущим согласованиям объектов.
+    Ключ — каноническая строка ключа объекта."""
+    require_service("signoff")
+    from apps.signoff.services import holders
+
+    return holders.current_holders(subject_type, subject_ids)
+
+
+def pending_for_user(user_id: int) -> list[dict]:
+    """Решения, которых пользователь ждёт прямо сейчас, в текущей компании:
+    ``[{task_id, subject_type, subject_id, title, url, since}]`` — для
+    ежедневной сводки (D-23)."""
+    require_service("signoff")
+    from apps.signoff.services import holders
+
+    return holders.pending_for_user(user_id)
 
 
 def cancel_process(*, process_id: int, actor_id: int | None = None,

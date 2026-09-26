@@ -68,8 +68,31 @@ def get_route_or_404(route_id: int) -> ApprovalRoute:
     return route
 
 
+#: Флаги маршрута, которые принимают ручки (мастер-план БЗО, D-21).
+FLAG_FIELDS = ("forbid_self_approval", "reject_comment_min", "lazy_resolution",
+               "no_executor_notify_position_ids", "escalation_position_id",
+               "self_skip_notify_position_ids")
+
+
+def _check_flags(flags: dict) -> dict:
+    """Проверить флаги до записи: должности эскалации и уведомлений должны
+    существовать — опечатка иначе всплыла бы только в разгар согласования,
+    когда этап уже ушёл «никому». Списки — без дублей."""
+    clean = dict(flags)
+    for key in ("no_executor_notify_position_ids", "self_skip_notify_position_ids"):
+        if key in clean:
+            clean[key] = [int(pid) for pid in dict.fromkeys(clean[key] or [])]
+    positions = [*clean.get("no_executor_notify_position_ids", []),
+                 *clean.get("self_skip_notify_position_ids", [])]
+    if clean.get("escalation_position_id") is not None:
+        positions.append(int(clean["escalation_position_id"]))
+    if positions:
+        _check_positions_exist(list(dict.fromkeys(positions)))
+    return clean
+
+
 def create_route(*, subject_type: str, name: str,
-                 is_active: bool = True, scope: str = "") -> ApprovalRoute:
+                 is_active: bool = True, scope: str = "", **flags) -> ApprovalRoute:
     # Тип должен быть зарегистрирован: маршрут на незарегистрированный тип
     # никогда не запустится (engine.start падает на get_subject), а
     # обнаружится это только в момент отправки на согласование.
@@ -89,12 +112,19 @@ def create_route(*, subject_type: str, name: str,
     ):
         return ApprovalRoute.objects.create(
             subject_type=subject_type, scope=scope, name=name,
-            is_active=is_active)
+            is_active=is_active, **_check_flags(
+                {key: value for key, value in flags.items() if key in FLAG_FIELDS}))
 
 
 def update_route(route_id: int, **fields) -> ApprovalRoute:
+    """Патч: ``None`` у названия и активности — «не менять»; у должности
+    эскалации — «убрать» (ручка передаёт только присланные поля)."""
     route = get_route_or_404(route_id)
-    changed = [key for key, value in fields.items() if value is not None]
+    flags = _check_flags({key: value for key, value in fields.items()
+                          if key in FLAG_FIELDS})
+    fields = {**fields, **flags}
+    changed = [key for key, value in fields.items()
+               if value is not None or key == "escalation_position_id"]
     for key in changed:
         setattr(route, key, fields[key])
     if changed:
@@ -460,6 +490,7 @@ def serialize_route(route: ApprovalRoute, *,
         "scope_label": registry.scope_label(route.subject_type, route.scope),
         "name": route.name,
         "is_active": route.is_active,
+        **_flags_card(route),
         "created_at": route.created_at,
         "updated_at": route.updated_at,
         "stages": [serialize_stage(stage, roles=roles, people=people, keys=keys,
@@ -478,6 +509,31 @@ def serialize_route(route: ApprovalRoute, *,
         card["requirement_fields"] = [{"key": key, "label": label}
                                       for key, label in requirements.items()]
     return card
+
+
+def _flags_card(route: ApprovalRoute) -> dict:
+    """Флаги маршрута и названия их должностей — редактор показывает подписи,
+    а не номера."""
+    notify = list(route.no_executor_notify_position_ids or [])
+    skip = list(route.self_skip_notify_position_ids or [])
+    escalation = route.escalation_position_id
+    ids = [*notify, *skip, *([escalation] if escalation else [])]
+    titles = {row["id"]: row.get("title", "") for row in hr.get_positions_brief(ids)} if ids else {}
+
+    def brief(position_id):
+        return {"id": position_id, "title": titles.get(position_id, f"#{position_id}")}
+
+    return {
+        "forbid_self_approval": route.forbid_self_approval,
+        "reject_comment_min": route.reject_comment_min,
+        "lazy_resolution": route.lazy_resolution,
+        "no_executor_notify_position_ids": notify,
+        "escalation_position_id": escalation,
+        "self_skip_notify_position_ids": skip,
+        "no_executor_notify_positions": [brief(pid) for pid in notify],
+        "escalation_position": brief(escalation) if escalation else None,
+        "self_skip_notify_positions": [brief(pid) for pid in skip],
+    }
 
 
 def _safe_fields(route: ApprovalRoute) -> list[dict]:

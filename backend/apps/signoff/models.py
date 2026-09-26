@@ -124,6 +124,11 @@ class StageState(models.TextChoices):
     # доработку или отозвали раньше. Отдельно от «отклонён», чтобы в карточке
     # было видно, КТО отказал, а кто просто не успел получить запрос.
     SKIPPED = "skipped", "Не потребовался"
+    # На роль этапа не назначен ни один действующий исполнитель (ТЗ §16.1
+    # п.5): документ ждёт на этапе, пока его не назначат, а уведомлены те,
+    # кто может назначить. Бывает только у маршрутов с ``lazy_resolution``:
+    # без него движок отказывает в запуске (``RouteUnusable``).
+    NO_EXECUTOR = "no_executor", "Нет исполнителя"
 
 
 class TaskState(models.TextChoices):
@@ -368,6 +373,30 @@ class ApprovalRoute(models.Model):
                              db_index=True, verbose_name="Область")
     name = models.CharField(max_length=200, verbose_name="Название")
     is_active = models.BooleanField(default=True, db_default=True)
+
+    # ── Флаги маршрута (мастер-план БЗО, D-21). Все выключены по умолчанию:
+    # без них движок ведёт себя как до них. На запуске копируются в процесс
+    # (``ApprovalProcess.route_flags``) — маршрут фиксируется при отправке.
+    # BR-061: автор документа его не согласует; его группа уходит
+    # временному исполнителю должности, иначе — эскалации.
+    forbid_self_approval = models.BooleanField(default=False, db_default=False)
+    # BR-060: отказ и возврат — с комментарием не короче N символов; 0 — не
+    # требуется.
+    reject_comment_min = models.PositiveSmallIntegerField(default=0, db_default=0)
+    # ТЗ §16.1 п.2: исполнитель этапа определяется, когда этап становится
+    # активным, а не на запуске; нет исполнителя — этап ждёт («Нет
+    # исполнителя») вместо отказа в запуске.
+    lazy_resolution = models.BooleanField(default=False, db_default=False)
+    # «Роли» в словаре signoff — HR-должности. Кого уведомить о «Нет
+    # исполнителя» (ТЗ §16.1 п.5: АДМ и ГД).
+    no_executor_notify_position_ids = models.JSONField(default=list, blank=True)
+    # BR-061: к кому уходит группа автора, если ни держателя, ни временного
+    # исполнителя, кроме автора, нет (ГД).
+    escalation_position_id = models.IntegerField(null=True, blank=True)
+    # D-22: автор — сам держатель эскалации (ГД), группа пропущена; кого
+    # уведомить (ФД).
+    self_skip_notify_position_ids = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
@@ -603,6 +632,15 @@ class ApprovalProcess(models.Model):
     # ответить на него нечем.
     subject_facts = models.JSONField(default=dict, blank=True,
                                      verbose_name="Факты объекта")
+    # Флаги маршрута на момент запуска (``ApprovalRoute.forbid_self_approval``
+    # и соседи): правка маршрута не меняет идущий процесс (ТЗ §16.1 п.2).
+    route_flags = models.JSONField(default=dict, blank=True,
+                                   verbose_name="Флаги маршрута")
+    # Предсогласованные группы должностей (мастер-план БЗО, D-26):
+    # ``[{position_id, actor_id, label}]`` — задач им не ставится ни на
+    # запуске, ни при ленивой активации этапа.
+    preapproved = models.JSONField(default=list, blank=True,
+                                   verbose_name="Предсогласовано")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -687,6 +725,9 @@ class ApprovalProcessStage(models.Model):
     requires_comment = models.BooleanField(default=False, db_default=False)
     requirement_key = models.CharField(max_length=64, default="", db_default="",
                                        blank=True)
+    # Когда этап стал активным — «Сейчас у … с такого-то времени» (ТЗ §16.2).
+    # У этапов, заведённых до столбца, пусто: читатель берёт время запуска.
+    activated_at = models.DateTimeField(null=True, blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

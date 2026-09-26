@@ -57,7 +57,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import conditions, registry
+from apps.signoff.services import conditions, registry, resolution
 # Соседи — только через interface (apps/core/tests/test_app_isolation.py).
 from apps.hr import interface as hr
 from apps.messenger import interface as messenger
@@ -202,7 +202,31 @@ class CommentRequired(SignoffError):
     """
 
 
-class OptionError(SignoffError):
+class InvalidDecision(SignoffError):
+    """Решение составлено неверно — 422, а не 409: запрос не противоречит
+    состоянию процесса, в нём не хватает или неверно поле (вариант голоса,
+    длина комментария)."""
+
+
+class CommentTooShort(InvalidDecision):
+    """Отказ или возврат на доработку с комментарием короче, чем требует
+    маршрут (``reject_comment_min``, BR-060)."""
+
+
+class PreapprovalMismatch(SignoffError):
+    """Предсогласованная должность не встречается ни на одном этапе
+    маршрута объекта — предметная аппка ошиблась, и молча согласовать
+    «что-то» вместо неё нельзя (D-26)."""
+
+
+class SelfApprovalForbidden(SignoffError):
+    """Автор документа решает по нему сам при запрете самосогласования
+    (``forbid_self_approval``, BR-061) — 403. Задач автору такой маршрут не
+    ставит; проверка на решении — вторая линия, на случай задачи, созданной
+    до включения флага или вручную."""
+
+
+class OptionError(InvalidDecision):
     """Голос за вариант не принят. 422, а не 409 (мастер-план БЗО, B1.3):
     запрос не противоречит состоянию процесса — в нём не хватает или
     неверно поле ``option_key``."""
@@ -233,11 +257,18 @@ def _now() -> datetime:
 @transaction.atomic
 def start(*, subject_type: str, subject_id: int | str,
           initiator_id: int | None = None,
-          scope: str | None = None) -> ApprovalProcess:
+          scope: str | None = None,
+          preapproved: list[dict] | None = None) -> ApprovalProcess:
     """Запустить согласование объекта по активному маршруту его типа.
 
     ``scope`` — область маршрута; по умолчанию её называет сама предметная
     аппка (``Subject.scope_of``), явный аргумент — для операторского запуска.
+
+    ``preapproved`` — ``[{position_id, actor_id, label}]``: группы этих
+    должностей считаются уже согласованными (новый договор по альтернативе,
+    за которую голосовали при выборе, D-26). Задач им не ставится; этап, у
+    которого предсогласованы все группы, закрывается сразу с событием
+    ``stage_preapproved``.
     """
     subject = registry.get_subject(subject_type)  # UnknownSubject → 409/422
     # Каноническая строка ключа модели: 5, "5" и "05" — один объект, и
@@ -268,14 +299,27 @@ def start(*, subject_type: str, subject_id: int | str,
     # ветвления не касаются.
     facts = registry.facts_for(subject_type, subject_id)
     selected = _select_stages(stages, facts, subject=subject, route=route)
-    plan = _resolve_stages(selected, initiator_id=initiator_id,
-                           subject_type=subject_type, subject_id=subject_id)
+    pre = _preapproved_positions(preapproved, selected)
+    # Флаги маршрута — снимком в процесс: правка маршрута идущий процесс не
+    # меняет (ТЗ §16.1 п.2). Без флагов всё ниже — прежнее поведение.
+    flags = resolution.route_flags_of(route)
+    if flags["lazy_resolution"]:
+        # Исполнители — при активации этапа, по снимку этапа (ТЗ §16.1 п.2);
+        # на запуске проверяется только сама настройка.
+        for item in selected:
+            _check_stage_configured(item.stage, initiator_id=initiator_id)
+        plan = [(item.stage.order, item.stage, item.matched_by, None)
+                for item in selected]
+    else:
+        plan = _resolve_stages(selected, initiator_id=initiator_id,
+                               subject_type=subject_type, subject_id=subject_id)
 
     try:
         process = ApprovalProcess.objects.create(
             subject_type=subject_type, subject_id=subject_id, scope=scope,
             route_id=route.pk, initiator_id=initiator_id,
-            state=ProcessState.PENDING, subject_facts=facts,
+            state=ProcessState.PENDING, subject_facts=facts, route_flags=flags,
+            preapproved=list(pre.values()),
         )
     except IntegrityError as exc:
         # Частичный уникальный индекс uq_signoff_one_pending_process_per_subject.
@@ -298,17 +342,17 @@ def start(*, subject_type: str, subject_id: int | str,
             requires_attachment=stage.requires_attachment,
             requires_comment=stage.requires_comment,
             requirement_key=stage.requirement_key or "",
-            state=StageState.ACTIVE if order == first_order else StageState.WAITING,
+            state=StageState.WAITING,
         )
-        ApprovalTask.objects.bulk_create([
-            ApprovalTask(stage=process_stage, user_id=user_id,
-                         position_id=position_id)
-            for position_id, user_ids in approvers_by_position.items()
-            for user_id in user_ids
-        ])
-
-    process.current_order = first_order
-    process.save(update_fields=["current_order", "updated_at"])
+        _log_preapproved(process, process_stage, pre, actor_id=initiator_id)
+        if approvers_by_position is not None:
+            # Без ленивого разрешения исполнители известны уже сейчас.
+            outcome = resolution.Resolution(groups={
+                key: ids for key, ids in approvers_by_position.items() if key not in pre})
+            if stage.approver_kind != ApproverKind.INITIATOR:
+                resolution.apply_self_approval(outcome, initiator_id=initiator_id,
+                                               flags=flags)
+            _create_tasks(process, process_stage, outcome, flags=flags)
 
     # Отсеянные ветки — в журнал: карточка процесса показывает только то, что
     # в него вошло, и вопрос «а почему тут нет финконтроля по Узбекистану»
@@ -322,12 +366,66 @@ def start(*, subject_type: str, subject_id: int | str,
                            for stage in stages if stage.pk not in taken],
     })
 
+    # Первая группа становится активной ДО колбэка предметной аппки — как и
+    # прежде: он вправе спросить, на каком этапе объект.
+    _open_group(process, first_order, actor_id=initiator_id)
+
     if subject.on_started is not None:
         subject.on_started(registry.native_id(subject_type, subject_id))
     _set_subject_state(subject_type, subject_id, ApprovalState.PENDING)
 
-    _notify_active_stages(process)
+    # Первая группа могла закрыться сразу (все её группы пропущены при
+    # самосогласовании) — тогда дальше; иначе просто уведомить исполнителей.
+    if not _advance(process, actor_id=initiator_id):
+        _notify_active_stages(process)
     return process
+
+
+def _preapproved_positions(preapproved, selected) -> dict[int, dict]:
+    """``{position_id: {position_id, actor_id, label}}`` — только должности,
+    которые реально стоят на отобранных этапах маршрута."""
+    if not preapproved:
+        return {}
+    on_route = {row.position_id for item in selected
+                if item.stage.approver_kind == ApproverKind.POSITION
+                for row in item.stage.roles.all()}
+    out: dict[int, dict] = {}
+    for item in preapproved:
+        position_id = int(item["position_id"])
+        if position_id not in on_route:
+            raise PreapprovalMismatch(
+                f"Должности #{position_id} нет ни на одном этапе маршрута — "
+                f"предсогласовать её нельзя")
+        out[position_id] = {"position_id": position_id,
+                            "actor_id": item.get("actor_id"),
+                            "label": item.get("label") or "Согласовано заранее"}
+    return out
+
+
+def _log_preapproved(process: ApprovalProcess, stage: ApprovalProcessStage,
+                     pre: dict[int, dict], *, actor_id: int | None) -> None:
+    hits = [pre[position_id] for position_id in (stage.role_ids or []) if position_id in pre]
+    if hits:
+        _log(process, "stage_preapproved", actor_id=actor_id, payload={
+            "stage": stage.name, "order": stage.order,
+            "position_ids": [row["position_id"] for row in hits],
+            "actor_ids": [row["actor_id"] for row in hits],
+            "label": hits[0]["label"]})
+
+
+def _check_stage_configured(stage, *, initiator_id: int | None) -> None:
+    """Ленивый маршрут: этап, у которого исполнителей не бывает в принципе,
+    — отказ на запуске, а не «Нет исполнителя» посреди процесса. «Нет
+    исполнителя» — про людей, а не про пустую настройку."""
+    if stage.approver_kind == ApproverKind.INITIATOR and initiator_id is None:
+        raise RouteUnusable(
+            f"Этап «{stage.name}» подписывает инициатор, но согласование "
+            f"запущено без инициатора")
+    if stage.approver_kind == ApproverKind.USERS and not stage.user_ids:
+        raise RouteUnusable(f"На этапе «{stage.name}» не назван ни один согласующий")
+    if (stage.approver_kind == ApproverKind.POSITION
+            and not any(True for _ in stage.roles.all())):
+        raise RouteUnusable(f"На этапе «{stage.name}» не назначена ни одна должность")
 
 
 def _assert_submittable(subject, subject_id: str) -> None:
@@ -565,6 +663,22 @@ def act(*, task_id: int, actor_id: int, decision: str,
         raise ProcessClosed("По этому запросу решение уже принято")
 
     stage = task.stage
+    flags = resolution.flags_of(process)
+    # BR-061, вторая линия: маршрут с запретом самосогласования автору задач
+    # не ставит, но задача могла появиться до включения флага. Этап «подпись
+    # инициатора» — исключение по определению.
+    if (flags["forbid_self_approval"] and actor_id == process.initiator_id
+            and stage.approver_kind != ApproverKind.INITIATOR):
+        raise SelfApprovalForbidden(
+            "Нельзя согласовать документ, автором которого вы являетесь. "
+            "Решение по нему примет другой согласующий.")
+    # BR-060: отказ и возврат — с пояснением не короче, чем требует маршрут.
+    minimum = int(flags["reject_comment_min"] or 0)
+    if decision in (REJECT, REWORK) and minimum and len(comment.strip()) < minimum:
+        raise CommentTooShort(
+            f"Комментарий слишком короткий: при отказе и возврате на доработку "
+            f"нужно не меньше {minimum} символов. Опишите причину — её увидит "
+            f"автор документа.")
     # ДО любых записей: отказ по нехватке документа не должен оставлять за
     # собой закрытую задачу. Файл прикладывается заранее, отдельным
     # эндпоинтом (``services/attachments.py``) — грузить его внутри этой
@@ -695,27 +809,162 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
     return True
 
 
-def _advance(process: ApprovalProcess, *, actor_id: int | None) -> None:
-    """Перейти к следующей группе этапов или завершить процесс согласованием."""
-    current = list(process.stages.filter(order=process.current_order))
-    if not all(stage.state == StageState.APPROVED for stage in current):
-        return  # в текущей группе ещё есть незакрытые параллельные этапы
+def _advance(process: ApprovalProcess, *, actor_id: int | None) -> bool:
+    """Перейти к следующей группе этапов или завершить процесс согласованием.
 
-    next_order = (process.stages
-                  .filter(order__gt=process.current_order)
-                  .order_by("order")
-                  .values_list("order", flat=True).first())
+    Группа, которая при открытии закрылась сама (все её группы должностей
+    пропущены при самосогласовании), сразу уступает место следующей — поэтому
+    цикл. ``True`` — открыта следующая группа или процесс завершён; тогда же и
+    уведомления, иначе (в группе ещё есть незакрытые параллельные этапы) —
+    ни того, ни другого, как и прежде.
+    """
+    moved = False
+    while True:
+        current = list(process.stages.filter(order=process.current_order))
+        if not all(stage.state == StageState.APPROVED for stage in current):
+            break  # в текущей группе ещё есть незакрытые параллельные этапы
 
-    if next_order is None:
-        _finish(process, ProcessState.APPROVED, actor_id=actor_id)
-        return
+        next_order = (process.stages
+                      .filter(order__gt=process.current_order)
+                      .order_by("order")
+                      .values_list("order", flat=True).first())
+        if next_order is None:
+            _finish(process, ProcessState.APPROVED, actor_id=actor_id)
+            return True
 
-    process.stages.filter(order=next_order).update(state=StageState.ACTIVE)
-    process.current_order = next_order
+        _log(process, "stage_activated", actor_id=actor_id,
+             payload={"order": next_order})
+        _open_group(process, next_order, actor_id=actor_id)
+        moved = True
+
+    if moved:
+        _notify_active_stages(process)
+    return moved
+
+
+def _open_group(process: ApprovalProcess, order: int, *,
+                actor_id: int | None) -> None:
+    """Сделать группу этапов текущей и активной.
+
+    С ``lazy_resolution`` этап здесь же получает исполнителей (по снимку
+    своей настройки, на сегодня); не нашлось — «Нет исполнителя». Этап без
+    единой задачи (все его группы пропущены при самосогласовании) согласуется
+    сразу — ждать ему некого.
+    """
+    flags = resolution.flags_of(process)
+    now = _now()
+    process.current_order = order
     process.save(update_fields=["current_order", "updated_at"])
-    _log(process, "stage_activated", actor_id=actor_id,
-         payload={"order": next_order})
-    _notify_active_stages(process)
+    for stage in process.stages.filter(order=order):
+        if flags["lazy_resolution"] and not _materialize(process, stage, flags=flags):
+            continue  # «Нет исполнителя» — этап ждёт
+        stage.state = StageState.ACTIVE
+        stage.activated_at = now
+        stage.save(update_fields=["state", "activated_at"])
+        if not stage.tasks.exists():
+            _approve_empty_stage(process, stage, actor_id=actor_id)
+
+
+def _approve_empty_stage(process: ApprovalProcess, stage: ApprovalProcessStage, *,
+                         actor_id: int | None) -> None:
+    stage.state = StageState.APPROVED
+    stage.decided_at = _now()
+    stage.save(update_fields=["state", "decided_at"])
+    _log(process, "stage_auto_approved", actor_id=actor_id,
+         payload={"stage": stage.name, "order": stage.order})
+
+
+def _materialize(process: ApprovalProcess, stage: ApprovalProcessStage, *,
+                 flags: dict) -> bool:
+    """Исполнители этапа ленивого маршрута — сейчас, по снимку этапа.
+
+    У группы нет исполнителя — этап «Нет исполнителя» (ТЗ §16.1 п.5): задач
+    не ставим вовсе, пока не найдутся все (кворум считается по каждой
+    группе), и уведомляем тех, кто может назначить, — один раз, при переходе
+    в это состояние, а не на каждой повторной попытке. ``True`` — задачи
+    поставлены (или ставить их некому по предсогласованию и самосогласованию).
+    """
+    try:
+        outcome = resolution.resolve_process_stage(
+            stage, initiator_id=process.initiator_id,
+            subject_type=process.subject_type, subject_id=process.subject_id,
+            flags=flags,
+            exclude_positions=[row["position_id"] for row in (process.preapproved or [])])
+    except resolution.StageNotConfigured as exc:
+        raise RouteUnusable(str(exc)) from exc
+
+    if outcome.missing:
+        if stage.state != StageState.NO_EXECUTOR:
+            stage.state = StageState.NO_EXECUTOR
+            stage.save(update_fields=["state"])
+            _log(process, "no_executor", actor_id=None, payload={
+                "stage": stage.name, "order": stage.order,
+                "position_ids": [key for key in outcome.missing if key is not None]})
+            _notify_positions(flags["no_executor_notify_position_ids"], process, {
+                "type": "signoff.no_executor", "stage": stage.name})
+        return False
+    _create_tasks(process, stage, outcome, flags=flags)
+    return True
+
+
+def _create_tasks(process: ApprovalProcess, stage: ApprovalProcessStage,
+                  outcome: "resolution.Resolution", *, flags: dict) -> None:
+    """Задачи этапа по разрешённым группам + следы самосогласования."""
+    ApprovalTask.objects.bulk_create([
+        ApprovalTask(stage=stage, user_id=user_id, position_id=position_id)
+        for position_id, user_ids in outcome.groups.items()
+        for user_id in user_ids
+    ])
+    if outcome.escalated:
+        _log(process, "self_approval_escalated", actor_id=None, payload={
+            "stage": stage.name, "order": stage.order,
+            "position_ids": [key for key in outcome.escalated if key is not None],
+            "escalation_position_id": flags.get("escalation_position_id")})
+    if outcome.skipped:
+        _log(process, "self_approval_skipped", actor_id=None, payload={
+            "stage": stage.name, "order": stage.order,
+            "position_ids": [key for key in outcome.skipped if key is not None]})
+        _notify_positions(flags["self_skip_notify_position_ids"], process, {
+            "type": "signoff.self_approval_skipped", "stage": stage.name})
+
+
+@transaction.atomic
+def retry_no_executor(process_id: int, *, actor_id: int | None = None) -> int:
+    """Ещё раз поискать исполнителей этапам «Нет исполнителя» текущей группы.
+
+    Зовётся периодической задачей и ручкой администратора: назначили
+    сотрудника или временного исполнителя — этап оживает. Возвращает, скольким
+    этапам исполнитель нашёлся.
+    """
+    process = _lock(process_id)
+    if process.state != ProcessState.PENDING:
+        return 0
+    flags = resolution.flags_of(process)
+    now = _now()
+    found = 0
+    for stage in process.stages.filter(order=process.current_order,
+                                       state=StageState.NO_EXECUTOR):
+        if not _materialize(process, stage, flags=flags):
+            continue
+        found += 1
+        stage.state = StageState.ACTIVE
+        stage.activated_at = now
+        stage.save(update_fields=["state", "activated_at"])
+        _log(process, "executors_found", actor_id=actor_id,
+             payload={"stage": stage.name, "order": stage.order})
+        if not stage.tasks.exists():
+            _approve_empty_stage(process, stage, actor_id=actor_id)
+    if found and not _advance(process, actor_id=actor_id):
+        _notify_active_stages(process)
+    return found
+
+
+def pending_no_executor_process_ids() -> list[int]:
+    """Процессы, которые ждут исполнителя, — для периодической повторной попытки."""
+    return list(ApprovalProcess.objects
+                .filter(state=ProcessState.PENDING,
+                        stages__state=StageState.NO_EXECUTOR)
+                .values_list("pk", flat=True).distinct())
 
 
 def _close_by_decision(process: ApprovalProcess, stage: ApprovalProcessStage, *,
@@ -743,7 +992,7 @@ def _close_by_decision(process: ApprovalProcess, stage: ApprovalProcessStage, *,
         stage__process=process, state=TaskState.PENDING,
     ).update(state=TaskState.SKIPPED)
     process.stages.filter(
-        state__in=(StageState.WAITING, StageState.ACTIVE),
+        state__in=(StageState.WAITING, StageState.ACTIVE, StageState.NO_EXECUTOR),
     ).update(state=StageState.SKIPPED)
 
     _finish(process, process_state, actor_id=actor_id, comment=comment)
@@ -766,7 +1015,7 @@ def cancel(*, process_id: int, actor_id: int | None = None) -> ApprovalProcess:
         stage__process=process, state=TaskState.PENDING,
     ).update(state=TaskState.SKIPPED)
     process.stages.filter(
-        state__in=(StageState.WAITING, StageState.ACTIVE),
+        state__in=(StageState.WAITING, StageState.ACTIVE, StageState.NO_EXECUTOR),
     ).update(state=StageState.SKIPPED)
 
     _finish(process, ProcessState.CANCELLED, actor_id=actor_id)
@@ -952,6 +1201,24 @@ def _notify_active_stages(process: ApprovalProcess) -> None:
     })
     _emit(process, "stage_activated", {"user_ids": user_ids,
                                        "order": process.current_order})
+
+
+def _notify_positions(position_ids, process: ApprovalProcess, extra: dict) -> None:
+    """Уведомить держателей должностей (и их временных исполнителей) о
+    событии процесса: «Нет исполнителя» — АДМ и ГД, пропуск самосогласования
+    ГД — ФД (мастер-план БЗО, D-21/D-22). Нет должностей — никого."""
+    user_ids = resolution.position_user_ids(position_ids)
+    if not user_ids:
+        return
+    described = _describe(process)
+    _notify(user_ids, {
+        "process_id": process.pk,
+        "subject_type": process.subject_type,
+        "subject_id": process.subject_id,
+        "title": described.get("title"),
+        "url": described.get("url"),
+        **extra,
+    })
 
 
 def _notify_initiator(process: ApprovalProcess) -> None:

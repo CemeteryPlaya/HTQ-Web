@@ -58,6 +58,7 @@
 | `backend/apps/access/migrations/0013_grant_files_module.py` | `platform-admin` получает модуль `files` |
 | `backend/apps/media_files/**` | scope `file_object` (папка владельца, `owner_gated`, xml), `copy_file`, флаг антивируса по scope, сигнатуры xml/OOXML |
 | `backend/apps/companies/management/commands/tenancy_bootstrap.py` | `files.assign_company` в транзакции переноса |
+| `backend/apps/companies/services/migration_service.py` | `signoff/0014_retry_no_executor_periodic_task` в `SHARED_EFFECT_MIGRATIONS` (расписание beat живёт в `public`, этап 1, B1.2) |
 | `docker-compose*.yml`, `.env.example`, `infra/nginx/default.conf`, `frontend/vite.config.ts`, `frontend/src/api/endpoints.ts` | сервис `clamav`, локация `/api/files/v1/` (21M), прокси |
 
 ## 3. Снято по D-01 (в ветке этого нет)
@@ -73,6 +74,20 @@
 - `signoff/0011` занята вариантами голоса, поэтому миграция B0.1 (строковый `subject_id`) — **`0012_process_subject_id_string`**, а не `0011`, как в плане этапа 0.
 - `access/0013_grant_files_module` (B) и `access/0013_platform_admin_bpp_modules` (A0.2) — один номер. При слиянии: `makemigrations access --merge` или включить `files` в миграцию A и удалить эту.
 - B0.1 провёл ключ через `native_id` / `storage_key` и в функциях вариантов голоса: `options_for`, `check_option_for`, `on_option_for`, `final_option` — в плане этапа 0 их нет (писался от `main`). Тест сверх плана — `test_vote_options_reach_a_uuid_subject_in_its_key_type`.
+
+## 6. Этап 1 — отступления и решения ([план этапа](2026-09-26-bpp-stage1-executor-b.md))
+
+- **B1.2, флаги заданы должностями, а не ролями.** В мастер-плане — `no_executor_notify_roles`. В словаре `signoff` «роль» — HR-должность, а у `access.interface` нет функции «держатели роли». Поэтому флаг называется `no_executor_notify_position_ids`.
+- **Два флага сверх четырёх из плана:**
+  - `escalation_position_id` — кому уходит группа автора при самосогласовании (ГД, BR-061 «иначе ГД»);
+  - `self_skip_notify_position_ids` — кого уведомить, когда автор — сам ГД (ФД, D-22).
+
+  В плане это описано словами, но флагом не названо.
+- **B1.2, права на маршруты БЗО** (ФД и АДМ, В-09) отложены до ролей A1.4. До этого правка маршрутов остаётся за администратором.
+- **B1.2, BR-060 для «Отменить».** Правило касается и отмены автором. Но `engine.cancel` комментария не принимает, поэтому проверку делает предметная ручка `bpp` (B2.2, B3.2).
+- **B1.3, «Сейчас у» — ключ сверх контракта §2.6.** В ответе `current_holders` есть ещё `no_executor` (bool). Без него реестр не отличил бы этап «Нет исполнителя» от этапа, у которого просто пуст список людей.
+- **B1.3, `preapproved` хранится на процессе** (`ApprovalProcess.preapproved`, та же миграция `0013`). Иначе ленивый маршрут поставил бы задачи предсогласованной должности при активации этапа. Формат элемента — `{position_id, actor_id, label}`: этап определяется должностью, а не порядковым номером, потому что маршрут настраиваемый.
+- **B1.2, время активации этапа.** `ApprovalProcessStage.activated_at` заведено уже в миграции `0013` — нужно для «Сейчас у» (B1.3).
 
 ## 5. Прочее
 

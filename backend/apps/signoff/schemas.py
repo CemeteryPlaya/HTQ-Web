@@ -61,7 +61,19 @@ Condition = list[Predicate]
 
 # ── Маршруты ────────────────────────────────────────────────────────────
 
-class RouteCreate(BaseModel):
+class RouteFlags(BaseModel):
+    """Флаги маршрута (мастер-план БЗО, D-21) — все выключены по умолчанию.
+    «Роли» здесь — HR-должности, как у согласующих этапов."""
+
+    forbid_self_approval: bool = False
+    reject_comment_min: int = Field(0, ge=0, le=500)
+    lazy_resolution: bool = False
+    no_executor_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
+class RouteCreate(RouteFlags):
     subject_type: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=200)
     is_active: bool = True
@@ -70,8 +82,21 @@ class RouteCreate(BaseModel):
 
 
 class RouteUpdate(BaseModel):
+    """Патч: применяются только присланные поля (``exclude_unset``)."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     is_active: Optional[bool] = None
+    forbid_self_approval: Optional[bool] = None
+    reject_comment_min: Optional[int] = Field(None, ge=0, le=500)
+    lazy_resolution: Optional[bool] = None
+    no_executor_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
+
+
+class PositionBrief(BaseModel):
+    id: int
+    title: str = ""
 
 
 class StageCreate(BaseModel):
@@ -217,6 +242,16 @@ class RouteRead(BaseModel):
     scope_label: Optional[str] = None
     name: str
     is_active: bool
+    # Флаги маршрута (D-21) и подписи их должностей.
+    forbid_self_approval: bool = False
+    reject_comment_min: int = 0
+    lazy_resolution: bool = False
+    no_executor_notify_position_ids: list[int] = Field(default_factory=list)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: list[int] = Field(default_factory=list)
+    no_executor_notify_positions: list[PositionBrief] = Field(default_factory=list)
+    escalation_position: Optional[PositionBrief] = None
+    self_skip_notify_positions: list[PositionBrief] = Field(default_factory=list)
     stages: list[StageRead]
     # Схема области — только в карточке одного маршрута (редактор): по каким
     # фактам ветвить и какие ключи «назначает объект» предлагать.
@@ -285,6 +320,8 @@ class ProcessStageRead(BaseModel):
     requires_comment: bool = False
     requirement_key: str = ""
     requirement_label: Optional[str] = None
+    # Когда этап стал активным — «Сейчас у … с …» (B1.3).
+    activated_at: Optional[datetime] = None
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -303,6 +340,8 @@ class ProcessRead(BaseModel):
     # Факты, по которым выбирались ветки, на момент запуска — ответ на
     # вопрос «почему согласуют именно эти люди» через год после запуска.
     subject_facts: dict = Field(default_factory=dict)
+    # Флаги маршрута на момент запуска (D-21); у процессов до флагов пусто.
+    route_flags: dict = Field(default_factory=dict)
     # Карточка предметного объекта — из describe() его аппки. signoff не
     # умеет её построить сам и не должен.
     subject_title: Optional[str] = None
@@ -404,12 +443,42 @@ class SubjectRead(BaseModel):
     requirement_fields: list[ApproverFieldRead] = Field(default_factory=list)
 
 
-class BatchDecision(BaseModel):
-    """Одно решение по нескольким запросам сразу — «одобрить всё выбранное»."""
+class BatchDecisionItem(BaseModel):
+    """Элемент массового решения — со своим комментарием и вариантом голоса
+    (мастер-план БЗО, B1.3)."""
 
-    task_ids: list[int] = Field(..., min_length=1, max_length=100)
+    task_id: int
     decision: str = Field(..., pattern="^(approve|reject|rework)$")
     comment: str = Field("", max_length=2000)
+    option_key: str = Field("", max_length=64)
+
+
+class BatchDecision(BaseModel):
+    """Решения по нескольким запросам сразу — «одобрить всё выбранное».
+
+    Прежняя форма — одно решение и один комментарий на все ``task_ids``;
+    новая — ``items``, у каждого своё. Ровно одна из двух."""
+
+    task_ids: Optional[list[int]] = Field(None, min_length=1, max_length=100)
+    decision: Optional[str] = Field(None, pattern="^(approve|reject|rework)$")
+    comment: str = Field("", max_length=2000)
+    items: Optional[list[BatchDecisionItem]] = Field(None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _one_shape(self):
+        if self.items is not None:
+            if self.task_ids is not None:
+                raise ValueError("Передайте либо items, либо task_ids с decision")
+            return self
+        if not self.task_ids or not self.decision:
+            raise ValueError("Нужны items или task_ids вместе с decision")
+        return self
+
+    def as_items(self) -> list[dict]:
+        if self.items is not None:
+            return [item.model_dump() for item in self.items]
+        return [{"task_id": task_id, "decision": self.decision, "comment": self.comment}
+                for task_id in self.task_ids]
 
 
 class BatchDecisionResult(BaseModel):

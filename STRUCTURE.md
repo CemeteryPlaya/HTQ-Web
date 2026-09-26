@@ -250,6 +250,10 @@ cd backend
 
 **Варианты голоса** (`options`/`check_option`/`on_option` в `register_subject`, мастер-план БЗО B1.3): предмет предлагает выбор «исходный документ или альтернатива» (ТЗ §12.4), «согласовать» тогда называет `option_key` (иначе 422), голос снимком лежит на задаче (`option_key`/`option_label`) и уходит предмету в `on_option` в той же транзакции; итог — голос последнего этапа (`interface.final_option`). Потребителей пока нет — альтернативы строятся в `bpp`. Тесты — `tests/test_options.py` на пробном типе.
 
+**Флаги маршрута** (`ApprovalRoute.forbid_self_approval`, `reject_comment_min`, `lazy_resolution`, `no_executor_notify_position_ids`, `escalation_position_id`, `self_skip_notify_position_ids`; БЗО B1.2). Выключены по умолчанию, снимок — `ApprovalProcess.route_flags`. Разрешение исполнителей с флагами — `services/resolution.py`, открытие группы этапов — `engine._open_group` (с `lazy_resolution` этап получает исполнителей при активации или встаёт в `no_executor`), повторная попытка — `engine.retry_no_executor` и `tasks.py::retry_no_executor_dispatch`. Время активации этапа — `ApprovalProcessStage.activated_at`. Тесты — `tests/test_route_flags.py`, временные исполнители — `tests/test_acting.py`.
+
+**API для модуля БЗО** (B1.3): `interface.decide_many` (`services/batch.py`, на нём же `tasks/batch-decision`), `current_holders` и `pending_for_user` (`services/holders.py`), `start_process(preapproved=…)` (`ApprovalProcess.preapproved`). Тесты — `tests/test_module_api.py`.
+
 ### 3.7 Companies — мультикомпанейность (реестр компаний + схема Postgres на компанию)
 
 Полный дизайн и «почему» — [docs/multi-company-tenancy-design.md](docs/multi-company-tenancy-design.md) и CLAUDE.md §«Мультикомпанейность». Здесь — только карта каталогов, двух новых на платформе.
