@@ -160,6 +160,8 @@ def create_thing(request, data: CreateThing):
 
 Covered by [`apps/core/tests/test_api_view.py`](apps/core/tests/test_api_view.py).
 
+**Domain errors and retries.** `raise htqweb.errors.DomainError(code, message, fields=..., status=422)` in a service becomes `{"detail", "code", "fields"}` — `detail` is ready for a human, `code` for the frontend (the BZO module uses the texts of its spec, §26.1). `api_view(..., idempotent=True)` on a write handle: a repeat with the same `Idempotency-Key` header within 24 hours gets the first response back (`Idempotent-Replay: true`), a concurrent repeat gets 409 `E-IDEM-01`, a failed request is not remembered (`htqweb/idempotency.py`).
+
 ### 3. URLs mount themselves — don't touch `htqweb/urls.py`
 
 `htqweb/urls.py` loops over every installed app; any app whose `AppConfig` sets `API_PREFIX` and
