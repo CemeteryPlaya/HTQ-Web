@@ -120,6 +120,7 @@ same backend.
 | `/api/email/v1/webhooks/`           | `backend` (WSGI)   | Gmail Pub/Sub + Graph + Mailcow push — **no** rate limit |
 | `/api/media/v1/files/` (POST)       | `backend` (WSGI)   | Upload — hard size/rate limit, buffering off |
 | `/api/media/`                       | `backend` (WSGI)   | Read/metadata + edge cache of public variants |
+| `/api/files/v1/`                    | `backend` (WSGI)   | Файловая подсистема ТЗ §21: `client_max_body_size 21M`, зоны `files_upload` (только POST) + `api_general`, 413 — JSON `E-FIL-02` вместо HTML nginx |
 | `/api/users/v1/*`                   | `backend` (WSGI)   | Auth, profile, registrations, items, admin   |
 | `/api/hr/v1/*`                      | `backend` (WSGI)   | Employees, departments, vacancies, time      |
 | `/api/tasks/v1/*`                   | `backend` (WSGI)   | Tasks, calendar, sequences, attachments      |
@@ -746,6 +747,71 @@ calls `htqweb.storage` directly (it predates `media_files` as an app). See
 
 ---
 
+## `apps.files` — `/api/files/v1` (ТЗ §21 «Файлы и вложения»)
+
+Одна файловая подсистема на все объекты, к которым прикладываются документы
+(`UploadFile` / `DownloadFile` из ТЗ, таблица `file_object`). Владелец —
+ключ из реестра и ключ его строки — целое или UUID (документы модуля БЗО);
+неподходящий владельцу ключ — 404 `E-FIL-05`, в ответах `owner_id` — строка.
+Права решает владелец своими колбэками («все с правом просмотра объекта»,
+ТЗ §21); типы своих файлов он заводит в справочник своей миграцией.
+**Владельцев в коде пока нет:** по мастер-плану БЗО (D-01) документы договоров
+и заявок живут в `apps.bpp`, и регистрации «заявка»/«договор» сняты;
+подсистема ждёт владельцев модуля (задачи A1.1, B2.2, B3.1). Тесты идут на
+пробных владельцах `apps/files/tests/testapp`.
+
+У тенантного владельца компания — часть ключа файлов (`company_slug`), до
+первой компании — `""`; `tenancy_bootstrap` проставляет её файлам вместе с
+переездом таблиц владельца.
+
+**Гейт:** правка справочника (`PATCH types/{code}/`) — `module="files"`,
+`level="write"` (узел `files.types`); остальные ручки — в
+`access/self_service.py`: папка, загрузка, версии, удаление и ссылка —
+`scoped` (решает владелец), список типов — `open`.
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | GET | Папка владельца: `storage_prefix` (`file_object/<компания или public>/<папка>/<id>/`), `can_modify` + `modify_reason`, `delete_is_physical`, `types` (справочник + правила владельца: `cardinality`, `quota_group`, `required`, `can_add`, `reason`), `quotas` (`group, max, used` — версии не в счёт), `documents` (`current` + `versions` от новой к старой, удалённые — в конце). Ссылок на файлы в ответе нет — только `link`. `modify_reason` — только когда менять нельзя из-за состояния владельца (подсказка автору); отказ по правам не объясняется, там `null` |
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | POST | `UploadFile`: multipart `file`, `file_type`; заголовок `Idempotency-Key` (повтор отдаёт первую запись; тот же ключ для другого файла/места — 422 `E-FIL-07`) → 201, версия 1 нового документа |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/` | POST | Новая версия: multipart `file`, `base_file_id` — действующая версия, поверх которой грузят. Уже заменена → 409 `E-CON-01` («Документ изменён пользователем … в 14:32…»). Номер версии присваивается один раз и не меняется, прежняя получает «Заменён» (`is_replaced`, `replaced_by_id`) |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/` | DELETE | 204. Владелец ни разу не отправлялся — физически (строки + файл в media), повтор — 404 `E-FIL-05` (документа больше нет); иначе только `deleted_at` у всех версий, повтор — 204 |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/{file_id}/link` | GET | `DownloadFile`: `{url, expires_at}` — временная ссылка после проверки прав, выдаётся на каждое скачивание. Каждая выдача — событие `file_downloaded` в журнал владельца (ТЗ §25.2: кто, когда, IP, user-agent). Удалённые после отправки версии тоже отдаются — это история документа |
+| `/api/files/v1/types/?owner_type=` | GET | Справочник «Типы файлов»: `code, owner_type, name, formats, max_mb, sort_order` + правила владельца |
+| `/api/files/v1/types/{code}/` | PATCH | Гейт `files:write`, только `{"max_mb"}`, 1…`FILES_UPLOAD_CEILING_MB` (20) — ТЗ: «Нет / размеры / нет»; отказ гейта — общий 403 `{"detail"}` |
+
+**Ошибки — в конверте модуля БЗО (D-28):** `{"detail", "code", "fields": [{"field", "message"}], "details"}`,
+`detail` — готовый текст для человека (для формата и размера — дословно ТЗ §13.2).
+Антивирус по умолчанию выключен (D-31) — `E-FIL-08`/`E-SYS-01` возможны, только
+когда задан `ANTIVIRUS_CLAMD_HOST`. Коды: `E-FIL-01` 415 формат/содержимое,
+`E-FIL-02` 413 размер (отдаёт и nginx), `E-FIL-03` 409 предел количества /
+«1 действующий» уже есть, `E-FIL-04` 422 не приложен обязательный файл (отказ
+владельца при отправке), `E-FIL-05` 404 не найдено/не видно, `E-FIL-06` 409
+не тот статус владельца, `E-FIL-07` 422 некорректный запрос, `E-FIL-08` 422
+антивирус нашёл угрозу (файл не сохраняется, событие `file_rejected` — только
+в журнал), `E-SYS-01` 503 антивирус не ответил (файл без проверки не
+принимается — повторить позже), `E-CON-01` 409 версия изменена другим,
+`E-ACC-01` 403 нет прав; неподдерживаемый метод — 405 с кодом `E-FIL-07`.
+Антивирус проверяет и документы вне подсистемы — сканы договорного контура
+(`/api/contracts/v1/*/file`, scope `generic`) и PDF шагов согласования
+(`signoff_doc`): там отказ в обычном формате, `{"detail"}` 422 (угроза) или
+503 (сканер недоступен). 401, 403 несовпадения компании токена и 503 — общий формат
+`api_view` (`{"detail"}`): это отказы платформы, а не подсистемы.
+
+Байты — в media, scope `file_object` (`owner_gated`): по JWT media такие
+файлы не отдаёт и не подписывает никому — только по ссылке подсистемы, так что
+скачивание мимо журнала невозможно. `Content-Disposition` несёт исходное имя
+(RFC 5987, кириллица сохраняется): PDF и картинки — `inline`, остальное —
+`attachment`. Журнал загрузок, замен и удалений пишет те же IP и user-agent.
+
+Журнал — `FileEvent` (django-admin «Журнал файлов», только просмотр): одна
+запись на загрузку, новую версию, удаление и выдачу ссылки у любого
+владельца; те же события уходят владельцу в `on_event` (его лента, если
+она есть). Удаляя сам объект, владелец зовёт `files.owner_deleted`: ни разу
+не отправленный уносит файлы физически, отправлявшийся оставляет их с
+`deleted_at`.
+
+---
+
 ## `apps.mail` — `/api/email/v1`
 
 Grew considerably during the port relative to the old `email-service`
@@ -1206,7 +1272,7 @@ is how `approvals` decides who may fill approver-filled fields.
 | `/api/signoff/v1/processes/{id}/rework`     | POST   | jwt   | `{comment?}` — return an **already decided** object for rework, the only way to unlock an `approved`/`rejected` row for editing. **Approver of that process or admin** (initiator deliberately excluded — that would override someone else's decision); 409 while the round is still running (use the `rework` decision or cancel instead), 409 if the object is already open. The process moves to state `rework`, keeps its original `finished_at`, and the rework is journalled as a `reopened` event |
 | `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks; per-task `{task_id, ok, error?}`, no shared transaction |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you". Each row carries `stage_order`/`stage_count` ("step 2 of 4") so a user who holds several consecutive stages — the buyer's checklist on a purchase request — can tell their tasks on one subject apart |
-| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?, option_key?}`. **`option_key`** — when the subject offers variants (process card `options`, today: an agreement with alternative offers, ТЗ §12), `approve` must name one of their `key`s → **422** «выберите…» without it, 422 «обновите страницу» for an unknown key, 422 with the subject's reason if the variant no longer fits (withdrawn, budget exceeded); ignored for reject/rework. The vote is stored on the task (`option_key`, `option_label` in the card), handed to the subject's `on_option` in the same transaction, and the subject reads the **last stage's** vote on approval. `batch-decision` never guesses a variant — such tasks fail there with the same error. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
 | `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
 
 `subject_title` / `subject_url` on process cards and inbox rows come from the

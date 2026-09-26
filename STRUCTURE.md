@@ -74,6 +74,7 @@ HTQWeb1/
 | **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2); сводка по группе для холдинга (`holding_models.py` — читатели `holding.tasks_*`, `services/holding_service.py`, блок H) |
 | **approvals** | `api/requests/v1/` | `approvals` | ⭐ Lark-style конструктор форм и реестр заявок (см. §3.4); согласует их `signoff`. Префикс URL (`requests`) и app_label (`approvals`) сознательно расходятся — см. `apps/approvals/urls.py` докстринг |
 | **cms** | `api/cms/v1/` | `cms` | Новости, категории/теги, contact-requests, ConferenceConfig |
+| **files** | `api/files/v1/` | `files` | Файловая подсистема ТЗ §21: документы любого объекта с версиями и «Заменён», справочник «Типы файлов», журнал `FileEvent`. Владельцы регистрируются из своего `ready()` (`register_owner`); в коде их пока нет — придут из `bpp` (мастер-план БЗО), тесты идут на пробных владельцах `tests/testapp`. Байты — в media (scope `file_object`), антивирус ClamAV — `htqweb/antivirus.py`, по умолчанию выключен. Общая (public); у тенантного владельца компания — часть ключа; ключ владельца — строка (целое или UUID) |
 | **media_files** | `api/media/v1/` | `media` | ⭐ Общее файловое хранилище — единая точка входа для аватарок, HR-документов, вложений мессенджера и почты (см. §7.1). `AppConfig.label = "media_files"`, но реестр знает его как `media` |
 | **mail** | `api/email/v1/` | `mail` | Дуальная почта: Mailcow + OAuth Gmail/Outlook (см. §4.1) |
 | **messenger** | `api/messenger/v1/` | `messenger` | Чат, Socket.IO (ASGI), presence, E2EE-ключи |
@@ -228,6 +229,8 @@ cd backend
 Что сейчас объявлено в `apps/contracts/approval_hooks.py`: бюджет — `admin_country_id`, `period_year`, `currency`, `amount`; контрагент — `counterparty_country_id`, `vat`; договор — `admin_country_id`, `counterparty_country_id`, `program_id`, `amount`, `currency`, `contract_type` (подпись «Тип оплаты»: стандартный / открытый — так заказчик зовёт тип договора), `payment_type` (подпись «Порядок оплаты (по авансу)»: предоплата / постоплата / поэтапно; форма его не спрашивает — `agreement_service.payment_type_from_advance` выводит из аванса, и только когда аванс реально меняют, иначе договоры из импорта теряли бы свой тип). Ветвить бюджет по программе нельзя и не будет: бюджет — контейнер из N строк, то есть N программ, а `conditions.normalize_facts` принимает только скаляры. Это упёрлось бы в новый тип факта-списка и операторы вида `contains` в самом signoff, а не в правку contracts.
 
 ⚠️ **Справочник под choice-полем обязан быть непустым.** `conditions.validate_fields` роняет ВЕСЬ список полей типа, если у любого `choice` пустые `options`, а `SubjectsView._fields` глушит это в `[]`. Практический эффект: на свежей установке без заведённых стран И программ редактор маршрута для «Договора» не покажет ни одного условия — включая те, чьи справочники заполнены. Данные это чинят сами (ни бюджет, ни договор не завести без страны и программы), но при настройке маршрутов ДО ввода данных выглядит как сломанный редактор.
+
+**Варианты голоса** (`options`/`check_option`/`on_option` в `register_subject`, мастер-план БЗО B1.3): предмет предлагает выбор «исходный документ или альтернатива» (ТЗ §12.4), «согласовать» тогда называет `option_key` (иначе 422), голос снимком лежит на задаче (`option_key`/`option_label`) и уходит предмету в `on_option` в той же транзакции; итог — голос последнего этапа (`interface.final_option`). Потребителей пока нет — альтернативы строятся в `bpp`. Тесты — `tests/test_options.py` на пробном типе.
 
 ### 3.7 Companies — мультикомпанейность (реестр компаний + схема Postgres на компанию)
 
@@ -573,6 +576,7 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 /api/email/v1/webhooks/  → backend        (БЕЗ rate-limit — Gmail Pub/Sub + Graph + Mailcow push)
 /api/media/v1/files/     → backend        (upload — жёсткий лимит, буфер выключен)
 /api/media/              → backend        (+ edge-кэш публичных вариантов, proxy_cache media_cache)
+/api/files/v1/           → backend        (файлы ТЗ §21: 21M, лимит только на POST-загрузки, 413 — JSON E-FIL-02)
 /api/                    → backend        (все остальные домены — users/hr/tasks/requests/cms/mail/messenger/
                                             contracts/signoff/conference/companies/access)
 /ws/sfu/                 → sfu:4443       (WebRTC-сигналинг, не Django)
