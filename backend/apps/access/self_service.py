@@ -127,7 +127,8 @@ from __future__ import annotations
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
                                              "media_files", "conference", "messenger", "mail",
-                                             "cms", "approvals"})
+                                             "cms", "approvals",
+                                             "project", "refdata", "notifications", "bpp"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -145,9 +146,10 @@ TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "
 REASONS: frozenset[str] = frozenset({"self", "open", "scoped"})
 
 #: аппка -> {имя ручки: причина из REASONS} (см. докстринг модуля). Ключи —
-#: все одиннадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
+#: все пятнадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
 #: "companies", "media_files", "conference", "messenger", "mail", "cms",
-#: "approvals") — всегда присутствуют (даже с пустым словарём), чтобы сторож
+#: "approvals" и аппки модуля БЗО "project", "refdata", "notifications",
+#: "bpp") — всегда присутствуют (даже с пустым словарём), чтобы сторож
 #: проверял их единообразно. Имя ручки — голое, без модуля: сторож собирает
 #: ручки со всех модулей аппки, не только из views.py.
 SELF_SERVICE: dict[str, dict[str, str]] = {
@@ -599,4 +601,12 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     # can_manage_data_table. Заведение проекта и справочников (бывшие
     # admin=True) — под level="admin". Записей самообслуживания нет.
     "approvals": {},
+    # Модуль БЗО (docs/plans/2026-09-26-bpp-master-plan.md): аппки рождаются
+    # под гейтом — каждая ручка с первого дня под api_view(module=…, level=…).
+    # Центр уведомлений — самообслуживание: записи "self" заводит задача A1.5
+    # вместе с ручками.
+    "project": {},
+    "refdata": {},
+    "notifications": {},
+    "bpp": {},
 }

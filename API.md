@@ -130,6 +130,10 @@ same backend.
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/api/conference/v1/*`              | `backend` (WSGI)   | История видеоконференций, записи, протокол — **не** `/api/cms/v1/conference/*` (там конфиг SFU и приглашения) |
+| `/api/project/v1/*`                 | `backend` (WSGI)   | «Проект» модуля БЗО: проекты и участники |
+| `/api/refdata/v1/*`                 | `backend` (WSGI)   | Общие справочники БЗО: страны, валюты, курсы, НДС, МРП, ед. изм., статьи |
+| `/api/notifications/v1/*`           | `backend` (WSGI)   | Центр уведомлений: лента, прочтение, каналы доставки |
+| `/api/bpp/v1/*`                     | `backend` (WSGI)   | Модуль БЗО: бюджеты, заявки, план закупок, договоры, счета, выписки, альтернативы, KPI. Подмодули `budgets`/`requests`+`plan`/`agreements`/`invoices`/`bank`/`alternatives`+`kpi`/`accountable` выключаются отдельно |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |

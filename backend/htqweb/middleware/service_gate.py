@@ -15,6 +15,21 @@ PREFIX_TO_SERVICE = {
     "/api/contracts/": "contracts",
     "/api/signoff/": "signoff",
     "/api/access/": "access",
+    "/api/project/": "project",
+    "/api/refdata/": "refdata",
+    "/api/notifications/": "notifications",
+    # Подмодули БЗО — ВЫШЕ префикса модуля: гейт берёт первое совпадение, а
+    # родителя подмодуль проверяет сам (apps.core.services.disabled_layer).
+    "/api/bpp/v1/budgets": "bpp_budget",
+    "/api/bpp/v1/requests": "bpp_requests",
+    "/api/bpp/v1/plan": "bpp_requests",
+    "/api/bpp/v1/agreements": "bpp_agreements",
+    "/api/bpp/v1/invoices": "bpp_invoices",
+    "/api/bpp/v1/bank": "bpp_bank",
+    "/api/bpp/v1/alternatives": "bpp_alternatives",
+    "/api/bpp/v1/kpi": "bpp_alternatives",
+    "/api/bpp/v1/accountable": "bpp_accountable",
+    "/api/bpp/": "bpp",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }

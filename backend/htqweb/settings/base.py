@@ -130,6 +130,13 @@ INSTALLED_APPS = [
     # до первого ready(), поэтому предметная аппка вправе регистрировать
     # свой тип независимо от того, стоит она здесь выше или ниже.
     "apps.signoff",
+    # Модуль БЗО «Бюджет, закупки и оплаты» и его платформенные аппки
+    # (docs/plans/2026-09-26-bpp-master-plan.md). project и bpp — тенантные,
+    # но в TENANT_APPS попадают вместе с первой миграцией (задачи A1.3, A1.1).
+    "apps.refdata",        # справочники, public · /api/refdata/v1/
+    "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
+    "apps.project",        # «Проект» · /api/project/v1/
+    "apps.bpp",            # закупки и оплаты · /api/bpp/v1/
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
