@@ -276,7 +276,7 @@ def test_processes_can_be_looked_up_by_subject(client):
         **auth(user_token(a)))
     assert found.status_code == 200
     assert len(found.json()) == 1
-    assert found.json()[0]["subject_id"] == doc.pk
+    assert found.json()[0]["subject_id"] == str(doc.pk)
 
 
 def test_process_list_is_scoped_to_participants_but_admin_sees_all(client):

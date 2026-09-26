@@ -3,7 +3,8 @@
 Универсальный движок согласования: он ничего не знает про бюджеты, договоры
 и вообще про предметные аппки. Объект, который согласуют, адресуется парой
 ``(subject_type, subject_id)`` — строка вида ``"contracts.budget"`` и id
-строки в ЧУЖОЙ таблице. Ни ``ContentType``, ни межаппного FK здесь нет и
+строки в ЧУЖОЙ таблице; id хранится строкой — каноническим ключом модели,
+целым или UUID. Ни ``ContentType``, ни межаппного FK здесь нет и
 быть не может: правило репозитория (``apps/core/tests/test_app_isolation.py``)
 запрещает signoff импортировать ``apps.contracts.models``, а ``ContentType``
 дал бы обходной путь к тому же самому через ``content_type.model_class()``.
@@ -576,7 +577,11 @@ class ApprovalProcess(models.Model):
     """
 
     subject_type = models.CharField(max_length=64, verbose_name="Тип объекта")
-    subject_id = models.IntegerField(verbose_name="Объект")
+    # Строка, а не целое: документы модуля БЗО адресуются UUID (мастер-план
+    # D-05). Хранится каноническая строка ключа модели
+    # (services/registry.storage_key); колбэки получают ключ в типе модели
+    # (registry.native_id).
+    subject_id = models.CharField(max_length=64, verbose_name="Объект")
     # Область, по маршруту которой шёл процесс (см. ``ApprovalRoute.scope``).
     # Часть снимка: объект может сменить область (заявку перевели в другой
     # шаблон), а ответ «по какому маршруту согласовывали» обязан остаться.

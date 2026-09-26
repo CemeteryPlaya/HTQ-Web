@@ -225,7 +225,7 @@ class ProcessCollectionView(SignoffView):
             request.token,
         )
         subject_type = self.str_param("subject_type")
-        subject_id = self.int_param("subject_id")
+        subject_id = self.str_param("subject_id")
         state = self.str_param("state")
         initiator_id = self.int_param("initiator_id")
         scope = self.request.GET.get("scope")
@@ -234,7 +234,13 @@ class ProcessCollectionView(SignoffView):
         if scope is not None:
             query = query.filter(scope=scope)
         if subject_id is not None:
-            query = query.filter(subject_id=subject_id)
+            try:
+                key = (registry.storage_key(subject_type, subject_id)
+                       if subject_type is not None else subject_id)
+            except UnknownSubject:
+                # Такого ключа у типа не бывает — значит, нет и процессов.
+                return []
+            query = query.filter(subject_id=key)
         if state is not None:
             query = query.filter(state=state)
         if initiator_id is not None:

@@ -1141,7 +1141,11 @@ Generic multi-stage approval. **Do not confuse with `apps.approvals`
 (`/api/requests/v1`)** — that one is a form *designer*: it approves
 `RequestInstance` rows holding JSON field values it owns. `signoff` approves
 rows that already exist in **another app's own table**, addressed by a
-`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. There is no
+`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. **`subject_id`
+is a string everywhere in the JSON** (responses, inbox, process cards) since
+26.09.2026: BPP documents are keyed by UUID. Requests still accept a number
+(`"subject_id": 5` and `"5"` address the same process); integer-keyed domains
+still get an `int` in their callbacks. There is no
 `ContentType` and no cross-app FK; the domain app hands over its model class
 and callbacks at startup (`AppConfig.ready()` → `signoff.register_subject`),
 so the dependency only ever points *domain → signoff*.

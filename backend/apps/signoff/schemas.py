@@ -9,9 +9,9 @@
 """
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from apps.signoff.models import (
     ApproverKind,
@@ -21,6 +21,12 @@ from apps.signoff.models import (
     TaskState,
 )
 from apps.signoff.services.conditions import OPS
+
+# Ключ объекта согласования. Хранится и отдаётся строкой
+# (ApprovalProcess.subject_id): документы модуля БЗО адресуются UUID.
+# Целое от старых клиентов принимается и приводится к строке — контракт ручек
+# предметных аппок не ломается.
+SubjectId = Annotated[str, BeforeValidator(str), StringConstraints(min_length=1, max_length=64)]
 
 _ORM = ConfigDict(from_attributes=True)
 
@@ -232,7 +238,7 @@ class RouteRead(BaseModel):
 
 class ProcessStart(BaseModel):
     subject_type: str = Field(..., min_length=1, max_length=64)
-    subject_id: int
+    subject_id: SubjectId
     initiator_id: Optional[int] = None
     # None — область назовёт сама предметная аппка (``Subject.scope_of``).
     scope: Optional[str] = Field(None, max_length=64)
@@ -286,7 +292,7 @@ class ProcessStageRead(BaseModel):
 class ProcessRead(BaseModel):
     id: int
     subject_type: str
-    subject_id: int
+    subject_id: SubjectId
     scope: str = ""
     state: ProcessState
     initiator_id: Optional[int]
@@ -338,7 +344,7 @@ class InboxItem(BaseModel):
     task_id: int
     process_id: int
     subject_type: str
-    subject_id: int
+    subject_id: SubjectId
     subject_title: Optional[str]
     subject_url: Optional[str]
     stage_name: str

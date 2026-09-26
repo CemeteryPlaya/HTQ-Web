@@ -193,8 +193,14 @@ cd backend
 `apps/approvals/approval_hooks.py` и получает результат колбэками). Единица
 согласования у signoff — строка в ЧУЖОЙ таблице, адресуемая парой
 `(subject_type, subject_id)`: `"contracts.budget"` + pk, `"approvals.request"`
-+ pk. Ни `ContentType`, ни междоменного FK: `ContentType` дал бы обходной
-путь к чужим моделям через `content_type.model_class()`.
++ pk. Ключ хранится строкой (`ApprovalProcess.subject_id`, `CharField(64)`,
+миграция `0012`, с 26.09.2026): документы модуля БЗО адресуются UUID. В БД
+лежит каноническая строка ключа модели (`services/registry.py::storage_key` —
+`5`, `"5"` и `"05"` адресуют один процесс), а колбэки предметной аппки, включая
+варианты голоса, получают ключ в типе ключа ЕЁ модели (`registry.native_id`:
+`int` или `UUID`), поэтому аппки с целыми ключами ничего не меняли. В JSON
+`subject_id` — строка. Ни `ContentType`, ни междоменного FK: `ContentType` дал
+бы обходной путь к чужим моделям через `content_type.model_class()`.
 
 **Область маршрута (`scope`).** Активный маршрут — один на пару
 `(subject_type, scope)`. Пустая область значит «весь тип» (так живут

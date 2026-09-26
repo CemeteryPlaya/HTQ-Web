@@ -229,7 +229,7 @@ def _stage_counts(process_ids: set[int]) -> dict[int, int]:
                 .values_list("process_id", "n"))
 
 
-def describe_many(pairs) -> dict[tuple[str, int], dict]:
+def describe_many(pairs) -> dict[tuple[str, str], dict]:
     """``{(subject_type, subject_id): {title, url}}`` через колбэки аппок.
 
     ``describe`` предметной аппки принимает по одному id, поэтому пачка
@@ -238,7 +238,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
     список «ждёт решения» у человека — это единицы строк, и лишний метод в
     контракте каждой предметной аппки стоил бы дороже.
     """
-    out: dict[tuple[str, int], dict] = {}
+    out: dict[tuple[str, str], dict] = {}
     for subject_type, subject_id in dict.fromkeys(pairs):
         try:
             subject = registry.get_subject(subject_type)
@@ -256,7 +256,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
             continue
 
         try:
-            info = subject.describe(subject_id) or {}
+            info = subject.describe(registry.native_id(subject_type, subject_id)) or {}
         except Exception:
             logger.warning("signoff: describe() для %s#%s упал",
                            subject_type, subject_id, exc_info=True)

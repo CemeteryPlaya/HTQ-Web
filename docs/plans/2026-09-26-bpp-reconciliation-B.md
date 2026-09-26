@@ -70,9 +70,9 @@
 
 ## 4. Миграции и номера
 
-- `signoff/0011` занята вариантами голоса, поэтому миграция B0.1 (строковый `subject_id`) будет **`0012`**, а не `0011`, как в плане этапа 0.
+- `signoff/0011` занята вариантами голоса, поэтому миграция B0.1 (строковый `subject_id`) — **`0012_process_subject_id_string`**, а не `0011`, как в плане этапа 0.
 - `access/0013_grant_files_module` (B) и `access/0013_platform_admin_bpp_modules` (A0.2) — один номер. При слиянии: `makemigrations access --merge` или включить `files` в миграцию A и удалить эту.
-- B0.1 должен провести ключ через `native_id` / `storage_key` и в функциях вариантов голоса: `options_for`, `check_option_for`, `on_option_for`, `final_option`. В плане этапа 0 их нет, их писали от `main`.
+- B0.1 провёл ключ через `native_id` / `storage_key` и в функциях вариантов голоса: `options_for`, `check_option_for`, `on_option_for`, `final_option` — в плане этапа 0 их нет (писался от `main`). Тест сверх плана — `test_vote_options_reach_a_uuid_subject_in_its_key_type`.
 
 ## 5. Прочее
 

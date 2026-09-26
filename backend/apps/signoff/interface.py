@@ -117,7 +117,7 @@ def has_active_route(subject_type: str, scope: str = "") -> bool:
                                         is_active=True).exists()
 
 
-def start_process(*, subject_type: str, subject_id: int,
+def start_process(*, subject_type: str, subject_id: int | str,
                   initiator_id: int | None = None,
                   enrich: bool = False, scope: str | None = None) -> dict:
     """Отправить объект на согласование. Возвращает карточку процесса.
@@ -129,6 +129,9 @@ def start_process(*, subject_type: str, subject_id: int,
     ``scope`` обычно не передаётся: область объекта движок спрашивает у
     самой аппки (``Subject.scope_of``), и явный аргумент нужен только там,
     где аппка хочет запустить объект по чужой области.
+
+    ``subject_id`` — целое, строка или ``UUID``: движок приводит его к
+    канонической строке ключа модели.
     """
     require_service("signoff")
 
@@ -173,18 +176,19 @@ def get_process(process_id: int, *, enrich: bool = False) -> dict | None:
     return None if process is None else serialize_process(process, enrich=enrich)
 
 
-def get_process_for(subject_type: str, subject_id: int, *,
+def get_process_for(subject_type: str, subject_id: int | str, *,
                     enrich: bool = False) -> dict | None:
     """Последний процесс согласования объекта или ``None``."""
     require_service("signoff")
 
     process = (ApprovalProcess.objects
-               .filter(subject_type=subject_type, subject_id=subject_id)
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
                .order_by("-created_at", "-id").first())
     return None if process is None else serialize_process(process, enrich=enrich)
 
 
-def final_option(subject_type: str, subject_id: int) -> dict | None:
+def final_option(subject_type: str, subject_id: int | str) -> dict | None:
     """Какой вариант принят последним согласованным кругом объекта.
 
     Голос последнего этапа — решающий (ТЗ §12.4: «если голоса разошлись,
@@ -199,7 +203,8 @@ def final_option(subject_type: str, subject_id: int) -> dict | None:
     require_service("signoff")
 
     process = (ApprovalProcess.objects
-               .filter(subject_type=subject_type, subject_id=subject_id,
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id),
                        state=ProcessState.APPROVED)
                .order_by("-created_at", "-id").first())
     if process is None:
@@ -216,7 +221,7 @@ def final_option(subject_type: str, subject_id: int) -> dict | None:
             "actor_id": task.user_id, "acted_at": task.acted_at}
 
 
-def approval_state_of(subject_type: str, subject_id: int) -> str:
+def approval_state_of(subject_type: str, subject_id: int | str) -> str:
     """Состояние согласования объекта, выведенное из процессов.
 
     Нужно редко: у самого объекта есть денормализованное поле
@@ -226,7 +231,8 @@ def approval_state_of(subject_type: str, subject_id: int) -> str:
     require_service("signoff")
 
     process = (ApprovalProcess.objects
-               .filter(subject_type=subject_type, subject_id=subject_id)
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
                .order_by("-created_at", "-id").first())
     if process is None:
         return ApprovalState.DRAFT
@@ -290,7 +296,7 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
 
 
 def pending_step(*, user_id: int, subject_type: str,
-                 subject_id: int) -> dict | None:
+                 subject_id: int | str) -> dict | None:
     """Рабочий шаг этого пользователя по объекту ПРЯМО СЕЙЧАС — или ``None``.
 
     Задача на активном этапе идущего процесса, где решение за ним, вместе с
@@ -314,7 +320,7 @@ def pending_step(*, user_id: int, subject_type: str,
                     stage__state=StageState.ACTIVE,
                     stage__process__state=ProcessState.PENDING,
                     stage__process__subject_type=subject_type,
-                    stage__process__subject_id=subject_id)
+                    stage__process__subject_id=registry.storage_key(subject_type, subject_id))
             .order_by("stage__order", "id")
             .first())
     if task is None:
@@ -335,17 +341,20 @@ def pending_step(*, user_id: int, subject_type: str,
 
 
 def pending_requirement_keys(*, user_id: int, subject_type: str,
-                             subject_id: int) -> list[str]:
+                             subject_id: int | str) -> list[str]:
     """Требования к объекту активного шага пользователя (см. ``pending_step``)."""
     step = pending_step(user_id=user_id, subject_type=subject_type,
                         subject_id=subject_id)
     return [step["requirement_key"]] if step and step["requirement_key"] else []
 
 
-def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list[int]:
+def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list:
     """Объекты этого типа, по которым пользователь должен принять решение
     ПРЯМО СЕЙЧАС — для вкладки «Список дел» реестра предметной аппки,
-    которой к ``ApprovalTask`` доступа нет. Порядок — свежие процессы первыми."""
+    которой к ``ApprovalTask`` доступа нет. Порядок — свежие процессы первыми.
+
+    Ключи — в типе ключа модели (``registry.native_id``): целые у
+    целочисленных моделей, ``UUID`` у моделей с UUID-ключом."""
     require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
@@ -356,13 +365,16 @@ def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list[int]:
                     stage__process__subject_type=subject_type)
             .order_by("-stage__process__created_at")
             .values_list("stage__process__subject_id", flat=True))
-    return list(dict.fromkeys(rows))
+    return registry.native_ids(subject_type, dict.fromkeys(rows))
 
 
-def list_decided_subject_ids(user_id: int, subject_type: str) -> list[int]:
+def list_decided_subject_ids(user_id: int, subject_type: str) -> list:
     """Объекты, по которым пользователь УЖЕ принимал решение — вкладка
     «Готово». Только состоявшиеся решения: пропущенные кворумом запросы
-    (``skipped``) решением не были."""
+    (``skipped``) решением не были.
+
+    Ключи — в типе ключа модели (``registry.native_id``): целые у
+    целочисленных моделей, ``UUID`` у моделей с UUID-ключом."""
     require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
@@ -373,10 +385,10 @@ def list_decided_subject_ids(user_id: int, subject_type: str) -> list[int]:
             .exclude(state__in=(TaskState.PENDING, TaskState.SKIPPED))
             .order_by("-acted_at")
             .values_list("stage__process__subject_id", flat=True))
-    return list(dict.fromkeys(rows))
+    return registry.native_ids(subject_type, dict.fromkeys(rows))
 
 
-def is_participant(user_id: int, subject_type: str, subject_id: int) -> bool:
+def is_participant(user_id: int, subject_type: str, subject_id: int | str) -> bool:
     """Был ли человек согласующим этого объекта — в любом круге и в любом
     состоянии задачи.
 
@@ -392,7 +404,7 @@ def is_participant(user_id: int, subject_type: str, subject_id: int) -> bool:
     return ApprovalTask.objects.filter(
         user_id=user_id,
         stage__process__subject_type=subject_type,
-        stage__process__subject_id=subject_id,
+        stage__process__subject_id=registry.storage_key(subject_type, subject_id),
     ).exists()
 
 

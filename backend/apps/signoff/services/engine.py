@@ -231,7 +231,7 @@ def _now() -> datetime:
 # ═══════════════════════════════════════════════════════════════════════
 
 @transaction.atomic
-def start(*, subject_type: str, subject_id: int,
+def start(*, subject_type: str, subject_id: int | str,
           initiator_id: int | None = None,
           scope: str | None = None) -> ApprovalProcess:
     """Запустить согласование объекта по активному маршруту его типа.
@@ -240,6 +240,9 @@ def start(*, subject_type: str, subject_id: int,
     аппка (``Subject.scope_of``), явный аргумент — для операторского запуска.
     """
     subject = registry.get_subject(subject_type)  # UnknownSubject → 409/422
+    # Каноническая строка ключа модели: 5, "5" и "05" — один объект, и
+    # частичный уникальный индекс видит одно значение (registry.storage_key).
+    subject_id = registry.storage_key(subject_type, subject_id)
     if scope is None:
         scope = registry.scope_for(subject_type, subject_id)
 
@@ -320,14 +323,14 @@ def start(*, subject_type: str, subject_id: int,
     })
 
     if subject.on_started is not None:
-        subject.on_started(subject_id)
+        subject.on_started(registry.native_id(subject_type, subject_id))
     _set_subject_state(subject_type, subject_id, ApprovalState.PENDING)
 
     _notify_active_stages(process)
     return process
 
 
-def _assert_submittable(subject, subject_id: int) -> None:
+def _assert_submittable(subject, subject_id: str) -> None:
     """Отсечь повторную отправку того, по чему решение уже принято.
 
     Согласованный и отклонённый объекты заперты для правки
@@ -392,7 +395,7 @@ def _facts_hint(facts: dict) -> str:
 
 
 def _resolve_stages(selected, *, initiator_id: int | None,
-                    subject_type: str, subject_id: int,
+                    subject_type: str, subject_id: str,
                     ) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
     """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
@@ -446,7 +449,7 @@ def _resolve_stages(selected, *, initiator_id: int | None,
 
 
 def _approver_ids(stage, *, initiator_id: int | None,
-                  subject_type: str, subject_id: int) -> dict[int | None, list[int]]:
+                  subject_type: str, subject_id: str) -> dict[int | None, list[int]]:
     """Кому адресовать запросы этого этапа — по виду согласующих.
 
     Должности берутся из маршрута и разворачиваются через HR; этап
@@ -872,7 +875,7 @@ def _apply_outcome(process: ApprovalProcess, state: str) -> None:
         ProcessState.CANCELLED: subject.on_cancelled,
     }.get(state)
     if callback is not None:
-        callback(process.subject_id)
+        callback(registry.native_id(process.subject_type, process.subject_id))
 
     _set_subject_state(process.subject_type, process.subject_id,
                        _SUBJECT_STATE_BY_OUTCOME[state])
@@ -896,7 +899,7 @@ def _lock(process_id: int) -> ApprovalProcess:
     return process
 
 
-def _set_subject_state(subject_type: str, subject_id: int, state: str) -> None:
+def _set_subject_state(subject_type: str, subject_id: str, state: str) -> None:
     """Проставить ``approval_state`` предметному объекту.
 
     Пишет сам signoff — через класс модели, который предметная аппка отдала
@@ -980,7 +983,7 @@ def _emit(process: ApprovalProcess, kind: str, payload: dict) -> None:
     if subject.on_event is None:
         return
     body = {"process_id": process.pk, "state": str(process.state), **payload}
-    subject_id = process.subject_id
+    subject_id = registry.native_id(process.subject_type, process.subject_id)
 
     def send() -> None:
         try:
@@ -998,7 +1001,8 @@ def _describe(process: ApprovalProcess) -> dict:
     if subject.describe is None:
         return {"title": f"{subject.label} #{process.subject_id}", "url": None}
     try:
-        return subject.describe(process.subject_id) or {}
+        return subject.describe(
+            registry.native_id(process.subject_type, process.subject_id)) or {}
     except Exception:
         # Оформление карточки не должно ронять согласование.
         logger.warning("signoff: describe() для %s#%s упал",
