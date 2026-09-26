@@ -531,7 +531,8 @@ business logic).
 | `/api/tasks/v1/calendar/timeline/`                | GET    | `{ tasks, events }` by `start`/`end` |
 | `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
-| `/api/tasks/v1/notifications/`                    | GET    |                              |
+| `/api/tasks/v1/notifications/`                    | GET    | Колокольчик — фасад над центром уведомлений (`apps.notifications`): лента компании запроса плюс общие; `id` и `target_id` — строки, `url` — ссылка писателя |
+| `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
 | `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model

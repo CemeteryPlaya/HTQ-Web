@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Circle,
   RefreshCw,
+  Settings,
   Trash2,
 } from 'lucide-react';
 
@@ -162,6 +163,12 @@ const NotificationsHistory: React.FC = () => {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link to="/settings/notifications">
+                <Settings className="h-4 w-4" />
+                {t('notifications.settings.link', 'Способы уведомлений')}
+              </Link>
+            </Button>
             <Button
               variant="outline"
               size="sm"

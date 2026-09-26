@@ -11,12 +11,23 @@ from .services import center, digest
 
 def notify(*, recipients: list[int], event: str, title: str, text: str = "", url: str = "",
            company_slug: str | None, target_type: str = "", target_id: str = "",
-           actor_id: int | None = None, actor_avatar_url: str | None = None) -> list[str]:
+           actor_id: int | None = None, actor_avatar_url: str | None = None,
+           deliver: bool = True, dedupe_window_seconds: int | None = None) -> list[str]:
+    """Записать уведомление; ``deliver=False`` — только колокольчик,
+    ``dedupe_window_seconds`` — без дубля за окно (см. ``services.center.notify``)."""
     require_service("notifications")
     return center.notify(recipients=recipients, event=event, title=title, text=text, url=url,
                          company_slug=company_slug, target_type=target_type,
                          target_id=target_id, actor_id=actor_id,
-                         actor_avatar_url=actor_avatar_url)
+                         actor_avatar_url=actor_avatar_url, deliver=deliver,
+                         dedupe_window_seconds=dedupe_window_seconds)
+
+
+def unread_pairs(*, target_type: str, target_ids: list[str],
+                 recipient_ids: list[int]) -> set[tuple[str, int]]:
+    require_service("notifications")
+    return center.unread_pairs(target_type=target_type, target_ids=target_ids,
+                               recipient_ids=recipient_ids)
 
 
 def latest(user_id: int, *, company_slug: str | None, limit: int = 50) -> list[dict]:

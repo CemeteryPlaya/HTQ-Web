@@ -14,9 +14,20 @@ from django.utils import timezone
 from apps.core.models import ServiceStatus
 from apps.core.services import ServiceDisabled
 from apps.tasks import interface, tasks as celery_tasks
+# Колокольчик — в центре уведомлений (A1.5 модуля БЗО).
+from apps.notifications.models import Notification
 from apps.tasks.models import (
-    CalendarEvent, CalendarEventParticipant, Notification, Status, Task,
+    CalendarEvent, CalendarEventParticipant, Status, Task,
 )
+
+
+@pytest.fixture(autouse=True)
+def _quiet_center(monkeypatch):
+    """Без доставки и Socket.IO: тесты про то, ЧТО попало в ленту."""
+    from apps.notifications.services import center
+
+    monkeypatch.setattr(center, "_enqueue", lambda ids: None)
+    monkeypatch.setattr(center, "_realtime", lambda rows: None)
 
 
 def _mk_task(**over) -> Task:
@@ -54,12 +65,12 @@ def test_deadline_reminder_notifies_assignees_due_today_and_tomorrow(company_con
     _mk_task(due_date=today + dt.timedelta(days=5), assignee_id=13)   # later
 
     assert celery_tasks.task_deadline_reminder(company_slug=company_context["slug"]) == 2
-    verbs = dict(Notification.objects.values_list("recipient_id", "verb"))
+    verbs = dict(Notification.objects.values_list("recipient_id", "title"))
     assert verbs[11] == "task_due_0d"
     assert verbs[12] == "task_due_1d"
     assert 13 not in verbs
-    assert set(Notification.objects.values_list("task_id", flat=True)) == {
-        due_today.id, due_tomorrow.id}
+    assert set(Notification.objects.values_list("target_id", flat=True)) == {
+        str(due_today.id), str(due_tomorrow.id)}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -122,8 +133,8 @@ def test_calendar_reminder_notifies_participants_in_the_window(company_context):
     assert recipients == {11, 12}          # declined and out-of-window skipped
     row = Notification.objects.get(recipient_id=11)
     assert row.target_type == "calendar_event"
-    assert row.target_id == soon.id
-    assert row.verb.startswith("calendar_event_starts_in_")
+    assert row.target_id == str(soon.id)
+    assert row.title.startswith("calendar_event_starts_in_")
 
 
 @pytest.mark.django_db(transaction=True)

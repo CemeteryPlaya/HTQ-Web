@@ -20,6 +20,7 @@ export const lazyPages = {
   Settings: React.lazy(() => import('@/pages/Settings')),
   Messenger: React.lazy(() => import('@/features/messenger/MessengerPage')),
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),
+  NotificationSettings: React.lazy(() => import('@/pages/NotificationSettings')),
 
   ContractsOverview: React.lazy(() => import('@/pages/contracts/ContractsOverview')),
   ContractsMyTasks: React.lazy(() => import('@/pages/contracts/ContractsMyTasks')),

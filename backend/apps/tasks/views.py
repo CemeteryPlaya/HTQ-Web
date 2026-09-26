@@ -1992,13 +1992,13 @@ def notification_history(request):
 
 
 @api_view(methods=("POST",), status=204)
-def notification_mark_read(request, notification_id: int):
+def notification_mark_read(request, notification_id: str):
     notification_service.mark_read(notification_id, request.token.user_id)
     return _no_content()
 
 
 @api_view(methods=("POST",), status=204)
-def notification_mark_unread(request, notification_id: int):
+def notification_mark_unread(request, notification_id: str):
     notification_service.mark_unread(notification_id, request.token.user_id)
     return _no_content()
 
@@ -2010,7 +2010,7 @@ def notifications_mark_all_read(request):
 
 
 @api_view(methods=("DELETE",), status=204)
-def notification_detail(request, notification_id: int):
+def notification_detail(request, notification_id: str):
     notification_service.delete(notification_id, request.token.user_id)
     return _no_content()
 

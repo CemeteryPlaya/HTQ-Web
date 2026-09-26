@@ -81,3 +81,29 @@ def test_foreign_notification_is_404():
     (nid,) = _notify()
     with pytest.raises(Http404):
         interface.mark_read(nid, 8)
+
+
+@pytest.mark.django_db
+def test_dedupe_window():
+    for _ in range(2):
+        _notify(dedupe_window_seconds=300)
+    assert Notification.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_bell_only_notification_has_no_deliveries():
+    """Лента задач переехала в центр как есть — только колокольчик: письмо о
+    каждом сообщении мессенджера было бы новым поведением, а не переездом."""
+    _notify(deliver=False)
+    assert Notification.objects.count() == 1
+    assert not Delivery.objects.exists()
+
+
+@pytest.mark.django_db
+def test_unread_pairs():
+    _notify(recipients=[7, 8], target_type="calendar_event", target_id="5")
+    (read,) = _notify(recipients=[9], target_type="calendar_event", target_id="5")
+    interface.mark_read(read, 9)
+    _notify(recipients=[7], target_type="task", target_id="5")
+    assert interface.unread_pairs(target_type="calendar_event", target_ids=["5", "6"],
+                                  recipient_ids=[7, 8, 9]) == {("5", 7), ("5", 8)}

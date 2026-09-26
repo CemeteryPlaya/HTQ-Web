@@ -54,8 +54,9 @@ def task_deadline_reminder() -> int:
 
     Ported from ``workers/scheduler.py::task_deadline_reminder`` (hourly, on
     the minute). The original enqueued a Dramatiq message per task; here the
-    ``Notification`` row is written directly, which is what that message was
-    always going to do.
+    notification is written directly — since A1.5 of the BZO module into the
+    notification center (``apps.notifications``, bell only), which is what
+    that message was always going to do.
 
     The verb keeps the original's ``task_due_<N>d`` shape, so the frontend's
     verb parsing is unchanged. Returns the number of notifications written —
@@ -68,7 +69,10 @@ def task_deadline_reminder() -> int:
     """
     require_service("tasks")
 
-    from .models import Notification, Status, Task
+    from apps.notifications import interface as notifications
+    from htqweb.tenancy.context import current_company_or_none
+
+    from .models import Status, Task
 
     today = timezone.localdate()
     horizon = today + timedelta(days=1)
@@ -77,18 +81,17 @@ def task_deadline_reminder() -> int:
         assignee_id__isnull=False,
     ).exclude(status__in=[Status.DONE, Status.CANCELLED]))
 
-    rows = [
-        Notification(
-            recipient_id=task.assignee_id, actor_id=None, task=task,
-            verb=f"task_due_{(task.due_date - today).days}d",
-            target_type="task", target_id=task.id,
-        )
-        for task in due
-    ]
-    Notification.objects.bulk_create(rows)
-    if rows:
-        logger.info("task_deadline_reminder wrote %d notifications", len(rows))
-    return len(rows)
+    company = current_company_or_none()
+    written = 0
+    for task in due:
+        # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
+        written += len(notifications.notify(
+            recipients=[task.assignee_id], event="tasks.task_due",
+            title=f"task_due_{(task.due_date - today).days}d", company_slug=company,
+            target_type="task", target_id=str(task.id), deliver=False))
+    if written:
+        logger.info("task_deadline_reminder wrote %d notifications", written)
+    return written
 
 
 @shared_task(name="apps.tasks.tasks.task_deadline_reminder_dispatch")
@@ -119,9 +122,10 @@ def calendar_event_reminder() -> int:
     pairs — which silently forgot everything on restart and did not
     de-duplicate across the two scheduler processes.
 
-    This writes a ``Notification`` row instead and de-duplicates on the
-    database: a participant already holding an unread reminder for the same
-    event is skipped. That survives restarts and concurrent workers, which
+    This writes a notification-center row instead (``apps.notifications``,
+    bell only, since A1.5 of the BZO module) and de-duplicates on the
+    database (``notifications.interface.unread_pairs``): a participant
+    already holding an unread notification about the same event is skipped. That survives restarts and concurrent workers, which
     the in-memory list never did.
 
     Called as ``calendar_event_reminder.delay(company_slug="...")`` — see
@@ -130,7 +134,10 @@ def calendar_event_reminder() -> int:
     """
     require_service("tasks")
 
-    from .models import CalendarEventParticipant, Notification
+    from apps.notifications import interface as notifications
+    from htqweb.tenancy.context import current_company_or_none
+
+    from .models import CalendarEventParticipant
 
     now = timezone.now()
     horizon = now + timedelta(minutes=15)
@@ -143,30 +150,27 @@ def calendar_event_reminder() -> int:
     if not upcoming:
         return 0
 
-    already = set(
-        Notification.objects
-        .filter(target_type="calendar_event",
-                target_id__in=[p.event_id for p in upcoming],
-                recipient_id__in=[p.user_id for p in upcoming],
-                is_read=False)
-        .values_list("target_id", "recipient_id")
-    )
+    already = notifications.unread_pairs(
+        target_type="calendar_event",
+        target_ids=[str(p.event_id) for p in upcoming],
+        recipient_ids=[p.user_id for p in upcoming])
 
-    rows = []
+    company = current_company_or_none()
+    written = 0
     for participant in upcoming:
-        if (participant.event_id, participant.user_id) in already:
+        if (str(participant.event_id), participant.user_id) in already:
             continue
         starts_in = max(0, int(
             (participant.event.start_at - now).total_seconds() // 60))
-        rows.append(Notification(
-            recipient_id=participant.user_id, actor_id=None,
-            verb=f"calendar_event_starts_in_{starts_in}m",
-            target_type="calendar_event", target_id=participant.event_id,
-        ))
-    Notification.objects.bulk_create(rows)
-    if rows:
-        logger.info("calendar_event_reminder wrote %d notifications", len(rows))
-    return len(rows)
+        # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
+        written += len(notifications.notify(
+            recipients=[participant.user_id], event="tasks.calendar_reminder",
+            title=f"calendar_event_starts_in_{starts_in}m", company_slug=company,
+            target_type="calendar_event", target_id=str(participant.event_id),
+            deliver=False))
+    if written:
+        logger.info("calendar_event_reminder wrote %d notifications", written)
+    return written
 
 
 @shared_task(name="apps.tasks.tasks.calendar_event_reminder_dispatch")

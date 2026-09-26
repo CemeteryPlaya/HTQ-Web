@@ -265,8 +265,9 @@
     },
     "NotificationResponse": {
       "source": "services/task/app/schemas/notification.py::NotificationResponse",
+      "changed": "A1.5 модуля БЗО: лента живёт в центре уведомлений — id и target_id строки (UUID центра, id цели любого типа), добавлен url",
       "fields": {
-        "id": "int",
+        "id": "str",
         "recipient_id": "int",
         "actor_id": "int|null",
         "actor_name": "str|null",
@@ -275,7 +276,8 @@
         "task_id": "int|null",
         "task_key": "str|null",
         "target_type": "str|null",
-        "target_id": "int|null",
+        "target_id": "str|null",
+        "url": "str|null",
         "is_read": "bool",
         "read_at": "str|null",
         "created_at": "str"

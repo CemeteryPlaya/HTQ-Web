@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
@@ -52,14 +54,31 @@ def _realtime(rows: list[Notification]) -> None:
 
 
 def notify(*, recipients, event, title, text="", url="", company_slug=None,
-           target_type="", target_id="", actor_id=None, actor_avatar_url=None) -> list[str]:
+           target_type="", target_id="", actor_id=None, actor_avatar_url=None,
+           deliver=True, dedupe_window_seconds=None) -> list[str]:
+    """Записать уведомление каждому получателю.
+
+    ``deliver=False`` — только колокольчик, без e-mail/Telegram: так пишет
+    лента задач, переехавшая в центр (письмо о каждом сообщении мессенджера
+    было бы новым поведением, а не переездом). ``dedupe_window_seconds`` —
+    не писать, если такое же уведомление (получатель, актор, заголовок, цель)
+    уже есть за это окно; такому получателю id не возвращается.
+    """
     rows, deliveries = [], []
+    title = title[:255]
+    target_type, target_id = target_type or "", str(target_id or "")
     for user_id in dict.fromkeys(int(r) for r in recipients):
+        if dedupe_window_seconds and Notification.objects.filter(
+                recipient_id=user_id, actor_id=actor_id, title=title,
+                target_type=target_type, target_id=target_id,
+                created_at__gte=timezone.now() - timedelta(seconds=dedupe_window_seconds),
+        ).exists():
+            continue
         prefs = prefs_of(user_id)
         row = Notification.objects.create(
             recipient_id=user_id, company_slug=company_slug or "", event=event,
-            title=title[:255], text=text, url=url, target_type=target_type or "",
-            target_id=str(target_id or ""), actor_id=actor_id,
+            title=title, text=text, url=url, target_type=target_type,
+            target_id=target_id, actor_id=actor_id,
             actor_avatar_url=actor_avatar_url,
             # Колокольчик выключен — запись создаётся прочитанной и в ленту
             # не попадает (фильтр bell ниже): источник для e-mail/Telegram нужен.
@@ -67,10 +86,20 @@ def notify(*, recipients, event, title, text="", url="", company_slug=None,
         )
         rows.append(row)
         for channel, enabled in ((Channel.EMAIL, prefs.email), (Channel.TELEGRAM, prefs.telegram)):
-            if enabled:
+            if deliver and enabled:
                 deliveries.append(Delivery.objects.create(notification=row, channel=channel).id)
     transaction.on_commit(lambda: (_enqueue(deliveries), _realtime([r for r in rows])))
     return [str(r.id) for r in rows]
+
+
+def unread_pairs(*, target_type: str, target_ids: list[str],
+                 recipient_ids: list[int]) -> set[tuple[str, int]]:
+    """Пары ``(target_id, recipient_id)`` с непрочитанным уведомлением о цели —
+    дедупликация напоминаний (``tasks.calendar_event_reminder``)."""
+    return set(Notification.objects.filter(
+        target_type=target_type, target_id__in=[str(i) for i in target_ids],
+        recipient_id__in=recipient_ids, is_read=False,
+    ).values_list("target_id", "recipient_id"))
 
 
 def _feed(user_id: int, company_slug: str | None):
