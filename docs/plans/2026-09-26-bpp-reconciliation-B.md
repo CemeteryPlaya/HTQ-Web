@@ -76,5 +76,6 @@
 
 ## 5. Прочее
 
+- **Handoff этапа 0 отложен до сверки.** B0.1 и B0.2 сделаны (коммиты `2da6b53`, `e94f906`), но шаг 9 плана этапа 0 не выполнялся: слияние `origin/new-module-BPP-sanzhar` и прогон сторожей (`apps/core/tests`, `apps/access/tests`, `apps/signoff/tests`, `test_module_service.py`, `vitest`) переносятся на общую сверку (порядок работы Санжара от 26.09). На 26.09 в ветке A был только коммит с планами.
 - `approvals/services/instance_service.py`: PATCH черновика заявки — под `select_for_update` и `update_fields`, чтобы не затирать параллельную отправку. Исправление гонки, не новая функциональность.
 - **Известные падения, не от этой ветки.** 8 тестов vitest в `src/components/hr/__tests__/` (`CardT2SectionDialog`, `EmployeeFormDialog`: не находится поле «Оклад»). Файлы и переводы `hr` здесь не менялись — падения есть и на `main`.
