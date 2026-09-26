@@ -138,6 +138,14 @@ def service_enabled(name: str) -> bool:
 
 
 def require_service(name: str) -> None:
-    off = disabled_layer(name)
-    if off is not None:
-        raise ServiceDisabled(*off)
+    """Поднять ``ServiceDisabled``, если домен или подмодуль выключен.
+
+    Решение принимает ``service_status`` — единая точка, которую тесты
+    соседних аппок подменяют, чтобы «выключить» домен. Слой, который назвать
+    в ошибке (родитель подмодуля или он сам), уточняет ``disabled_layer``
+    только на пути отказа.
+    """
+    enabled, message = service_status(name)
+    if not enabled:
+        off = disabled_layer(name)
+        raise ServiceDisabled(*(off or (name, message)))
