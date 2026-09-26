@@ -12,6 +12,8 @@
  * эндпоинт предметной аппки (`contractsApi.submitBudget` и соседи).
  */
 
+import type { SubjectId } from '@/components/signoff/subjectId';
+
 import api from './client';
 import { apiPath } from './endpoints';
 import type {
@@ -33,7 +35,7 @@ const path = (suffix: string) => apiPath('signoff', suffix);
 
 export interface ProcessListParams {
   subject_type?: string;
-  subject_id?: number;
+  subject_id?: SubjectId;
   state?: string;
   initiator_id?: number;
 }

@@ -310,7 +310,8 @@ export interface ProcessStage {
 export interface ApprovalProcess {
   id: number;
   subject_type: string;
-  subject_id: number;
+  /** Строка: целый id старых доменов или UUID документа БЗО. */
+  subject_id: string;
   /** Область маршрута, по которому шёл процесс (снимок). */
   scope: string;
   state: ProcessState;
@@ -341,7 +342,8 @@ export interface InboxItem {
   task_id: number;
   process_id: number;
   subject_type: string;
-  subject_id: number;
+  /** Строка: целый id старых доменов или UUID документа БЗО. */
+  subject_id: string;
   subject_title: string | null;
   subject_url: string | null;
   stage_name: string;

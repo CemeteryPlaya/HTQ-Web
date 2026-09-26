@@ -537,7 +537,11 @@ const ProcessDetail = () => {
                 // 503 выключенного домена) оно показывает само — страница
                 // согласования от этого не разваливается.
                 <Suspense fallback={<Skeleton className="h-64 w-full" />}>
-                  <SubjectView id={process.subject_id} embedded />
+                  {/* Представления предметных доменов пока все с целыми id.
+                      Документы БЗО (UUID) получат строковый контракт
+                      SubjectViewProps в задаче B2.5 — до тех пор их типов в
+                      SIGNOFF_SUBJECT_VIEWS нет, и сюда они не попадают. */}
+                  <SubjectView id={Number(process.subject_id)} embedded />
                 </Suspense>
               ) : (
                 // Тип есть в реестре бэкенда, но своего представления во

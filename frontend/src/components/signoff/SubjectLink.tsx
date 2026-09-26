@@ -27,13 +27,14 @@ import { ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 import { isRoutableUrl } from './routable';
+import type { SubjectId } from './subjectId';
 import { useTranslation } from 'react-i18next';
 
 interface Props {
   title: string | null;
   url: string | null;
   subjectType: string;
-  subjectId: number;
+  subjectId: SubjectId;
   /** Задан — заголовок ведёт на карточку этого согласования, а не на
    *  документ. Для очереди согласований. */
   processId?: number;
