@@ -66,7 +66,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from apps.core.models import ServiceStatus
 from htqweb.date_rules import DATE_PAIRS, OrderedDates
 from htqweb.admin_gate import ServiceGatedAdminMixin
-from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, service_name_for_app_label
+from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, prefix_matches, service_name_for_app_label
 
 # ─────────────────────────────────────────────────────────────────────────
 # Shared discovery: "domain app" = anything under apps.* except apps.core,
@@ -408,7 +408,7 @@ def _sweep_targets() -> list[tuple[str, str]]:
         if prefix.startswith("/ws/"):
             continue
         for full, _callback in all_leaves:
-            if not full.startswith(prefix):
+            if not prefix_matches(full, prefix):
                 continue
             if (service, full) in _SWEEP_SKIP:
                 continue

@@ -235,6 +235,14 @@ for one company (never one of `apps.core.services.CORE_MODULES`), and `apps.core
 merges both layers for the middleware and `require_service()` alike — see `../CLAUDE.md`, «Два
 независимых рубильника».
 
+A part of an app can have its own switch: `apps.core.models.KNOWN_SUBMODULES` maps a submodule to
+its parent service (one level; today the seven `bpp_*`). `apps.core.services.disabled_layer()`
+checks the parent first, and the 503 names whichever layer is off. `manage.py service` and the
+company-modules screen accept submodule names; the access registry does not (rights are granted on
+the module). In `PREFIX_TO_SERVICE` a submodule prefix sits ABOVE its module prefix (first match
+wins) and has no trailing slash — `prefix_matches()` then matches it only on a path-segment
+boundary, so `/api/bpp/v1/bank` does not swallow `/api/bpp/v1/bank-accounts`.
+
 Flip one: `manage.py service <name> --on/--off [--message "..."]`. A disabled app answers `503`
 `{"detail", "code": "service_disabled", "service"}` at the HTTP edge and via any `interface.py`
 call that hits its `require_service()`; the admin instead gets Django's native `PermissionDenied`

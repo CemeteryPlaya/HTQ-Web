@@ -59,6 +59,20 @@ APP_LABEL_TO_SERVICE = {
 }
 
 
+def prefix_matches(path: str, prefix: str) -> bool:
+    """Путь под префиксом гейта.
+
+    Префикс со слешем на конце — обычное «начинается с». Префикс без слеша
+    (подмодули БЗО: голый путь коллекции ``/api/bpp/v1/budgets`` тоже
+    гейтится, ``APPEND_SLASH = False``) совпадает только на границе сегмента:
+    иначе ``/api/bpp/v1/bank`` захватил бы соседний ``/api/bpp/v1/bank-accounts``
+    и погасил его чужим рубильником.
+    """
+    if prefix.endswith("/"):
+        return path.startswith(prefix)
+    return path == prefix or path.startswith(prefix + "/")
+
+
 def service_name_for_app_label(app_label: str) -> str:
     return APP_LABEL_TO_SERVICE.get(app_label, app_label)
 
@@ -69,7 +83,7 @@ class ServiceGateMiddleware:
 
     def __call__(self, request):
         for prefix, name in PREFIX_TO_SERVICE.items():
-            if request.path.startswith(prefix):
+            if prefix_matches(request.path, prefix):
                 off = disabled_layer(name)
                 if off is not None:
                     return JsonResponse(disabled_payload(*off), status=503)

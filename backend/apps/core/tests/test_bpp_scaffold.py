@@ -99,6 +99,22 @@ def test_submodule_switch_closes_only_its_paths(sub, path):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("sub,neighbour", [
+    ("bpp_bank", "/api/bpp/v1/bank-accounts/x"),
+    ("bpp_requests", "/api/bpp/v1/planning/x"),
+])
+def test_submodule_prefix_stops_at_a_path_segment(sub, neighbour):
+    """Префикс подмодуля без завершающего «/» (голый путь коллекции тоже
+    должен гейтиться) не имеет права захватывать соседний путь с тем же
+    началом: счета организации — не выписки, и гасить их рубильником
+    ``bpp_bank`` нельзя."""
+    _off(sub)
+    assert Client().get(neighbour).status_code == 404
+    assert Client().get(neighbour.rsplit("/", 2)[0] + "/" + {
+        "bpp_bank": "bank", "bpp_requests": "plan"}[sub]).status_code == 503
+
+
+@pytest.mark.django_db
 def test_bpp_switch_closes_every_submodule_and_names_itself():
     _off("bpp")
     for _sub, path in SUBMODULE_PATHS:
