@@ -1378,6 +1378,29 @@ schema the platform can run on.
 
 ---
 
+## `apps.refdata` — `/api/refdata/v1`
+
+Общие справочники модуля БЗО: одна копия на группу в схеме `public` (D-03).
+Чтение — `module="refdata", level="read"`; запись — `level="write"` **и**
+поддомен управляющей компании (компания вида «холдинг»), иначе 403
+`{"code": "E-REF-01"}`. Удаления нет: `DELETE` → 405, запись уходит в архив
+`PATCH {"is_active": false}` и остаётся в старых документах. Повтор кода —
+422 `E-REF-02`.
+
+| Коллекция | Методы | Запись |
+|---|---|---|
+| `countries`, `currencies`, `uoms`, `article-groups`, `articles` | `GET` (`?active=1` — без архива), `POST` | `PATCH <коллекция>/<id>` |
+| `rates` (курс к KZT на дату) | `GET`, `POST` (ручной ввод ФД, `source=manual`) | — |
+| `vat` (ставка страны на период), `mrp` (МРП с даты) | `GET`, `POST` | — |
+
+Курсы НБРК грузит Celery-beat `refdata.load_nbrk_rates` (10:30 Asia/Almaty);
+ручной курс на ту же дату загрузка не перезаписывает. Соседи читают значения
+только через `apps.refdata.interface`: `vat_rate`, `mrp`, `contract_threshold`
+(= 1000 × МРП), `exchange_rate` (KZT → 1), `article_brief`, `article_groups`,
+`uom_brief`, `country_brief`, `can_edit`.
+
+---
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
