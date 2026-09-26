@@ -2,7 +2,7 @@ import logging
 
 from django.core.cache import cache
 
-from .models import ServiceStatus
+from .models import KNOWN_SUBMODULES, ServiceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +83,15 @@ def _company_module_status(name: str) -> tuple[bool, str]:
     return module_enabled(slug, name)
 
 
-def service_status(name: str) -> tuple[bool, str]:
-    """Статус домена: глобальный рубильник И рубильник текущей компании.
+def _own_status(name: str) -> tuple[bool, str]:
+    """Статус одного слоя: глобальный рубильник И рубильник текущей компании.
 
     Два независимых слоя. Глобальный (ServiceStatus) гасит домен на всей
     платформе; компанейский (CompanyModule) — у одной компании.
 
     Компанейский слой живёт ЗДЕСЬ, а не только в require_service, потому
-    что HTTP-гейт (ServiceGateMiddleware) спрашивает именно эту функцию.
-    Будь проверка только в require_service, запрос к /api/<домен>/ у
+    что HTTP-гейт (ServiceGateMiddleware) спрашивает статус через эту же
+    цепочку. Будь проверка только в require_service, запрос к /api/<домен>/ у
     компании с выключенным модулем прошёл бы гейт насквозь: вьюхи зовут
     свои сервисы напрямую, а не через interface, и require_service для
     собственных эндпоинтов аппки может не сработать вовсе.
@@ -107,11 +107,34 @@ def service_status(name: str) -> tuple[bool, str]:
     return _company_module_status(name)
 
 
+def disabled_layer(name: str) -> tuple[str, str] | None:
+    """Первый выключенный слой домена: ``(имя, сообщение)`` или ``None``.
+
+    У подмодуля (``KNOWN_SUBMODULES``) слоя два, и родитель проверяется
+    первым: выключенный модуль гасит все свои подмодули, какими бы ни были
+    их собственные рубильники. Имя слоя уходит в поле ``service`` ответа 503
+    и в ``ServiceDisabled.service`` — оператор должен видеть, ЧТО включать:
+    при выключенном ``bpp`` включать ``bpp_budget`` бесполезно.
+    """
+    parent = KNOWN_SUBMODULES.get(name)
+    for layer in ((parent, name) if parent else (name,)):
+        enabled, message = _own_status(layer)
+        if not enabled:
+            return (layer, message)
+    return None
+
+
+def service_status(name: str) -> tuple[bool, str]:
+    """Статус домена или подмодуля с учётом всех слоёв (см. ``disabled_layer``)."""
+    off = disabled_layer(name)
+    return (True, "") if off is None else (False, off[1])
+
+
 def service_enabled(name: str) -> bool:
     return service_status(name)[0]
 
 
 def require_service(name: str) -> None:
-    enabled, message = service_status(name)
-    if not enabled:
-        raise ServiceDisabled(name, message)
+    off = disabled_layer(name)
+    if off is not None:
+        raise ServiceDisabled(*off)

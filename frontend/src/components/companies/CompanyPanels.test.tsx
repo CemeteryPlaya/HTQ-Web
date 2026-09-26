@@ -40,6 +40,18 @@ describe('CompanyModulesPanel', () => {
     await userEvent.click(screen.getByRole('switch', { name: /tasks/ }));
     expect(setModule).toHaveBeenCalledWith('htq', 'tasks', { enabled: false });
   });
+
+  it('подмодуль выключенного модуля не переключается и стоит под родителем', async () => {
+    modules.mockResolvedValue({ data: [
+      { app_label: 'bpp', enabled: false, message: '', is_core: false, parent: null },
+      { app_label: 'bpp_budget', enabled: true, message: '', is_core: false, parent: 'bpp' },
+    ] });
+    renderWithProviders(<CompanyModulesPanel slug="htq" canEdit />);
+    const sub = await screen.findByRole('switch', { name: 'bpp_budget' });
+    expect(sub).toBeDisabled();
+    expect(sub).not.toBeChecked();
+    expect(screen.getByText(/выключен вместе с bpp/)).toBeInTheDocument();
+  });
 });
 
 describe('CompanyMembersPanel', () => {

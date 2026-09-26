@@ -6,6 +6,13 @@ KNOWN_SERVICES = ["users", "hr", "tasks", "approvals", "cms",
                   "media", "mail", "messenger", "conference", "contracts",
                   "signoff", "companies", "access"]
 
+# Подмодули с собственным рубильником: подмодуль → родительский сервис из
+# KNOWN_SERVICES (вложенность одна). Подмодуль гаснет вместе с родителем
+# (apps.core.services.disabled_layer). В реестр прав подмодули не входят
+# намеренно: права выдаются на модуль целиком, подмодуль — только
+# выключатель, и редактор ролей не должен показывать пустые модули.
+KNOWN_SUBMODULES: dict[str, str] = {}
+
 
 class ServiceStatus(models.Model):
     app_label = models.CharField(max_length=32, unique=True)
