@@ -101,13 +101,18 @@ def _require_author(actor: Actor, req: PurchaseRequest, action: str) -> None:
         raise _deny(f"{action} заявку {req.number} может только её автор.")
 
 
+def _state_error(action: str, req: PurchaseRequest) -> DomainError:
+    """E-STS-01 — переход не из таблицы ТЗ §15.2."""
+    return DomainError(
+        "E-STS-01",
+        f"Нельзя {action} заявку {req.number} в статусе „{req.get_status_display()}“.",
+        status=409)
+
+
 def _require_status(req: PurchaseRequest, statuses, action: str) -> None:
+    """``action`` — глагол: «отправить», «отозвать»…"""
     if req.status not in statuses:
-        raise DomainError(
-            "E-STATE-01",
-            f"Заявка {req.number} в статусе «{req.get_status_display()}» — {action} сейчас "
-            f"недоступно.",
-            status=409)
+        raise _state_error(action, req)
 
 
 def allowed_actions(actor: Actor, req: PurchaseRequest) -> list[str]:
@@ -118,7 +123,7 @@ def allowed_actions(actor: Actor, req: PurchaseRequest) -> list[str]:
         actions += ["save", "submit", "cancel"]
         if req.status == RequestStatus.DRAFT:
             actions.append("delete")
-    if author and req.status == RequestStatus.ON_REVIEW and not _has_decisions(req):
+    if author and req.status == RequestStatus.IN_APPROVAL and not _has_decisions(req):
         actions.append("withdraw")
     if req.status == RequestStatus.APPROVED:
         if actor.can("bpp.requests.cancel_approved", "edit"):
@@ -145,7 +150,7 @@ def _role_for(actor: Actor, wanted: str | None) -> str:
                         "Выберите роль и повторите.",
             fields=[{"field": "initiator_role", "message": "Выберите роль"}])
     if wanted not in roles:
-        raise _deny(f"Роль «{InitiatorRole(wanted).label}» вам не назначена.")
+        raise _deny(f"Роль „{InitiatorRole(wanted).label}“ вам не назначена.")
     return wanted
 
 
@@ -160,7 +165,8 @@ def _check_project(actor: Actor, role: str, project_id) -> dict:
             fields=[{"field": "project_id", "message": "Проект не активен"}])
     # BR-014: ПМ — только проекты-участия; СН — все активные [У].
     if role == InitiatorRole.PM and not projects.is_member(str(project_id), actor.user_id):
-        raise _deny(f"Вы не участник проекта {brief['code']}.")
+        raise DomainError("E-REQ-05", f"Проект {brief['code']} вам недоступен.", status=403,
+                          fields=[{"field": "project_id", "message": "Проект недоступен"}])
     budget_balance.approved_budget(project_id)  # BR-003 / E-BUD-02
     return brief
 
@@ -172,13 +178,16 @@ def _check_article(role: str, project_id, article_id) -> None:
                           fields=[{"field": "article_id", "message": "Статья не найдена"}])
     group = next((g for g in refdata.article_groups() if g["id"] == brief["group_id"]), None)
     if group is None or group["code"] != ROLE_GROUP[role]:
-        # AC-002: чужая группа — 403, а не 422.
-        raise _deny(f"Статья «{brief['name']}» не относится к группе статей вашей роли.")
+        # AC-002: чужая группа — 403, а не 422 (ТЗ §13.3).
+        raise DomainError(
+            "E-REQ-04",
+            f"Статья „{brief['name']}“ недоступна для роли {InitiatorRole(role).label}.",
+            status=403, fields=[{"field": "article_id", "message": "Статья чужой группы"}])
     if not brief["is_active"]:
         raise DomainError(
-            "E-REF-03", f"Статья «{brief['name']}» в архиве — новые заявки по ней не создаются.",
+            "E-REF-03", f"Статья „{brief['name']}“ в архиве — новые заявки по ней не создаются.",
             fields=[{"field": "article_id", "message": "Статья в архиве"}])
-    budget_balance.active_line(project_id, article_id)  # строки нет — E-BUD-03
+    budget_balance.active_line(project_id, article_id)  # строки нет — E-BUD-07
 
 
 def _clean_items(items: list[dict], default_date: date | None) -> list[dict]:
@@ -186,7 +195,7 @@ def _clean_items(items: list[dict], default_date: date | None) -> list[dict]:
     заполнять шапку, но позиция без количества или цены не хранится."""
     if len(items) > MAX_ITEMS:
         raise DomainError(
-            "E-REQ-02", f"В заявке не больше {MAX_ITEMS} позиций — разделите её на несколько.",
+            "E-REQ-06", f"В заявке не больше {MAX_ITEMS} позиций.",
             fields=[{"field": "items", "message": f"Не больше {MAX_ITEMS}"}])
     uoms = refdata.uom_brief([str(item["uom_id"]) for item in items if item.get("uom_id")])
     cleaned = []
@@ -272,7 +281,7 @@ def create_draft(actor: Actor, data: dict) -> PurchaseRequest:
     items = _clean_items(data.get("items") or [], data.get("need_date"))
     req = PurchaseRequest(
         number=next_number("ЗЗ"), author_id=actor.user_id, initiator_role=role,
-        project_id=data["project_id"], currency=budget.currency,
+        project_id=data["project_id"], currency_code=budget.currency_code,
         created_by=actor.user_id, updated_by=actor.user_id)
     _apply_header(req, data)
     req.save()
@@ -288,7 +297,7 @@ def update_draft(actor: Actor, request_id, *, expected_version: int | None,
     req = _lock(request_id)
     req.assert_editable()
     _require_author(actor, req, "Править")
-    _require_status(req, EDITABLE, "правка")
+    _require_status(req, EDITABLE, "править")
     check_version(req, expected_version)
     before = _snapshot(req)
     role = req.initiator_role
@@ -317,7 +326,7 @@ def delete_draft(actor: Actor, request_id, *, expected_version: int | None) -> N
     req = _lock(request_id)
     req.assert_editable()
     _require_author(actor, req, "Удалить")
-    _require_status(req, (RequestStatus.DRAFT,), "удаление")
+    _require_status(req, (RequestStatus.DRAFT,), "удалить")
     check_version(req, expected_version)
     audit.record(req, "deleted", actor_id=actor.user_id, changes=_snapshot(req))
     req.delete()
@@ -368,11 +377,11 @@ def submit(actor: Actor, request_id, *, expected_version: int | None) -> Purchas
     req = _lock(request_id)
     req.assert_editable()
     _require_author(actor, req, "Отправить")
-    _require_status(req, EDITABLE, "отправка")
+    _require_status(req, EDITABLE, "отправить")
     check_version(req, expected_version)
     _check_required(req)
     if req.initiator_role not in actor.initiator_roles():
-        raise _deny(f"Роль «{req.get_initiator_role_display()}» вам больше не назначена.")
+        raise _deny(f"Роль „{req.get_initiator_role_display()}“ вам больше не назначена.")
     _check_project(actor, req.initiator_role, req.project_id)
     _check_article(req.initiator_role, req.project_id, req.article_id)
     # BR-011 под блокировкой строки бюджета.
@@ -383,9 +392,9 @@ def submit(actor: Actor, request_id, *, expected_version: int | None) -> Purchas
         over = req.total_amount - figures["available"]
         raise DomainError(
             "E-BUD-01",
-            f"Сумма заявки {fmt(req.total_amount, req.currency)} превышает доступный остаток "
-            f"статьи «{budget_balance.article_name(req.article_id)}» "
-            f"({fmt(figures['available'], req.currency)}) на {fmt(over, req.currency)}. "
+            f"Сумма заявки {fmt(req.total_amount, req.currency_code)} превышает доступный остаток "
+            f"статьи „{budget_balance.article_name(req.article_id)}“ "
+            f"({fmt(figures['available'], req.currency_code)}) на {fmt(over, req.currency_code)}. "
             f"Уменьшите сумму или обратитесь к финансовому директору за корректировкой лимита.",
             fields=[{"field": "items", "message": "Сумма превышает остаток",
                      "available": str(figures["available"]), "over": str(over)}])
@@ -420,12 +429,12 @@ def _has_decisions(req: PurchaseRequest) -> bool:
 def withdraw(actor: Actor, request_id, *, expected_version: int | None) -> PurchaseRequest:
     req = _lock(request_id)
     _require_author(actor, req, "Отозвать")
-    _require_status(req, (RequestStatus.ON_REVIEW,), "отзыв")
+    _require_status(req, (RequestStatus.IN_APPROVAL,), "отозвать")
     check_version(req, expected_version)
     if _has_decisions(req):
         raise DomainError(
-            "E-STATE-01", f"Заявку {req.number} уже начали согласовывать — отозвать её нельзя. "
-                          f"Попросите согласующего вернуть её на доработку.",
+            "E-STS-01", f"Нельзя отозвать заявку {req.number}: по ней уже есть решение. "
+                        f"Попросите согласующего вернуть её на доработку.",
             status=409)
     process = _process(req)
     try:
@@ -442,7 +451,7 @@ def _comment(comment: str, action: str) -> str:
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "BR-060", f"{action}: комментарий — не короче {COMMENT_MIN} символов.",
+            "E-REQ-02", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     return comment
 
@@ -467,10 +476,10 @@ def cancel(actor: Actor, request_id, *, expected_version: int | None,
             raise _deny(f"Утверждённую заявку {req.number} отменяет финансовый директор.")
         if _in_documents(req):
             raise DomainError(
-                "E-STATE-01", f"По позициям заявки {req.number} уже есть договоры или счета — "
-                              f"отменить её нельзя, закройте остаток.", status=409)
+                "E-STS-01", f"Нельзя отменить заявку {req.number}: по её позициям уже есть "
+                            f"договоры или счета. Закройте остаток.", status=409)
     else:
-        _require_status(req, (*EDITABLE, RequestStatus.APPROVED), "отмена")
+        _require_status(req, (*EDITABLE, RequestStatus.APPROVED), "отменить")
     req.items.update(status=ItemStatus.ANNULLED)
     req.status, req.status_comment = RequestStatus.CANCELLED, comment
     _touch(req, actor.user_id, "status", "status_comment")
@@ -487,7 +496,7 @@ def close_remainder(actor: Actor, request_id, *, expected_version: int | None,
     req = _lock(request_id)
     comment = _comment(comment, "Закрытие остатка")
     check_version(req, expected_version)
-    _require_status(req, (RequestStatus.APPROVED,), "закрытие остатка")
+    _require_status(req, (RequestStatus.APPROVED,), "закрыть остаток")
     if req.author_id != actor.user_id and not actor.can("bpp.requests.cancel_approved", "edit"):
         raise _deny(f"Закрыть остаток заявки {req.number} может автор или финансовый директор.")
     req.items.filter(status=ItemStatus.OPEN).update(status=ItemStatus.ANNULLED)
@@ -503,14 +512,15 @@ def copy(actor: Actor, request_id) -> PurchaseRequest:
     """Новая заявка «Черновик» с теми же шапкой и позициями, без файлов и
     согласований (ТЗ §7.7). Роль — своя: копирует и тот, кто не автор."""
     source = get_visible(actor, request_id)
-    wanted = source.initiator_role if source.initiator_role in actor.initiator_roles() else None
+    roles = actor.initiator_roles()
+    wanted = source.initiator_role if source.initiator_role in roles else None
     today = timezone.localdate()
-    # Статья переносится, только если копирующий подаёт в той же роли: статья
-    # чужой группы в его заявке — 403 (BR-010).
-    article = str(source.article_id) if source.article_id and wanted else None
+    # Статья переносится как есть: копирующий в другой роли получит на ней
+    # 403 E-REQ-04 (BR-010), а не заявку с молча выброшенной статьёй.
     data = {
-        "initiator_role": wanted, "project_id": str(source.project_id),
-        "article_id": article,
+        "initiator_role": wanted or (roles[0] if len(roles) == 1 else None),
+        "project_id": str(source.project_id),
+        "article_id": str(source.article_id) if source.article_id else None,
         "purchase_type": source.purchase_type,
         "need_date": source.need_date if source.need_date and source.need_date >= today else None,
         "justification": source.justification,
@@ -527,7 +537,7 @@ def copy(actor: Actor, request_id) -> PurchaseRequest:
 # ── колбэки согласования (approval_hooks) ───────────────────────────────
 
 def on_started(request_id) -> None:
-    PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.ON_REVIEW)
+    PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.IN_APPROVAL)
 
 
 def on_approved(request_id) -> None:
@@ -540,10 +550,19 @@ def on_rejected(request_id) -> None:
     PurchaseRequestItem.objects.filter(request_id=request_id).update(status=ItemStatus.ANNULLED)
 
 
+def _last_rework_comment(request_id) -> str:
+    process = signoff.get_process_for(SUBJECT, str(request_id))
+    comments = [task.get("comment") or "" for stage in (process or {}).get("stages", [])
+                for task in stage["tasks"] if task["state"] == "rework"]
+    return comments[-1] if comments else ""
+
+
 def on_rework(request_id) -> None:
     """Возврат на доработку — и на ходу, и уже закрытого круга
-    (``signoff.rework_process``): аннулированные отказом позиции снова открыты."""
-    PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.REWORK)
+    (``signoff.rework_process``): аннулированные отказом позиции снова открыты,
+    комментарий согласующего — в ``rework_comment`` (жёлтая плашка, ТЗ §7.6)."""
+    PurchaseRequest.objects.filter(pk=request_id).update(
+        status=RequestStatus.REWORK, rework_comment=_last_rework_comment(request_id))
     PurchaseRequestItem.objects.filter(request_id=request_id,
                                        status=ItemStatus.ANNULLED).update(status=ItemStatus.OPEN)
 

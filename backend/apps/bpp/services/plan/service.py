@@ -33,7 +33,7 @@ SORTS = {
     "sys_number": ("sys_number",), "-sys_number": ("-sys_number",),
     "amount": ("amount", "sys_number"), "-amount": ("-amount", "sys_number"),
 }
-TARGETS = ("agreement", "invoice")
+TARGETS = ("contract", "invoice")
 
 
 def _deny(text: str) -> DomainError:
@@ -49,7 +49,7 @@ def _role(actor: Actor, wanted: str | None) -> str:
     roles = actor.initiator_roles()
     if wanted:
         if wanted not in roles:
-            raise _deny(f"Роль «{InitiatorRole(wanted).label}» вам не назначена.")
+            raise _deny(f"Роль „{InitiatorRole(wanted).label}“ вам не назначена.")
         return wanted
     if not roles:
         raise _deny("План закупок ведут снабженцы и руководители проектов.")
@@ -145,7 +145,7 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
     остаток > 0, позиции пользователя. Ответ — заготовка мастера F-03."""
     if target not in TARGETS:
         raise DomainError("E-VAL-01", "Неизвестный вид документа.",
-                          fields=[{"field": "target", "message": "agreement или invoice"}])
+                          fields=[{"field": "target", "message": "contract или invoice"}])
     if not item_ids:
         raise DomainError("E-VAL-01", "Отметьте хотя бы одну позицию.",
                           fields=[{"field": "item_ids", "message": "Нет позиций"}])
@@ -154,18 +154,18 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
                                request__initiator_role=role))
     if len(rows) != len(set(map(str, item_ids))):
         raise DomainError(
-            "E-PLAN-02", "Часть отмеченных позиций недоступна: их уже нет в вашем плане закупок. "
+            "E-PLN-03", "Часть отмеченных позиций недоступна: их уже нет в вашем плане закупок. "
                          "Обновите список.",
             status=409, fields=[{"field": "item_ids", "message": "Позиции недоступны"}])
     pairs = {(str(r.request.project_id), str(r.request.article_id)) for r in rows}
     if len(pairs) > 1:
         raise DomainError(
-            "BR-021", "Для одного документа выберите позиции одного проекта и одной статьи.",
+            "E-PLN-01", "Для одного документа выберите позиции одного проекта и одной статьи",
             fields=[{"field": "item_ids", "message": "Разные проекты или статьи"}])
     empty = [r.sys_number for r in rows if _remaining(r)[0] <= 0]
     if empty:
         raise DomainError(
-            "E-PLAN-01", f"У позиций {', '.join(empty)} не осталось количества к закупке.",
+            "E-PLN-02", f"Позиция {empty[0]} уже закуплена полностью.",
             fields=[{"field": "item_ids", "message": "Остаток 0"}])
     project_id, article_id = pairs.pop()
     purchase_types = {r.request.purchase_type for r in rows}

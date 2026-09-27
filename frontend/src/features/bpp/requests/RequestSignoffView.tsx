@@ -27,7 +27,7 @@ const KIND: Record<string, string> = { goods: 'ТМЦ', works: 'Работы и 
 
 const STATUS: Record<string, string> = {
   draft: 'Черновик',
-  on_review: 'На согласовании',
+  in_approval: 'На согласовании',
   approved: 'Утверждена',
   rework: 'На доработке',
   rejected: 'Отклонена',
@@ -38,7 +38,7 @@ const STATUS: Record<string, string> = {
 function BudgetBlock({ card }: { card: PurchaseRequestCard }) {
   const { t } = useTranslation();
   if (!card.budget) return null;
-  const { budget, currency } = card;
+  const { budget, currency_code: currency } = card;
   const rows: [string, string, boolean?][] = [
     [t('bpp.request.limit', 'Лимит статьи'), budget.limit],
     [t('bpp.request.committed', 'Задействовано'), budget.committed],
@@ -162,7 +162,7 @@ export default function RequestSignoffView({ id, embedded = false }: Props) {
                 {t('bpp.request.total', 'Сумма заявки')}
               </td>
               <td className="px-3 py-2 text-right whitespace-nowrap">
-                {formatMoney(card.total_amount, card.currency)}
+                {formatMoney(card.total_amount, card.currency_code)}
               </td>
               <td />
             </tr>

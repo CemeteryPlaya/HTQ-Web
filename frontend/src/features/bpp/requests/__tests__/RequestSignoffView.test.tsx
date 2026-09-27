@@ -13,7 +13,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 const card: PurchaseRequestCard = {
   id: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
   number: 'ЗЗ-2026-000045',
-  status: 'on_review',
+  status: 'in_approval',
   author_name: 'Иванов А.',
   created_at: '2026-09-27T10:00:00Z',
   initiator_role: 'sn',
@@ -22,7 +22,7 @@ const card: PurchaseRequestCard = {
   purchase_type: 'goods',
   need_date: '2026-10-15',
   justification: 'Нужно для монтажа каркаса',
-  currency: 'KZT',
+  currency_code: 'KZT',
   total_amount: '2400000.00',
   rework_comment: '',
   budget: {

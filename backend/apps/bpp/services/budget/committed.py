@@ -40,7 +40,7 @@ from apps.bpp.models import (
 ZERO = Decimal("0.00")
 
 #: Статусы заявки, в которых её позиции занимают бюджет (BR-012).
-COMMITTING_REQUEST_STATUSES = (RequestStatus.ON_REVIEW, RequestStatus.APPROVED,
+COMMITTING_REQUEST_STATUSES = (RequestStatus.IN_APPROVAL, RequestStatus.APPROVED,
                                RequestStatus.CLOSED)
 OPEN_ITEM_STATUSES = (ItemStatus.OPEN, ItemStatus.PARTIALLY_CLOSED)
 #: Подотчёт занимает сумму заявки с отправки на согласование и дальше; выданные

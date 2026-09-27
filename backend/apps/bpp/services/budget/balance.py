@@ -48,8 +48,8 @@ def no_approved_budget(project_id) -> DomainError:
 
 def not_in_budget(project_id, article_id) -> DomainError:
     return DomainError(
-        "E-BUD-03",
-        f"Статьи «{article_name(article_id)}» нет в бюджете проекта "
+        "E-BUD-07",
+        f"Статьи „{article_name(article_id)}“ нет в бюджете проекта "
         f"{project_code(project_id)}. Выберите статью из утверждённых лимитов или "
         f"обратитесь к финансовому директору.",
         fields=[{"field": "article_id", "message": "Статьи нет в бюджете"}])
