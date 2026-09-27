@@ -32,7 +32,7 @@ class PurchaseType(models.TextChoices):
 
 class RequestStatus(models.TextChoices):
     DRAFT = "draft", "Черновик"
-    ON_REVIEW = "on_review", "На согласовании"
+    IN_APPROVAL = "in_approval", "На согласовании"
     APPROVED = "approved", "Утверждена"
     REWORK = "rework", "На доработке"
     REJECTED = "rejected", "Отклонена"
@@ -59,12 +59,14 @@ class PurchaseRequest(signoff.Approvable, VersionedModel):
                                      default="", blank=True)
     need_date = models.DateField(null=True, blank=True)
     justification = models.TextField(default="", blank=True)
-    currency = models.CharField(max_length=3, default="KZT")
+    currency_code = models.CharField(max_length=3, default="KZT")
     total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
     status = models.CharField(max_length=16, choices=RequestStatus.choices,
                               default=RequestStatus.DRAFT)
-    # Комментарий последнего возврата, отмены или закрытия остатка — жёлтая
-    # плашка формы (ТЗ §7.6 п.6).
+    # Комментарий последнего возврата согласующим — жёлтая плашка формы (ТЗ
+    # §7.6 п.6); пишет колбэк ``on_rework``.
+    rework_comment = models.TextField(default="", blank=True)
+    # Комментарий отмены или закрытия остатка.
     status_comment = models.TextField(default="", blank=True)
     # Техническая заявка переноса из contracts (B6.1, Q-D06): не видна в
     # Плане закупок, реестрах и статистике.

@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 from django.test import Client
 
-from apps.bpp.models import AuditLog, Budget, BudgetStatus, BudgetVersionStatus
+from apps.bpp.models import AuditLog, Budget, BudgetStatus, VersionState
 from apps.bpp.services.budget import balance, budgets, read
 from apps.bpp.services.requests import requests as request_service
 from apps.bpp.tests import stage2 as s
@@ -36,10 +36,10 @@ def test_second_budget_of_a_project_is_br001_with_a_link(company_context):
                            lines=[{"article_id": art.id, "limit_amount": 100}])
     with pytest.raises(DomainError) as exc:
         budgets.create(_fd(slug), project_id=proj.id, lines=[])
-    assert exc.value.code == "BR-001"
+    assert exc.value.code == "E-BUD-03"
     assert exc.value.message == (f"У проекта П-015 уже есть бюджет {first.number}. "
                                  f"Откройте его и выполните корректировку.")
-    assert exc.value.fields[0]["budget_id"] == str(first.id)
+    assert exc.value.fields[0]["existing_id"] == str(first.id)
 
 
 def test_duplicate_article_names_the_first_line(company_context):
@@ -50,8 +50,8 @@ def test_duplicate_article_names_the_first_line(company_context):
             {"article_id": art.id, "limit_amount": 1},
             {"article_id": s.design().id, "limit_amount": 1},
             {"article_id": art.id, "limit_amount": 2}])
-    assert exc.value.code == "BR-002"
-    assert exc.value.message == "Статья «Металлопрокат» уже есть в бюджете, строка 1."
+    assert exc.value.code == "E-BUD-04"
+    assert exc.value.message == "Статья „Металлопрокат“ уже есть в бюджете, строка 1."
 
 
 def test_approve_needs_a_positive_total(company_context):
@@ -59,14 +59,14 @@ def test_approve_needs_a_positive_total(company_context):
     budget = budgets.create(_fd(slug), project_id=s.project().id,
                             lines=[{"article_id": s.metal().id, "limit_amount": 0}])
     assert _code(lambda: budgets.approve(_fd(slug), budget.id, expected_version=None)) \
-        == "E-BUD-04"
+        == "E-BUD-08"
 
 
 def test_approve_makes_version_one_active(company_context):
     budget = s.approved_budget(company_context["slug"], s.project(), {s.metal(): 1000})
     assert budget.status == BudgetStatus.APPROVED
     assert budget.active_version.version_no == 1
-    assert budget.active_version.status == BudgetVersionStatus.ACTIVE
+    assert budget.active_version.state == VersionState.ACTIVE
     assert AuditLog.objects.filter(object_id=str(budget.id), action="approved").count() == 1
 
 
@@ -89,8 +89,8 @@ def test_correction_limit_below_committed_is_br004(company_context):
     with pytest.raises(DomainError) as exc:
         budgets.approve_correction(_fd(slug), budget.id, expected_version=None,
                                    comment="Сокращаем лимит статьи")
-    assert exc.value.code == "BR-004"
-    assert exc.value.message == ("Лимит статьи «Металлопрокат» не может быть меньше "
+    assert exc.value.code == "E-BUD-05"
+    assert exc.value.message == ("Лимит статьи „Металлопрокат“ не может быть меньше "
                                  "задействованной суммы 3 400 000,00 KZT.")
 
 
@@ -119,7 +119,7 @@ def test_snapshot_of_the_old_version_survives_a_correction(company_context):
                                comment="Увеличили по письму заказчика")
     budget.refresh_from_db()
     old = read.version_snapshot(_fd(slug), budget, 1)
-    assert old["status"] == BudgetVersionStatus.ARCHIVED
+    assert old["state"] == VersionState.ARCHIVED
     assert old["lines"][0]["limit_amount"] == Decimal("1000.00")
     assert budget.active_version.version_no == 2
 
@@ -134,13 +134,18 @@ def test_cancel_correction_removes_only_the_draft(company_context):
     assert budget.active_version.version_no == 1
 
 
-def test_existing_line_cannot_be_dropped_in_a_correction(company_context):
+def test_line_with_committed_cannot_be_dropped_in_a_correction(company_context):
+    """ТЗ §6.4: строку с «Задействовано» > 0 не удалить; пустую — можно."""
     slug = company_context["slug"]
-    budget = s.approved_budget(slug, s.project(), {s.metal(): 1000})
+    proj, metal, pipe = s.project(), s.metal(), s.article("T-PIPE", "Трубы", "supply")
+    budget = s.approved_budget(slug, proj, {metal: 1000, pipe: 500})
+    _submitted_request(slug, proj, metal, 100)
     budgets.start_correction(_fd(slug), budget.id, expected_version=None)
     assert _code(lambda: budgets.save_correction(
         _fd(slug), budget.id, expected_version=None,
-        lines=[{"article_id": s.design().id, "limit_amount": 5}])) == "E-BUD-05"
+        lines=[{"article_id": pipe.id, "limit_amount": 500}])) == "E-BUD-09"
+    budgets.save_correction(_fd(slug), budget.id, expected_version=None,
+                            lines=[{"article_id": metal.id, "limit_amount": 1000}])
 
 
 def test_close_waits_for_requests_on_review_and_reopen_needs_a_comment(company_context):
@@ -151,7 +156,7 @@ def test_close_waits_for_requests_on_review_and_reopen_needs_a_comment(company_c
     with pytest.raises(DomainError) as exc:
         budgets.close(_fd(slug), budget.id, expected_version=None)
     assert (exc.value.code, exc.value.status) == ("E-BUD-06", 409)
-    assert req.number in exc.value.message
+    assert exc.value.message.startswith("Бюджет нельзя закрыть: 1 заявок на согласовании.")
 
     request_service.withdraw(s.actor(slug, s.SN, "bpp-sn"), req.id, expected_version=None)
     budgets.close(_fd(slug), budget.id, expected_version=None)

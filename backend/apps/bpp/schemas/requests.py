@@ -58,7 +58,7 @@ class WithComment(BaseModel):
 
 class PlanValidate(BaseModel):
     item_ids: list[UUID]
-    target: Literal["agreement", "invoice"]
+    target: Literal["contract", "invoice"]
     role: Role | None = None
 
 

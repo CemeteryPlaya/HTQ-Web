@@ -25,16 +25,16 @@ class BudgetStatus(models.TextChoices):
     CLOSED = "closed", "Закрыт"
 
 
-class BudgetVersionStatus(models.TextChoices):
+class VersionState(models.TextChoices):
     DRAFT = "draft", "Черновик"
     ACTIVE = "active", "Действующая"
-    ARCHIVED = "archived", "Архивная"
+    ARCHIVED = "archived", "Архив"
 
 
 class Budget(VersionedModel):
     project_id = models.UUIDField()
     number = models.CharField(max_length=48)
-    currency = models.CharField(max_length=3, default="KZT")
+    currency_code = models.CharField(max_length=3, default="KZT")
     status = models.CharField(max_length=16, choices=BudgetStatus.choices,
                               default=BudgetStatus.DRAFT)
     # Действующая версия — та, по которой считаются остатки. Пуста до
@@ -65,8 +65,8 @@ class Budget(VersionedModel):
 class BudgetVersion(BppModel):
     budget = models.ForeignKey(Budget, on_delete=models.CASCADE, related_name="versions")
     version_no = models.PositiveIntegerField()
-    status = models.CharField(max_length=16, choices=BudgetVersionStatus.choices,
-                              default=BudgetVersionStatus.DRAFT)
+    state = models.CharField(max_length=16, choices=VersionState.choices,
+                             default=VersionState.DRAFT)
     # Комментарий корректировки (≥ 10 символов); у версии 1 пуст.
     comment = models.TextField(default="", blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -76,9 +76,11 @@ class BudgetVersion(BppModel):
         constraints = [
             models.UniqueConstraint(fields=["budget", "version_no"],
                                     name="uq_bpp_budget_version_no"),
-            # Один черновик на бюджет: вторая корректировка при открытой первой
-            # невозможна и на уровне БД.
-            models.UniqueConstraint(fields=["budget"], condition=Q(status="draft"),
+            # Одна действующая версия и один черновик на бюджет: вторая
+            # корректировка при открытой первой невозможна и на уровне БД.
+            models.UniqueConstraint(fields=["budget"], condition=Q(state="active"),
+                                    name="uq_bpp_budget_one_active"),
+            models.UniqueConstraint(fields=["budget"], condition=Q(state="draft"),
                                     name="uq_bpp_budget_one_draft"),
         ]
         ordering = ("version_no",)

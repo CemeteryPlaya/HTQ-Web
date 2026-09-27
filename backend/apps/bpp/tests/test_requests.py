@@ -12,7 +12,7 @@ from django.test import Client
 
 from apps.bpp.models import AuditLog, ItemStatus, PurchaseRequest, RequestStatus
 from apps.bpp.services.budget import balance
-from apps.bpp.services.requests import plan
+from apps.bpp.services.plan import service as plan
 from apps.bpp.services.requests import requests as service
 from apps.bpp.tests import stage2 as s
 from htqweb.errors import DomainError
@@ -42,7 +42,7 @@ def test_ac001_over_the_balance_is_e_bud_01_and_stays_draft(company_context):
         service.submit(sn, req.id, expected_version=None)
     assert exc.value.code == "E-BUD-01"
     assert exc.value.message == (
-        "Сумма заявки 3 650 000,00 KZT превышает доступный остаток статьи «Металлопрокат» "
+        "Сумма заявки 3 650 000,00 KZT превышает доступный остаток статьи „Металлопрокат“ "
         "(2 400 000,00 KZT) на 1 250 000,00 KZT. Уменьшите сумму или обратитесь к "
         "финансовому директору за корректировкой лимита.")
     req.refresh_from_db()
@@ -57,7 +57,7 @@ def test_ac002_sn_cannot_take_a_pm_article(company_context):
     sn = s.actor(slug, s.SN, "bpp-sn")
     with pytest.raises(DomainError) as exc:
         _draft(sn, proj, s.design(), 10)
-    assert (exc.value.code, exc.value.status) == ("E-ACC-01", 403)
+    assert (exc.value.code, exc.value.status) == ("E-REQ-04", 403)
 
 
 @pytest.mark.django_db
@@ -65,11 +65,11 @@ def test_ac003_td_alone_does_not_approve_od_does(company_context):
     slug = company_context["slug"]
     proj, art, sn = _setup(slug)
     req = service.submit(sn, _draft(sn, proj, art, 1000).id, expected_version=None)
-    assert req.status == RequestStatus.ON_REVIEW
+    assert req.status == RequestStatus.IN_APPROVAL
 
     assert s.decide(req, s.TD, "approve")["ok"]
     req.refresh_from_db()
-    assert req.status == RequestStatus.ON_REVIEW
+    assert req.status == RequestStatus.IN_APPROVAL
     assert plan.plan_items(sn)["items"] == []
 
     assert s.decide(req, s.OD, "approve")["ok"]
@@ -102,7 +102,7 @@ def test_short_rework_comment_is_refused_by_the_route_flag(company_context):
     result = s.decide(req, s.TD, "rework", "123456789")
     assert not result["ok"]
     req.refresh_from_db()
-    assert req.status == RequestStatus.ON_REVIEW
+    assert req.status == RequestStatus.IN_APPROVAL
 
 
 @pytest.mark.django_db
@@ -117,7 +117,7 @@ def test_withdraw_before_any_decision_but_not_after(company_context):
     s.decide(req, s.TD, "approve")
     with pytest.raises(DomainError) as exc:
         service.withdraw(sn, req.id, expected_version=None)
-    assert (exc.value.code, exc.value.status) == ("E-STATE-01", 409)
+    assert (exc.value.code, exc.value.status) == ("E-STS-01", 409)
 
 
 @pytest.mark.django_db
@@ -141,7 +141,7 @@ def test_201_items_are_refused(company_context):
     proj, art, sn = _setup(slug)
     with pytest.raises(DomainError) as exc:
         _draft(sn, proj, art, *([1] * 201))
-    assert exc.value.code == "E-REQ-02"
+    assert exc.value.code == "E-REQ-06"
 
 
 @pytest.mark.django_db
@@ -216,7 +216,7 @@ def test_http_submit_twice_with_one_key_is_one_transition(company_context):
     assert again.status_code == 200 and again["Idempotent-Replay"] == "true"
     with use_company(slug):  # запрос вернул search_path в public
         assert AuditLog.objects.filter(object_id=str(req.id), action="submitted").count() == 1
-    assert first.json()["status"] == "on_review"
+    assert first.json()["status"] == "in_approval"
     assert first.json()["current_holders"]["users"][0]["id"] == s.TD
 
 
@@ -253,7 +253,7 @@ def test_ac004_two_parallel_submits_share_one_balance():
         thread.join()
     assert sorted(outcome) == ["E-BUD-01", "ok"]
     assert balance.balance(proj.id, art.id)["committed"] == Decimal("2000000.00")
-    assert PurchaseRequest.objects.filter(status=RequestStatus.ON_REVIEW).count() == 1
+    assert PurchaseRequest.objects.filter(status=RequestStatus.IN_APPROVAL).count() == 1
 
 
 @pytest.mark.django_db
@@ -274,3 +274,116 @@ def test_card_budget_counts_the_request_once(company_context):
     assert figures["reserved"] is True
     assert (figures["committed"], figures["available"], figures["after_request"]) \
         == (Decimal("300.00"), Decimal("700.00"), Decimal("700.00"))
+
+
+@pytest.mark.django_db
+def test_approver_gets_a_bell_and_an_email_with_the_tz_text(company_context):
+    """ТЗ §22: «Заявка ЗЗ-… на … KZT по проекту П-015 ждёт вашего согласования» —
+    в колокольчик и по e-mail (документы БЗО доставляются, план этапа 2)."""
+    from apps.notifications.models import Notification
+
+    slug = company_context["slug"]
+    proj, art, sn = _setup(slug)
+    req = service.submit(sn, _draft(sn, proj, art, 2_400_000).id, expected_version=None)
+    row = Notification.objects.get(recipient_id=s.TD, event="signoff.awaiting_you")
+    assert row.title == (f"Заявка {req.number} на 2 400 000,00 KZT по проекту П-015 "
+                         f"ждёт вашего согласования")
+    assert row.url == f"/bpp/requests/{req.pk}"
+    assert list(row.deliveries.values_list("channel", flat=True)) == ["email"]
+
+
+# ── Review Focus 3 плана этапа 2 и соседние случаи ──────────────────────
+
+@pytest.mark.django_db
+def test_dual_role_article_follows_initiator_role(company_context):
+    """СН и ПМ одновременно: статья привязана к роли инициатора, смена роли
+    очищает статью, статья чужой для роли группы — 403 E-REQ-04."""
+    slug = company_context["slug"]
+    proj = s.project(members=[s.SN])
+    s.approved_budget(slug, proj, {s.metal(): 1000, s.design(): 1000})
+    both = s.actor(slug, s.SN, "bpp-sn", "bpp-pm")
+    with pytest.raises(DomainError) as exc:
+        service.create_draft(both, {**s.header(proj, s.metal()), "initiator_role": None})
+    assert exc.value.code == "E-REQ-01"  # две роли — выбрать обязательно
+
+    req = _draft(both, proj, s.metal(), 10)
+    assert req.initiator_role == "sn"
+    req = service.update_draft(both, req.id, expected_version=None,
+                               data={"initiator_role": "pm"})
+    assert (req.initiator_role, req.article_id) == ("pm", None)
+    with pytest.raises(DomainError) as exc:
+        service.update_draft(both, req.id, expected_version=None,
+                             data={"article_id": str(s.metal().id)})
+    assert (exc.value.code, exc.value.status) == ("E-REQ-04", 403)
+
+
+@pytest.mark.django_db
+def test_archived_article_not_offered(company_context):
+    from apps.bpp.services.budget import read as budget_read
+
+    slug = company_context["slug"]
+    proj, art, sn = _setup(slug)
+    old = _draft(sn, proj, art, 10)
+    art.is_active = False
+    art.save(update_fields=["is_active"])
+    assert budget_read.lines_for_request(sn, project_id=str(proj.id), role="sn") == []
+    with pytest.raises(DomainError) as exc:
+        _draft(sn, proj, art, 10)
+    assert exc.value.code == "E-REF-03"
+    # Старая заявка статью видит — с меткой «Архив».
+    from apps.bpp.services.requests import read
+
+    assert read.card(sn, old)["article"]["archived"] is True
+
+
+@pytest.mark.django_db
+def test_author_does_not_approve_own_request(company_context):
+    """Флаг запрета самосогласования: автор на этапе ТД из группы уходит,
+    этап без исполнителей закрывается сам, решение ждёт ОД."""
+    from apps.signoff import interface as signoff
+
+    slug = company_context["slug"]
+    proj, art = s.project(), s.metal()
+    s.approved_budget(slug, proj, {art: 1000})
+    s.request_route(td=s.SN)  # автор — он же «ТД» маршрута
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    req = service.submit(sn, _draft(sn, proj, art, 10).id, expected_version=None)
+    process = signoff.get_process_for("bpp.purchase_request", str(req.pk))
+    pending = [t["user_id"] for st in process["stages"] for t in st["tasks"]
+               if t["state"] == "pending"]
+    assert pending == [s.OD]
+
+
+@pytest.mark.django_db
+def test_repeated_callbacks_do_not_move_status_twice(company_context):
+    slug = company_context["slug"]
+    proj, art, sn = _setup(slug)
+    req = service.submit(sn, _draft(sn, proj, art, 10).id, expected_version=None)
+    s.decide(req, s.TD, "rework", "Уточните характеристики позиций")
+    service.on_rework(req.pk)
+    service.on_rework(req.pk)
+    req.refresh_from_db()
+    assert (req.status, req.rework_comment) == (RequestStatus.REWORK,
+                                                "Уточните характеристики позиций")
+    service.on_rejected(req.pk)
+    service.on_rejected(req.pk)
+    req.refresh_from_db()
+    assert req.status == RequestStatus.REJECTED
+    assert set(req.items.values_list("status", flat=True)) == {ItemStatus.ANNULLED}
+
+
+@pytest.mark.django_db
+def test_copy_with_a_foreign_group_article_is_403(company_context):
+    """Копирует тот, кто заявку видит, но подаёт в другой роли: согласующим
+    этапа назначен ПМ. Статья «Снабжения» для него чужая — 403 E-REQ-04, а не
+    копия с молча выброшенной статьёй."""
+    slug = company_context["slug"]
+    proj = s.project(members=[s.PM])
+    s.approved_budget(slug, proj, {s.metal(): 1000})
+    s.request_route(td=s.PM)
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    source = service.submit(sn, _draft(sn, proj, s.metal(), 10).id, expected_version=None)
+    pm = s.actor(slug, s.PM, "bpp-pm")
+    with pytest.raises(DomainError) as exc:
+        service.copy(pm, source.id)
+    assert (exc.value.code, exc.value.status) == ("E-REQ-04", 403)
