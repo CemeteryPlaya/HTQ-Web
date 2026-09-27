@@ -82,3 +82,33 @@ def test_failed_request_is_not_remembered():
     assert _boom(RequestFactory().post("/api/z", HTTP_IDEMPOTENCY_KEY="k-z")).status_code == 500
     assert _boom(RequestFactory().post("/api/z", HTTP_IDEMPOTENCY_KEY="k-z")).status_code == 500
     assert len(CALLS) == 2
+
+
+@pytest.mark.django_db
+def test_response_stored_between_check_and_lock_is_replayed(monkeypatch):
+    """Гонка «проверил → занял»: второй запрос не увидел ответа, первый
+    успел сохранить его и снять замок, второй занял свободный замок. Без
+    повторной проверки после захвата действие выполнилось бы дважды."""
+    from htqweb import idempotency
+
+    first = _post("k-race")
+    real_replay = idempotency.replay
+    seen = {"calls": 0}
+
+    def stale_first_look(request, key):
+        seen["calls"] += 1
+        return None if seen["calls"] == 1 else real_replay(request, key)
+
+    monkeypatch.setattr(idempotency, "replay", stale_first_look)
+    second = _post("k-race")
+    assert CALLS == [1]
+    assert (second.status_code, _body(second)) == (first.status_code, _body(first))
+    assert cache.get(lock_key(RequestFactory().post("/api/x"), "k-race")) is None
+
+
+def test_lock_outlives_a_request():
+    """Замок живёт дольше самого долгого запроса (таймаут gunicorn), иначе
+    повтор во время долгого первого запроса выполнился бы параллельно."""
+    from htqweb import idempotency
+
+    assert idempotency.LOCK_TTL >= 300

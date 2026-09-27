@@ -1383,7 +1383,9 @@ schema the platform can run on.
 
 «Проект» модуля БЗО (тенантная аппка, D-02). Гейт `module="project"`; поверх
 него — узлы: создание и правка — `project.projects` (`create`/`edit`),
-участники — `project.members` (`edit`), иначе 403 `E-ACC-01`.
+участники — `project.members` (`edit`), иначе 403 `E-ACC-01`. Видимость: без узла
+`project.all` (у роли ПМ его нет) список, карточка и участники ограничены
+проектами, где вызывающий участник; чужой проект — 404, как несуществующий.
 
 | Метод и путь | Что делает |
 |---|---|
@@ -1408,7 +1410,7 @@ schema the platform can run on.
 | `GET notifications/history` (`?page=&limit=&status=all\|unread\|read&target_type=`) | Страница истории + `unread_total` |
 | `POST notifications/<id>/read`, `…/unread`, `POST notifications/read-all` | Прочтение, 204 |
 | `DELETE notifications/<id>/delete` | Удалить своё, 204 |
-| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked`; выключить все — 422 `E-NTF-01` |
+| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked`; колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
 | `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин) |
 | `POST telegram/webhook` | Вебхук бота, `auth=None`; без верного `X-Telegram-Bot-Api-Secret-Token` — 403 |
 

@@ -48,6 +48,8 @@ def test_members(company_context):
     slug = company_context["slug"]
     assign(slug, 7, "project.projects", "full")
     assign(slug, 7, "project.members", "full")
+    # Директор: видит все проекты, а не только те, где участник.
+    assign(slug, 7, "project.all", "view")
     project_id = _create(slug).json()["id"]
     url = f"{BASE}/projects/{project_id}/members"
     added = Client().post(url, data=json.dumps({"user_id": 21}),
@@ -66,3 +68,39 @@ def test_mine_filter(company_context):
     _create(slug, code="П-016", name="Объект 16", manager_user_id=7)
     mine = Client().get(f"{BASE}/projects?mine=1", **_auth(slug)).json()
     assert [row["code"] for row in mine] == ["П-016"]
+
+
+def _with_role(slug, user_id, code):
+    from apps.access.models import Role, RoleAssignment, ScopeKind
+
+    RoleAssignment.objects.get_or_create(
+        company_slug=slug, user_id=user_id, role=Role.objects.get(code=code),
+        scope_kind=ScopeKind.COMPANY, scope_id=None)
+
+
+@pytest.mark.django_db
+def test_pm_sees_only_projects_he_takes_part_in(company_context):
+    """Мастер-план A1.3: ПМ видит только проекты-участия, СН — все активные.
+    Ограничение — на сервере, а не выбором клиента ``?mine=1``."""
+    from apps.project.services import projects
+
+    slug = company_context["slug"]
+    own = projects.create(code="П-1", name="Свой", country_code="KZ", manager_user_id=21,
+                          actor_id=1)
+    other = projects.create(code="П-2", name="Чужой", country_code="KZ", manager_user_id=99,
+                            actor_id=1)
+    _with_role(slug, 21, "bpp-pm")
+    _with_role(slug, 22, "bpp-sn")
+
+    pm_list = Client().get(f"{BASE}/projects", **_auth(slug, 21)).json()
+    assert [row["code"] for row in pm_list] == ["П-1"]
+    assert Client().get(f"{BASE}/projects/{own.id}", **_auth(slug, 21)).status_code == 200
+    assert Client().get(f"{BASE}/projects/{other.id}", **_auth(slug, 21)).status_code == 404
+    assert Client().get(f"{BASE}/projects/{other.id}/members",
+                        **_auth(slug, 21)).status_code == 404
+    added = Client().post(f"{BASE}/projects/{other.id}/members", data=json.dumps({"user_id": 5}),
+                          content_type="application/json", **_auth(slug, 21))
+    assert added.status_code == 404
+
+    sn_list = Client().get(f"{BASE}/projects", **_auth(slug, 22)).json()
+    assert {row["code"] for row in sn_list} == {"П-1", "П-2"}

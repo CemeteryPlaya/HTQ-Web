@@ -106,4 +106,25 @@ def test_unread_pairs():
     interface.mark_read(read, 9)
     _notify(recipients=[7], target_type="task", target_id="5")
     assert interface.unread_pairs(target_type="calendar_event", target_ids=["5", "6"],
-                                  recipient_ids=[7, 8, 9]) == {("5", 7), ("5", 8)}
+                                  recipient_ids=[7, 8, 9],
+                                  company_slug="htq-kz") == {("5", 7), ("5", 8)}
+
+
+@pytest.mark.django_db
+def test_same_target_id_in_two_companies_is_not_a_duplicate():
+    """Id задач и событий — свои последовательности в каждой схеме компании,
+    а таблица центра одна: событие №5 компании A — не событие №5 компании B."""
+    _notify(company_slug="htq-kz", target_type="calendar_event", target_id="5",
+            dedupe_window_seconds=300)
+    _notify(company_slug="htq-uz", target_type="calendar_event", target_id="5",
+            dedupe_window_seconds=300)
+    assert Notification.objects.count() == 2
+
+
+@pytest.mark.django_db
+def test_unread_pairs_are_per_company():
+    _notify(company_slug="htq-kz", target_type="calendar_event", target_id="5")
+    assert interface.unread_pairs(target_type="calendar_event", target_ids=["5"],
+                                  recipient_ids=[7], company_slug="htq-uz") == set()
+    assert interface.unread_pairs(target_type="calendar_event", target_ids=["5"],
+                                  recipient_ids=[7], company_slug="htq-kz") == {("5", 7)}

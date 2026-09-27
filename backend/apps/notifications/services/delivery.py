@@ -25,6 +25,10 @@ class RetryLater(Exception):
     pass
 
 
+class TelegramError(Exception):
+    """Сбой отправки в Telegram — текст без адреса запроса (в нём токен бота)."""
+
+
 def _absolute(url: str) -> str:
     base = getattr(settings, "PUBLIC_BASE_URL", "").rstrip("/")
     return f"{base}{url}" if url.startswith("/") and base else url
@@ -49,10 +53,18 @@ def _send_telegram(item: Delivery) -> bool:
         return False
     note = item.notification
     text = "\n".join(part for part in (note.title, note.text, _absolute(note.url)) if part)
-    response = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                          json={"chat_id": link.chat_id, "text": text,
-                                "disable_web_page_preview": True}, timeout=10.0)
-    response.raise_for_status()
+    try:
+        response = httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              json={"chat_id": link.chat_id, "text": text,
+                                    "disable_web_page_preview": True}, timeout=10.0)
+    except httpx.HTTPError as exc:
+        # Текст исключения httpx может содержать адрес запроса, а в нём —
+        # токен бота; наружу (last_error, лог, Loki) уходит только тип.
+        # ``from None`` не даёт исходному исключению попасть в traceback.
+        raise TelegramError(f"Telegram недоступен: {type(exc).__name__}") from None
+    if response.is_error:
+        raise TelegramError(f"Telegram ответил {response.status_code}: "
+                            f"{response.text[:300].replace(token, '***')}")
     return True
 
 

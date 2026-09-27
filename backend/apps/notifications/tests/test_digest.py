@@ -59,3 +59,24 @@ def test_broken_source_does_not_stop_the_digest(monkeypatch, settings):
         "ok", lambda user_id: [{"title": "Договор", "url": "/x", "since": ""}], tenant=False)
     monkeypatch.setattr(digest, "_recipients", lambda: [7])
     assert digest.send() == 1
+
+
+@pytest.mark.django_db
+def test_links_are_absolute_and_lead_to_existing_pages(monkeypatch, settings):
+    """В письме и Telegram относительный путь не кликабелен; позиция компании
+    ведёт на её поддомен (там её таблицы), общая — на голый домен."""
+    settings.PUBLIC_BASE_URL = "https://htq.group"
+    interface.register_digest_source(
+        "tenant", lambda user_id: [{"title": "Заявка", "url": "/bpp/r/45", "since": ""}],
+        tenant=True)
+    interface.register_digest_source(
+        "common", lambda user_id: [{"title": "Общее", "url": "/x", "since": ""}], tenant=False)
+    monkeypatch.setattr(digest, "_recipients", lambda: [7])
+    monkeypatch.setattr(digest, "_companies_of", lambda user_id: ["htq-kz"])
+    monkeypatch.setattr(digest.companies, "public_url",
+                        lambda slug: f"https://{slug}.htq.group")
+    digest.send()
+    note = Notification.objects.get(recipient_id=7)
+    assert "https://htq-kz.htq.group/bpp/r/45" in note.text
+    assert "https://htq.group/x" in note.text
+    assert note.url == "/signoff"  # входящие согласования — маршрут /signoff

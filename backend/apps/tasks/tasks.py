@@ -150,12 +150,12 @@ def calendar_event_reminder() -> int:
     if not upcoming:
         return 0
 
+    company = current_company_or_none()
     already = notifications.unread_pairs(
         target_type="calendar_event",
         target_ids=[str(p.event_id) for p in upcoming],
-        recipient_ids=[p.user_id for p in upcoming])
+        recipient_ids=[p.user_id for p in upcoming], company_slug=company)
 
-    company = current_company_or_none()
     written = 0
     for participant in upcoming:
         if (str(participant.event_id), participant.user_id) in already:

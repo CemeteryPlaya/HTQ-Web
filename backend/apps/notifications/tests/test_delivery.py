@@ -58,3 +58,36 @@ def test_telegram_without_link_is_skipped(row, settings):
     item = Delivery.objects.create(notification=row, channel="telegram")
     delivery.deliver(item.id)
     assert Delivery.objects.get(pk=item.id).state == "skipped"
+
+
+def _telegram_rejects(monkeypatch, token):
+    import httpx
+
+    def post(url, **kwargs):
+        return httpx.Response(403, request=httpx.Request("POST", url),
+                              json={"ok": False, "description": "Forbidden: bot was blocked"})
+
+    monkeypatch.setattr(delivery.httpx, "post", post)
+
+
+@pytest.mark.django_db
+def test_telegram_error_does_not_leak_the_bot_token(row, settings, monkeypatch, caplog):
+    from apps.notifications.models import TelegramLink
+
+    token = "123456:SECRET-bot-token"
+    settings.NOTIFY_TELEGRAM_BOT_TOKEN = token
+    settings.FALLBACK_MODE = "log"
+    TelegramLink.objects.create(user_id=row.recipient_id, chat_id="555")
+    _telegram_rejects(monkeypatch, token)
+
+    retried = Delivery.objects.create(notification=row, channel="telegram")
+    with pytest.raises(delivery.RetryLater) as exc:
+        delivery.deliver(retried.id)
+    retried.refresh_from_db()
+    assert token not in retried.last_error and token not in str(exc.value)
+    assert "403" in retried.last_error
+
+    retried.attempts = delivery.MAX_ATTEMPTS - 1
+    retried.save(update_fields=["attempts"])
+    delivery.deliver(retried.id)  # сдаётся: fallback пишет исключение в лог
+    assert token not in caplog.text

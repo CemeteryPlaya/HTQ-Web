@@ -8,7 +8,8 @@ ROLES = ("bpp-fd", "bpp-td", "bpp-od", "bpp-gd", "bpp-buh", "bpp-sn", "bpp-pm", 
 OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.agreements.terminate", "bpp.invoices.decision", "bpp.invoices.payment",
               "bpp.counterparties.block", "bpp.alternatives.select",
-              "bpp.accountable.payment", "bpp.invoices.closing_docs")
+              "bpp.accountable.payment", "bpp.invoices.closing_docs",
+              "project.all")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -43,6 +44,12 @@ def test_only_fd_decides_on_invoices_and_only_buh_marks_payment():
 def test_alternatives_are_chosen_by_fd_and_gd():
     chooser = [c for c in ROLES if "edit" in _flags(c, "bpp.alternatives.select")]
     assert chooser == ["bpp-fd", "bpp-gd"]
+
+
+@pytest.mark.django_db
+def test_only_pm_is_limited_to_his_projects():
+    """Мастер-план A1.3: ПМ видит только проекты-участия (access/0015)."""
+    assert [c for c in ROLES if "view" not in _flags(c, "project.all")] == ["bpp-pm"]
 
 
 @pytest.mark.django_db

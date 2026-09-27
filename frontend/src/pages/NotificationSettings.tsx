@@ -2,9 +2,9 @@
  * NotificationSettings — каналы уведомлений пользователя (/settings/notifications).
  *
  * Колокольчик, e-mail, Telegram (ТЗ §22, центр уведомлений `apps.notifications`).
- * Хотя бы один канал остаётся включённым: переключатель последнего включённого
- * заблокирован, сервер то же правило проверяет сам (422 `E-NTF-01`). Telegram
- * включается только после привязки чата — иначе доставки молча пропускались бы.
+ * Колокольчик выключить нельзя: события задач, календаря и мессенджера приходят
+ * только в него (сервер отвечает 422 `E-NTF-01`). Telegram включается только
+ * после привязки чата (422 `E-NTF-02`) — иначе доставки молча пропускались бы.
  */
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -50,14 +50,12 @@ export default function NotificationSettings() {
     onError: (error) => reportApiError(error, t('notifications.settings.linkError', 'Не удалось получить ссылку на бота')),
   });
 
-  const enabledCount = prefs ? [prefs.bell, prefs.email, prefs.telegram].filter(Boolean).length : 0;
-
   const rows: { key: Channel; icon: React.ElementType; label: string; hint: string }[] = [
     {
       key: 'bell',
       icon: Bell,
       label: t('notifications.settings.bell', 'Колокольчик'),
-      hint: t('notifications.settings.bellHint', 'Уведомления в шапке портала'),
+      hint: t('notifications.settings.bellHint', 'Уведомления в шапке портала. Всегда включён: события задач, календаря и мессенджера приходят только сюда'),
     },
     {
       key: 'email',
@@ -75,9 +73,10 @@ export default function NotificationSettings() {
 
   const isLocked = (key: Channel): boolean => {
     if (!prefs) return true;
-    if (key === 'telegram' && !prefs.telegram_linked && !prefs.telegram) return true;
-    // Выключить последний включённый канал нельзя.
-    return prefs[key] && enabledCount <= 1;
+    // Колокольчик обязателен — сервер его выключить не даст.
+    if (key === 'bell') return true;
+    // Telegram без привязанного чата ничего не доставит.
+    return key === 'telegram' && !prefs.telegram_linked && !prefs.telegram;
   };
 
   return (
@@ -89,7 +88,7 @@ export default function NotificationSettings() {
           {t('notifications.settings.title', 'Настройки уведомлений')}
         </h1>
         <p className="text-muted-foreground mb-6">
-          {t('notifications.settings.subtitle', 'Как получать уведомления. Хотя бы один способ остаётся включённым.')}
+          {t('notifications.settings.subtitle', 'Куда ещё, кроме колокольчика, присылать уведомления.')}
         </p>
 
         {isLoading || !prefs ? (

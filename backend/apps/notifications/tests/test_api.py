@@ -43,3 +43,28 @@ def test_cannot_disable_every_channel():
     assert refused.status_code == 422 and refused.json()["code"] == "E-NTF-01"
     assert Client().get(url, **_auth()).json() == {"bell": True, "email": False,
                                                    "telegram": False, "telegram_linked": False}
+
+
+@pytest.mark.django_db
+def test_bell_cannot_be_switched_off():
+    """События задач, календаря, мессенджера, конференций и кадров приходят
+    ТОЛЬКО в колокольчик (deliver=False): выключенный колокольчик при
+    включённом e-mail тихо отрезал бы их все."""
+    refused = Client().patch(f"{BASE}/prefs", data=json.dumps({"bell": False, "email": True}),
+                             content_type="application/json", **_auth())
+    assert refused.status_code == 422 and refused.json()["code"] == "E-NTF-01"
+    assert Client().get(f"{BASE}/prefs", **_auth()).json()["bell"] is True
+
+
+@pytest.mark.django_db
+def test_telegram_needs_a_linked_chat():
+    from apps.notifications.models import TelegramLink
+
+    url = f"{BASE}/prefs"
+    refused = Client().patch(url, data=json.dumps({"telegram": True}),
+                             content_type="application/json", **_auth())
+    assert refused.status_code == 422 and refused.json()["code"] == "E-NTF-02"
+    TelegramLink.objects.create(user_id=7, chat_id="555")
+    ok = Client().patch(url, data=json.dumps({"telegram": True}),
+                        content_type="application/json", **_auth())
+    assert ok.status_code == 200 and ok.json()["telegram"] is True

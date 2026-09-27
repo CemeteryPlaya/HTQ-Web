@@ -81,9 +81,20 @@ def _prefs_patch(request, data: schemas.PrefsPatch):
     for key, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(prefs, key, value)
-    if not (prefs.bell or prefs.email or prefs.telegram):
-        raise DomainError("E-NTF-01", "Оставьте включённым хотя бы один способ уведомлений.",
-                          fields=[{"field": "bell", "message": "нужен хотя бы один канал"}])
+    # Колокольчик выключить нельзя: события задач, календаря, мессенджера,
+    # конференций и кадров пишутся с deliver=False и приходят ТОЛЬКО в него —
+    # «только e-mail» тихо отрезал бы их все. Отсюда и «хотя бы один канал».
+    if not prefs.bell:
+        raise DomainError(
+            "E-NTF-01",
+            "Колокольчик выключить нельзя: события задач, календаря и мессенджера "
+            "приходят только в него.",
+            fields=[{"field": "bell", "message": "колокольчик обязателен"}])
+    # Telegram без привязанного чата — канал, который ничего не доставит.
+    if prefs.telegram and not telegram.is_linked(user_id):
+        raise DomainError(
+            "E-NTF-02", "Сначала подключите Telegram: нажмите «Подключить Telegram».",
+            fields=[{"field": "telegram", "message": "чат не привязан"}])
     prefs.save()
     return _prefs_payload(user_id)
 

@@ -17,7 +17,7 @@ vi.mock('@/api/notifications', () => ({
 }));
 
 describe('NotificationSettings', () => {
-  it('не даёт выключить последний канал', async () => {
+  it('колокольчик выключить нельзя', async () => {
     renderWithProviders(<NotificationSettings />);
     const bell = await screen.findByRole('switch', { name: /колокольчик/i });
     expect(bell).toBeDisabled();

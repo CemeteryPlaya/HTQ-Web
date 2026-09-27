@@ -140,4 +140,34 @@ describe('NotificationToasts', () => {
         await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
         expect(ctor).not.toHaveBeenCalled();
     });
+
+    it('после переезда ленты на UUID не всплывают старые уведомления', async () => {
+        // До выкатки в «показанных» лежали числовые id старой ленты; после
+        // переноса те же уведомления приходят с UUID. Без миграции каждое
+        // непрочитанное из последних 50 всплыло бы карточкой со звуком.
+        localStorage.setItem('htq:notif:toasted', JSON.stringify(['3', '4']));
+        const moved = { ...NOTIFICATION, id: '0f4c1a52-2e5d-4a8f-9a7e-5b8d1c3e2f10' };
+        fetchNotifications.mockResolvedValue([moved]);
+
+        await mountAndLoad();
+        act(() => setToastHostMounted(true));
+
+        await waitFor(() =>
+            expect(JSON.parse(localStorage.getItem('htq:notif:toasted') ?? '[]')).toContain(moved.id),
+        );
+        expect(toastMock).not.toHaveBeenCalled();
+        expect(playNotificationSound).not.toHaveBeenCalled();
+    });
+
+    it('новое уведомление после переезда показывается как обычно', async () => {
+        localStorage.setItem('htq:notif:toasted',
+            JSON.stringify(['3', '0f4c1a52-2e5d-4a8f-9a7e-5b8d1c3e2f10']));
+        const fresh = { ...NOTIFICATION, id: '7a1b2c3d-0000-4000-8000-000000000001' };
+        fetchNotifications.mockResolvedValue([fresh]);
+
+        await mountAndLoad();
+        act(() => setToastHostMounted(true));
+
+        await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    });
 });

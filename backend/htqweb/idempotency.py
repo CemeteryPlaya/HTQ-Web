@@ -26,7 +26,11 @@ from django.http import JsonResponse
 from htqweb.errors import DomainError
 
 TTL = 24 * 60 * 60
-LOCK_TTL = 60
+# Замок живёт с запасом дольше самого долгого запроса (gunicorn --timeout 60
+# в docker-compose*.yml): снятый раньше времени замок пустил бы повтор
+# выполняться параллельно с первым. Убитый воркер замок не снимет — он
+# истечёт сам.
+LOCK_TTL = 5 * 60
 HEADER = "Idempotency-Key"
 
 

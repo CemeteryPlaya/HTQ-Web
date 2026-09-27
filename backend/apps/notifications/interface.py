@@ -23,11 +23,11 @@ def notify(*, recipients: list[int], event: str, title: str, text: str = "", url
                          dedupe_window_seconds=dedupe_window_seconds)
 
 
-def unread_pairs(*, target_type: str, target_ids: list[str],
-                 recipient_ids: list[int]) -> set[tuple[str, int]]:
+def unread_pairs(*, target_type: str, target_ids: list[str], recipient_ids: list[int],
+                 company_slug: str | None) -> set[tuple[str, int]]:
     require_service("notifications")
     return center.unread_pairs(target_type=target_type, target_ids=target_ids,
-                               recipient_ids=recipient_ids)
+                               recipient_ids=recipient_ids, company_slug=company_slug)
 
 
 def latest(user_id: int, *, company_slug: str | None, limit: int = 50) -> list[dict]:

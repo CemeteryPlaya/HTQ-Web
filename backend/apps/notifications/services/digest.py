@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from django.conf import settings
+
 from apps.companies import interface as companies
 from apps.users import interface as users
 from htqweb.fallback import fallback
@@ -36,6 +38,17 @@ def _companies_of(user_id: int) -> list[str]:
     return [slug for slug in companies.user_company_slugs(user_id) if slug in active]
 
 
+def _absolute(url: str, slug: str | None) -> str:
+    """Ссылка позиции — абсолютная: в письме и Telegram относительный путь не
+    кликабелен. Позиция компании ведёт на её поддомен (там её таблицы),
+    общая — на голый домен ``PUBLIC_BASE_URL``."""
+    if not url.startswith("/"):
+        return url
+    base = companies.public_url(slug) if slug else None
+    base = base or (getattr(settings, "PUBLIC_BASE_URL", "") or "").rstrip("/")
+    return f"{base}{url}" if base else url
+
+
 def _collect(user_id: int) -> list[dict]:
     items: list[dict] = []
     for key, (fn, tenant) in _SOURCES.items():
@@ -51,7 +64,8 @@ def _collect(user_id: int) -> list[dict]:
                 fallback("notifications.digest.source_failed", None,
                          reason="источник сводки упал", exc=exc, expected=True, source=key)
                 continue
-            items.extend(got or [])
+            items.extend({**item, "url": _absolute(item.get("url") or "", slug)}
+                         for item in got or [])
     return items
 
 
@@ -64,6 +78,6 @@ def send() -> int:
         lines = [f"• {item['title']} — {item['url']}" for item in items]
         center.notify(recipients=[user_id], event="digest.daily",
                       title=f"Ждут вашего решения: {len(items)}",
-                      text="\n".join(lines), url="/signoff/inbox", company_slug=None)
+                      text="\n".join(lines), url="/signoff", company_slug=None)
         sent += 1
     return sent

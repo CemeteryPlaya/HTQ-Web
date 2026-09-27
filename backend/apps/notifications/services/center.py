@@ -68,8 +68,11 @@ def notify(*, recipients, event, title, text="", url="", company_slug=None,
     title = title[:255]
     target_type, target_id = target_type or "", str(target_id or "")
     for user_id in dict.fromkeys(int(r) for r in recipients):
+        # Компания — часть ключа: id задач и событий у каждой схемы свои, а
+        # таблица центра одна на группу.
         if dedupe_window_seconds and Notification.objects.filter(
-                recipient_id=user_id, actor_id=actor_id, title=title,
+                recipient_id=user_id, company_slug=company_slug or "",
+                actor_id=actor_id, title=title,
                 target_type=target_type, target_id=target_id,
                 created_at__gte=timezone.now() - timedelta(seconds=dedupe_window_seconds),
         ).exists():
@@ -92,11 +95,13 @@ def notify(*, recipients, event, title, text="", url="", company_slug=None,
     return [str(r.id) for r in rows]
 
 
-def unread_pairs(*, target_type: str, target_ids: list[str],
-                 recipient_ids: list[int]) -> set[tuple[str, int]]:
-    """Пары ``(target_id, recipient_id)`` с непрочитанным уведомлением о цели —
-    дедупликация напоминаний (``tasks.calendar_event_reminder``)."""
+def unread_pairs(*, target_type: str, target_ids: list[str], recipient_ids: list[int],
+                 company_slug: str | None) -> set[tuple[str, int]]:
+    """Пары ``(target_id, recipient_id)`` с непрочитанным уведомлением о цели
+    в этой компании — дедупликация напоминаний (``tasks.calendar_event_reminder``).
+    Компания обязательна: id целей у каждой схемы свои."""
     return set(Notification.objects.filter(
+        company_slug=company_slug or "",
         target_type=target_type, target_id__in=[str(i) for i in target_ids],
         recipient_id__in=recipient_ids, is_read=False,
     ).values_list("target_id", "recipient_id"))

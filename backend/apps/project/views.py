@@ -24,17 +24,26 @@ def _need(request, node: str, flag: str) -> None:
         raise DomainError("E-ACC-01", "Недостаточно прав для этого действия.", status=403)
 
 
-def _project(project_id: str) -> Project:
+def _sees_all(request) -> bool:
+    company = (getattr(request, "company", None) or {}).get("slug")
+    return "view" in access.flags_for(request.token, "project.all", company)
+
+
+def _project(request, project_id: str) -> Project:
+    """Проект, видимый вызывающему. Без узла ``project.all`` — только проект,
+    где он участник; чужой отвечает 404, как несуществующий (мастер-план A1.3)."""
     project = Project.objects.filter(pk=project_id).first()
-    if project is None:
+    if project is None or not (
+            _sees_all(request) or project.members.filter(user_id=request.token.user_id).exists()):
         raise Http404("Проект не найден")
     return project
 
 
 @api_view(methods=("GET",), module="project", level="read")
 def _list(request):
+    only_member = request.GET.get("mine") == "1" or not _sees_all(request)
     return projects.search(request.GET.get("q", ""), user_id=request.token.user_id,
-                           only_member=request.GET.get("mine") == "1", limit=200)
+                           only_member=only_member, limit=200)
 
 
 @api_view(methods=("POST",), module="project", level="write", body=schemas.ProjectIn,
@@ -58,13 +67,13 @@ def project_collection(request):
 
 @api_view(methods=("GET",), module="project", level="read")
 def _get(request, project_id: str):
-    return projects.brief(_project(project_id))
+    return projects.brief(_project(request, project_id))
 
 
 @api_view(methods=("PATCH",), module="project", level="write", body=schemas.ProjectPatch)
 def _patch(request, project_id: str, data: schemas.ProjectPatch):
     _need(request, "project.projects", "edit")
-    project = projects.update(_project(project_id), actor_id=request.token.user_id,
+    project = projects.update(_project(request, project_id), actor_id=request.token.user_id,
                               **data.model_dump(exclude_unset=True))
     return projects.brief(project)
 
@@ -79,14 +88,14 @@ def project_item(request, project_id: str):
 
 @api_view(methods=("GET",), module="project", level="read")
 def _members(request, project_id: str):
-    return sorted(_project(project_id).members.values_list("user_id", flat=True))
+    return sorted(_project(request, project_id).members.values_list("user_id", flat=True))
 
 
 @api_view(methods=("POST",), module="project", level="write", body=schemas.MemberIn,
           status=201)
 def _add_member(request, project_id: str, data: schemas.MemberIn):
     _need(request, "project.members", "edit")
-    projects.add_member(_project(project_id), data.user_id, actor_id=request.token.user_id)
+    projects.add_member(_project(request, project_id), data.user_id, actor_id=request.token.user_id)
     return {"user_id": data.user_id}
 
 
@@ -102,7 +111,7 @@ def project_members(request, project_id: str):
 def _remove_member(request, project_id: str, user_id: int):
     _need(request, "project.members", "edit")
     try:
-        projects.remove_member(_project(project_id), user_id, actor_id=request.token.user_id)
+        projects.remove_member(_project(request, project_id), user_id, actor_id=request.token.user_id)
     except projects.ProjectError as exc:
         raise DomainError("E-PRJ-02", str(exc)) from exc
     return {}

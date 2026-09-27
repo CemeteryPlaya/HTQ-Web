@@ -203,6 +203,13 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     if replayed is not None:
                         return replayed
                     idempotency.acquire(request, idem_key)
+                    # Повторная проверка ПОСЛЕ захвата: первый запрос мог
+                    # сохранить ответ и снять замок между replay() и acquire(),
+                    # и тогда действие выполнилось бы второй раз.
+                    replayed = idempotency.replay(request, idem_key)
+                    if replayed is not None:
+                        idempotency.release(request, idem_key)
+                        return replayed
                 try:
                     if body is not None:
                         try:
