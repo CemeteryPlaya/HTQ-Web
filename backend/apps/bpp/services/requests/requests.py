@@ -32,6 +32,7 @@ from apps.bpp.models import (
 from apps.bpp.services.actor import ROLE_GROUP, Actor
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.money import fmt, line_amount
@@ -320,6 +321,9 @@ def delete_draft(actor: Actor, request_id, *, expected_version: int | None) -> N
     _require_status(req, (RequestStatus.DRAFT,), "удаление")
     check_version(req, expected_version)
     audit.record(req, "deleted", actor_id=actor.user_id, changes=_snapshot(req))
+    # Файлы черновика — в apps.files: ни разу не отправленная заявка уносит
+    # их физически, отправлявшаяся (отозванная) оставляет с пометкой (ТЗ §21).
+    core_files.owner_deleted(req, actor_id=actor.user_id)
     req.delete()
 
 

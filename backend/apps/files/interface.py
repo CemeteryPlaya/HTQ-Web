@@ -33,6 +33,7 @@ __all__ = [
     "register_owner", "live_document_count", "missing_required",
     "required_files_error", "owners_with_documents", "owner_deleted",
     "adopt_media_file", "assign_company", "current_files",
+    "attach_bytes", "replace_bytes", "download_link", "find_version",
 ]
 
 
@@ -116,10 +117,13 @@ def assign_company(slug: str, *, dry_run: bool = False) -> dict:
 
 
 def current_files(owner_type: str, owner_id: Any, file_type: str | None = None) -> list[dict]:
-    """Действующие версии живых документов объекта: ``[{"document_id",
-    "file_type", "name", "media_file_id", "uploaded_by_id"}]`` — для
-    владельца, который переносит свои документы в другой объект (КП
-    выбранной альтернативы — в приложения нового договора)."""
+    """Действующие версии живых документов объекта — для владельца, который
+    показывает свои документы (список файлов в карточке) или переносит их в
+    другой объект (КП выбранной альтернативы — в приложения нового
+    договора). Элемент — карточка версии, как в папке (``id``,
+    ``document_id``, ``file_type``, ``version_no``, ``name``, ``mime``,
+    ``size``, ``sha256``, ``uploaded_by_id``, ``uploaded_at``, …), плюс
+    ``media_file_id``; порядок — по времени загрузки."""
     require_service("files")
     entry = get_owner(owner_type)
     qs = FileObject.objects.filter(owner_type=owner_type,
@@ -129,7 +133,66 @@ def current_files(owner_type: str, owner_id: Any, file_type: str | None = None) 
         qs = qs.filter(company_slug=owner_company(entry))
     if file_type is not None:
         qs = qs.filter(file_type_id=file_type)
-    return [{"document_id": str(row.document_id), "file_type": row.file_type_id,
-             "name": row.name, "media_file_id": row.media_file_id,
-             "uploaded_by_id": row.uploaded_by_id}
+    return [{**documents.version_out(row), "media_file_id": row.media_file_id}
             for row in qs.order_by("uploaded_at", "id")]
+
+
+# ── загрузка и скачивание из кода владельца ─────────────────────────────
+#
+# Для владельца, который принимает файл своей ручкой (заявка БЗО, авансовый
+# отчёт) и хранит его здесь. Проверки — те же, что у HTTP-загрузки
+# ``/api/files/v1``: справочник форматов и размеров, квоты владельца под его
+# блокировкой, антивирус, версии, журнал ``FileEvent``. Права на объект НЕ
+# проверяются — их проверил вызывающий владелец (см. ``services/documents.py``,
+# раздел «загрузка и скачивание из кода владельца»). Отказ — ``FilesError`` с
+# кодом и текстом ТЗ (конверт D-28, ``FilesError.body()``).
+
+def attach_bytes(owner_type: str, owner_id: Any, *, file_type: str, data: bytes,
+                 filename: str, mime: str, actor_id: int,
+                 ip: str | None = None, user_agent: str | None = None) -> dict:
+    """Версия 1 нового документа типа ``file_type`` — карточка версии, как в
+    папке. ``mime`` — подсказка для имени без расширения: тип файла
+    подсистема определяет по расширению, а media сверяет с ним содержимое."""
+    require_service("files")
+    row = documents.upload_bytes(
+        documents.owner_ref(owner_type, owner_id), actor_id=actor_id, data=data,
+        filename=filename, mime=mime, file_type=file_type,
+        audit={"ip": ip or "", "user_agent": user_agent or ""})
+    return documents.version_out(row)
+
+
+def replace_bytes(owner_type: str, owner_id: Any, document_id, *, data: bytes,
+                  filename: str, mime: str, actor_id: int, base_file_id=None,
+                  ip: str | None = None, user_agent: str | None = None) -> dict:
+    """Новая версия документа ``document_id``. ``base_file_id`` — поверх какой
+    версии: уже заменённая — 409 ``E-CON-01``; без него — поверх действующей."""
+    require_service("files")
+    row = documents.upload_bytes(
+        documents.owner_ref(owner_type, owner_id), actor_id=actor_id, data=data,
+        filename=filename, mime=mime, document_id=document_id,
+        base_file_id=base_file_id,
+        audit={"ip": ip or "", "user_agent": user_agent or ""})
+    return documents.version_out(row)
+
+
+def download_link(owner_type: str, owner_id: Any, document_id, *, actor_id: int | None,
+                  ip: str | None = None, user_agent: str | None = None,
+                  file_id=None) -> str:
+    """Временная ссылка на скачивание — версии ``file_id`` или действующей.
+    Каждая выдача пишет ``file_downloaded`` (кто, IP, user-agent) в журнал
+    (ТЗ §25.2): других путей к байтам у файлов подсистемы нет."""
+    require_service("files")
+    link = documents.link_for(
+        documents.owner_ref(owner_type, owner_id), document_id, actor_id=actor_id,
+        file_id=file_id, audit={"ip": ip or "", "user_agent": user_agent or ""})
+    return link["url"]
+
+
+def find_version(file_id) -> dict | None:
+    """Карточка версии по её id вместе с владельцем (``owner_type``,
+    ``owner_id`` — ключ строкой, как в таблице). ``None`` — нет такой
+    версии в компании запроса или её владелец не зарегистрирован. Для
+    владельца, чей API адресует файл id версии, а не парой «документ +
+    версия»."""
+    require_service("files")
+    return documents.find_version(file_id)

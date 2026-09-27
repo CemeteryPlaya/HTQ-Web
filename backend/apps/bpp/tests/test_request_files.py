@@ -6,11 +6,11 @@ from __future__ import annotations
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.bpp.models import FileDownload
 from apps.bpp.services.requests import files
 from apps.bpp.services.requests import requests as service
 from apps.bpp.tests import stage2 as s
 from apps.bpp.tests.test_files import PDF, memory_storage  # noqa: F401  (фикстура)
+from apps.files.models import FileEvent
 from htqweb.errors import DomainError
 
 pytestmark = pytest.mark.django_db
@@ -55,4 +55,6 @@ def test_only_the_author_attaches_and_every_download_is_logged(company_context):
 
     td = s.actor(slug, s.TD, "bpp-td")
     files.link(td, req.id, row["id"])
-    assert FileDownload.objects.filter(file_id=row["id"], user_id=s.TD).count() == 1
+    # Журнал скачиваний — платформенный (apps.files, ТЗ §25.2).
+    assert FileEvent.objects.filter(event="file_downloaded", file_id=int(row["id"]),
+                                    actor_id=s.TD).count() == 1

@@ -1,175 +1,162 @@
-"""Файлы документов: типы и лимиты ТЗ §21, версии, журнал скачиваний."""
+"""Файлы документов модуля — тонкая обёртка над платформенной ``apps.files``.
+
+Одна файловая подсистема на платформу (решение 28.09, план этапа 2 A,
+задача 1): байты, версии, квоты, форматы и размеры, антивирус и журнал
+файловых операций (``FileEvent``: загрузка, версия, скачивание — кто, IP,
+user-agent) — в ``apps.files``. Документы модуля — её владельцы,
+зарегистрированные в ``apps/bpp/file_owners.py``; там же правила ТЗ §21
+(``FileTypeSpec``), а форматы и размеры — в справочнике «Типы файлов»
+(миграция ``files/0003_bpp_file_types``).
+
+Здесь — прежние функции модуля с прежними сигнатурами, чтобы заявка и
+подотчёт звали их как раньше:
+
+- ``attach(owner, file_type, *, data, filename, mime, actor_id)`` — новый документ;
+- ``replace(file_id, *, data, filename, mime, actor_id)`` — новая версия поверх
+  версии ``file_id``;
+- ``list_files(owner)`` — действующие версии живых документов;
+- ``download_url(file_id, *, user_id)`` — ссылка через журнал скачиваний;
+- ``get_file(owner, file_id)`` — версия этого документа или ``None``.
+
+Права на документ проверяет вызывающий сервис документа — подсистема при
+загрузке из кода их не спрашивает. Отказ подсистемы (``FilesError``) —
+``FilesDomainError``: код и текст ``apps.files`` (``E-FIL-01`` формат 415,
+``E-FIL-02`` размер 413, ``E-FIL-03`` предел количества 409, ``E-FIL-08``
+угроза 422, ``E-SYS-01`` антивирус молчит 503, ``E-CON-01`` версию уже
+заменили 409), а не прежние ``E-FILE-*``: коды одни на ручку модуля и на
+панель ``/api/files/v1``.
+
+Карточка файла — прежняя форма (``id``, ``file_type``, ``filename``, ``mime``,
+``size``, ``sha256``, ``version``, ``replaced``, ``uploaded_by``,
+``uploaded_at``) плюс ``document_id``. ``id`` — id версии в ``apps.files``
+строкой.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from django.db import connection, transaction
-
-from apps.bpp.models import DocumentFile, FileDownload
-from apps.media_files import interface as media
+from apps.core.infrastructure import client_ip
+from apps.files import interface as files
 from htqweb.errors import DomainError
 
-from . import audit, scanner
-
-PDF = "application/pdf"
-JPG = "image/jpeg"
-PNG = "image/png"
-DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-XML = ("application/xml", "text/xml")
-TXT = "text/plain"
-CSV = "text/csv"
+#: Модель документа (``_meta.label_lower``) → владелец в ``apps.files``.
+#: Заполняет ``apps/bpp/file_owners.py::register`` при запуске.
+_OWNER_TYPES: dict[str, str] = {}
 
 
-@dataclass(frozen=True)
-class FileRule:
-    title: str
-    mimes: tuple[str, ...]
-    max_mb: int
-    max_count: int
+class FilesDomainError(DomainError):
+    """Отказ файловой подсистемы в конверте модуля — вместе с ``details``
+    (сколько документов из скольких, какие форматы): ``DomainError`` их не
+    несёт, а интерфейсу они нужны так же, как на панели ``/api/files/v1``."""
+
+    def __init__(self, exc: files.FilesError) -> None:
+        super().__init__(exc.code, exc.message, fields=exc.fields, status=exc.status)
+        self.details = exc.details
+
+    def payload(self) -> dict:
+        return {**super().payload(), "details": self.details}
 
 
-FILE_RULES: dict[str, FileRule] = {
-    "request_attachment": FileRule("КП, ТЗ, спецификация", (PDF, DOCX, XLSX, JPG, PNG), 20, 20),
-    "agreement": FileRule("Договор", (PDF, DOCX, JPG, PNG), 20, 1),
-    "agreement_annex": FileRule("Приложение к договору", (PDF, DOCX, JPG, PNG), 20, 30),
-    "invoice": FileRule("Счёт на оплату", (PDF, JPG, PNG), 10, 5),
-    "act": FileRule("АВР", (PDF, JPG, PNG), 10, 10),
-    "waybill": FileRule("Накладная", (PDF, JPG, PNG), 10, 10),
-    "vat_invoice": FileRule("Счёт-фактура", (PDF, JPG, PNG, *XML), 10, 10),
-    "bank_statement": FileRule("Выписка банка", (TXT, XLSX, CSV), 20, 1),
-    "alternative_offer": FileRule("Коммерческое предложение", (PDF, DOCX, XLSX, JPG, PNG), 20, 5),
-    # Подотчёт (B4.1): один подтверждающий документ на авансовый отчёт.
-    "advance_report": FileRule("Авансовый отчёт", (PDF, JPG, PNG), 10, 1),
-}
+def register_owner_type(model, owner_type: str) -> None:
+    """Документы модели ``model`` хранятся у владельца ``owner_type``."""
+    _OWNER_TYPES[model._meta.label_lower] = owner_type
 
 
-def _serialize(row: DocumentFile) -> dict:
+def owner_type_of(owner) -> str:
+    try:
+        return _OWNER_TYPES[owner._meta.label_lower]
+    except KeyError:
+        raise LookupError(
+            f"{owner._meta.label_lower}: документ не зарегистрирован владельцем файлов "
+            f"(apps/bpp/file_owners.py)") from None
+
+
+def _serialize(version: dict) -> dict:
     return {
-        "id": str(row.id), "file_type": row.file_type, "filename": row.filename,
-        "mime": row.mime, "size": row.size, "sha256": row.sha256,
-        "version": row.version, "replaced": row.replaced,
-        "uploaded_by": row.created_by, "uploaded_at": row.created_at.isoformat(),
+        "id": str(version["id"]),
+        "document_id": version["document_id"],
+        "file_type": version["file_type"],
+        "filename": version["name"],
+        "mime": version["mime"],
+        "size": version["size"],
+        "sha256": version["sha256"],
+        "version": version["version_no"],
+        "replaced": version["is_replaced"],
+        "uploaded_by": version["uploaded_by_id"],
+        "uploaded_at": version["uploaded_at"],
     }
 
 
-def _check(rule: FileRule, *, data: bytes, filename: str, mime: str) -> None:
-    if mime not in rule.mimes:
-        raise DomainError(
-            "E-FILE-01",
-            f"Формат файла «{filename}» не подходит для «{rule.title}». "
-            f"Допустимы: {', '.join(sorted({m.split('/')[-1] for m in rule.mimes}))}.",
-            status=415)
-    if len(data) > rule.max_mb * 1024 * 1024:
-        raise DomainError(
-            "E-FILE-02",
-            f"Файл «{filename}» больше {rule.max_mb} МБ. Уменьшите файл и загрузите снова.",
-            status=413)
-    scanner.scan(data, filename)
+def _not_found() -> DomainError:
+    return DomainError("E-NOT-FOUND", "Файл не найден. Обновите страницу.", status=404)
 
 
-def _store(data: bytes, filename: str, mime: str, actor_id: int) -> dict:
-    try:
-        return media.store_file(data=data, filename=filename, mime=mime, scope="bpp_doc",
-                                owner_id=actor_id, internal_authorized=True)
-    except media.UploadValidationError as exc:
-        # Хранилище проверяет содержимое (подпись формата, целостность
-        # картинки) — отказ показывается как ошибка формата, а не 500.
-        raise DomainError(
-            "E-FILE-01",
-            f"Файл «{filename}» не принят: {exc.detail}. Проверьте, что файл не повреждён "
-            f"и его формат совпадает с расширением.",
-            status=415) from exc
+def _audit(request) -> dict:
+    """IP и user-agent для журнала скачиваний (ТЗ §25.2) — если под рукой
+    запрос; без него строка журнала пишется без них."""
+    if request is None:
+        return {}
+    return {"ip": client_ip(request) or "",
+            "user_agent": request.META.get("HTTP_USER_AGENT", "")[:300]}
 
 
-def _lock(owner_type: str, owner_id: str, file_type: str) -> None:
-    """Сериализовать загрузки одного типа к одному документу до конца
-    транзакции: иначе две одновременные загрузки обе увидели бы «файлов
-    меньше предела» и превысили бы его."""
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
-                       [f"bpp.file:{owner_type}:{owner_id}:{file_type}"])
-
-
-def _keep_or_discard(stored: dict, write):
-    """Выполнить запись паспорта; упала — убрать уже записанные байты."""
-    try:
-        return write()
-    except Exception:
-        media.discard_upload(stored["id"], stored["path"])
-        raise
-
-
-def _current(owner_type: str, owner_id: str, file_type: str | None = None):
-    rows = DocumentFile.objects.filter(owner_type=owner_type, owner_id=owner_id,
-                                       replaced=False)
-    return rows.filter(file_type=file_type) if file_type else rows
-
-
-@transaction.atomic
 def attach(owner, file_type: str, *, data: bytes, filename: str, mime: str,
-           actor_id: int) -> dict:
-    rule = FILE_RULES[file_type]
-    owner_type, owner_id = owner._meta.label_lower, str(owner.pk)
-    _lock(owner_type, owner_id, file_type)
-    if _current(owner_type, owner_id, file_type).count() >= rule.max_count:
-        raise DomainError(
-            "E-FILE-03",
-            f"К документу уже приложено {rule.max_count} файл(ов) типа «{rule.title}» — "
-            f"это предел. Замените один из них новой версией.",
-            status=422)
-    _check(rule, data=data, filename=filename, mime=mime)
-    stored = _store(data, filename, mime, actor_id)
-
-    def write() -> DocumentFile:
-        row = DocumentFile.objects.create(
-            owner_type=owner_type, owner_id=owner_id, file_type=file_type,
-            media_file_id=str(stored["id"]), filename=filename,
-            # Тип — определённый хранилищем по содержимому, не заявленный клиентом.
-            mime=stored.get("mime") or mime,
-            size=stored["size"], sha256=stored.get("sha256") or "",
-            created_by=actor_id, updated_by=actor_id,
-        )
-        audit.record(owner, "file_attached", actor_id=actor_id,
-                     changes={"file": str(row.id), "file_type": file_type,
-                              "filename": filename})
-        return row
-
-    return _serialize(_keep_or_discard(stored, write))
+           actor_id: int, request=None) -> dict:
+    try:
+        version = files.attach_bytes(owner_type_of(owner), owner.pk, file_type=file_type,
+                                     data=data, filename=filename, mime=mime,
+                                     actor_id=actor_id, **_audit(request))
+    except files.FilesError as exc:
+        raise FilesDomainError(exc) from exc
+    return _serialize(version)
 
 
-@transaction.atomic
-def replace(file_id: str, *, data: bytes, filename: str, mime: str, actor_id: int) -> dict:
-    old = DocumentFile.objects.select_for_update().get(pk=file_id, replaced=False)
-    _check(FILE_RULES[old.file_type], data=data, filename=filename, mime=mime)
-    stored = _store(data, filename, mime, actor_id)
-
-    def write() -> DocumentFile:
-        old.replaced = True
-        old.save(update_fields=["replaced", "updated_at"])
-        row = DocumentFile.objects.create(
-            owner_type=old.owner_type, owner_id=old.owner_id, file_type=old.file_type,
-            media_file_id=str(stored["id"]), filename=filename,
-            mime=stored.get("mime") or mime,
-            size=stored["size"], sha256=stored.get("sha256") or "",
-            version=old.version + 1, previous=old, created_by=actor_id, updated_by=actor_id,
-        )
-        audit.record_for(old.owner_type, old.owner_id, "file_replaced", actor_id=actor_id,
-                         changes={"file": str(row.id), "previous": str(old.id),
-                                  "file_type": old.file_type, "filename": filename,
-                                  "version": row.version})
-        return row
-
-    return _serialize(_keep_or_discard(stored, write))
+def replace(file_id: str, *, data: bytes, filename: str, mime: str, actor_id: int,
+            request=None) -> dict:
+    """Новая версия поверх версии ``file_id``: если её уже заменили —
+    409 ``E-CON-01`` с тем, кто успел раньше."""
+    old = files.find_version(file_id)
+    if old is None:
+        raise _not_found()
+    try:
+        version = files.replace_bytes(old["owner_type"], old["owner_id"], old["document_id"],
+                                      data=data, filename=filename, mime=mime,
+                                      actor_id=actor_id, base_file_id=old["id"],
+                                      **_audit(request))
+    except files.FilesError as exc:
+        raise FilesDomainError(exc) from exc
+    return _serialize(version)
 
 
 def list_files(owner) -> list[dict]:
-    rows = _current(owner._meta.label_lower, str(owner.pk)).order_by("created_at")
-    return [_serialize(row) for row in rows]
+    return [_serialize(v) for v in files.current_files(owner_type_of(owner), owner.pk)]
 
 
-def download_url(file_id: str, *, user_id: int) -> str:
-    row = DocumentFile.objects.get(pk=file_id)
-    FileDownload.objects.create(file=row, user_id=user_id)
-    return media.get_file_url(row.media_file_id) or ""
+def get_file(owner, file_id) -> dict | None:
+    """Версия ``file_id``, если она принадлежит этому документу (в том числе
+    уже заменённая), иначе ``None``."""
+    version = files.find_version(file_id)
+    if version is None or version["owner_type"] != owner_type_of(owner) \
+            or version["owner_id"] != str(owner.pk):
+        return None
+    return _serialize(version)
+
+
+def owner_deleted(owner, *, actor_id: int | None) -> None:
+    """Документ удаляется — что станет с его файлами (ТЗ §21): у ни разу не
+    отправленного они удаляются физически, у отправлявшегося остаются с
+    пометкой. Звать в транзакции удаления и ДО удаления строки документа."""
+    files.owner_deleted(owner_type_of(owner), owner.pk, actor_id=actor_id)
+
+
+def download_url(file_id: str, *, user_id: int, request=None) -> str:
+    """Ссылка на версию ``file_id``; выдача пишется в журнал файловых
+    операций (кто, а с ``request`` — ещё IP и user-agent)."""
+    version = files.find_version(file_id)
+    if version is None:
+        raise _not_found()
+    try:
+        return files.download_link(version["owner_type"], version["owner_id"],
+                                   version["document_id"], actor_id=user_id,
+                                   file_id=version["id"], **_audit(request))
+    except files.FilesError as exc:
+        raise FilesDomainError(exc) from exc
