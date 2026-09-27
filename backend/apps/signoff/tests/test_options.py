@@ -160,3 +160,37 @@ def test_option_hooks_without_options_are_refused_at_registration():
         registry.register_subject(
             SUBJECT, label="Без вариантов", model=ProbeDoc,
             check_option=lambda subject_id, key: None)
+
+
+# ── кто выбирает: признак этапа votes_option (D-25: ФД и ГД) ────────────
+
+def _td_fd_gd():
+    td, fd, gd = make_user("td"), make_user("fd"), make_user("gd")
+    make_route([(1, "ФД", Quorum.ALL, [fd.pk], {"votes_option": True}),
+                (2, "ТД", Quorum.ALL, [td.pk]),
+                (3, "ГД", Quorum.ALL, [gd.pk], {"votes_option": True})])
+    doc = make_doc()
+    hooks.OPTIONS[doc.pk] = [ORIGINAL, OFFER]
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+    return td, fd, gd, doc, process
+
+
+def test_only_voting_stages_choose_and_the_last_voter_decides():
+    td, fd, gd, doc, process = _td_fd_gd()
+    assert _decide(fd, process, option_key=ORIGINAL["key"]).status_code == 200
+
+    # ТД вариант не выбирает: карточка его не предлагает, движок не спрашивает.
+    card = Client().get(f"{BASE}/processes/{process.pk}", **auth(user_token(td))).json()
+    assert card["options"] == []
+    assert _decide(td, process).status_code == 200
+
+    assert _decide(gd, process).status_code == 422
+    assert _decide(gd, process, option_key=OFFER["key"]).status_code == 200
+    assert interface.final_option(SUBJECT, doc.pk)["key"] == OFFER["key"]
+    assert [vote[1] for vote in hooks.OPTION_VOTES] == [1, 3]
+
+
+def test_route_stage_keeps_the_flag_in_the_snapshot():
+    _td, _fd, _gd, _doc, process = _td_fd_gd()
+    assert list(process.stages.order_by("order").values_list("votes_option", flat=True)) \
+        == [True, False, True]

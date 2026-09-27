@@ -257,7 +257,11 @@ def final_option(subject_type: str, subject_id: int | str) -> dict | None:
                .order_by("-created_at", "-id").first())
     if process is None:
         return None
-    last_order = (process.stages.order_by("-order")
+    # Выбирающие этапы названы признаком ``votes_option`` (D-25: ФД и ГД) —
+    # решает последний из них; без признака — последний этап процесса.
+    stages = process.stages.order_by("-order")
+    voters = stages.filter(votes_option=True)
+    last_order = ((voters if voters.exists() else stages)
                   .values_list("order", flat=True).first())
     task = (ApprovalTask.objects
             .filter(stage__process=process, stage__order=last_order,
@@ -340,6 +344,7 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
                 approver_key=spec.get("approver_key", ""),
                 requires_attachment=bool(spec.get("requires_attachment", False)),
                 requires_comment=bool(spec.get("requires_comment", False)),
+                votes_option=bool(spec.get("votes_option", False)),
                 requirement_key=spec.get("requirement_key", ""),
             )
     return route.pk

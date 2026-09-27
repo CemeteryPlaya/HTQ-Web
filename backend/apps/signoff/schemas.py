@@ -129,6 +129,7 @@ class StageCreate(BaseModel):
     approver_key: str = Field("", max_length=64)
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     # Что этап требует от ОБЪЕКТА (ключ из ``requirement_fields`` типа) —
     # проверяет сервис, как и ключ согласующих.
     requirement_key: str = Field("", max_length=64)
@@ -175,6 +176,7 @@ class StageUpdate(BaseModel):
     approver_key: Optional[str] = Field(None, max_length=64)
     requires_attachment: Optional[bool] = None
     requires_comment: Optional[bool] = None
+    votes_option: Optional[bool] = None
     requirement_key: Optional[str] = Field(None, max_length=64)
 
 
@@ -208,6 +210,7 @@ class StageRead(BaseModel):
     approver_kind: ApproverKind = ApproverKind.POSITION
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     # Настройка двух других видов: люди поимённо (с именами для редактора)
     # и ключ «назначает объект» с подписью из ``approver_fields``.
     user_ids: list[int] = Field(default_factory=list)
@@ -318,6 +321,7 @@ class ProcessStageRead(BaseModel):
     approver_key: str = ""
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     requirement_key: str = ""
     requirement_label: Optional[str] = None
     # Когда этап стал активным — «Сейчас у … с …» (B1.3).

@@ -341,6 +341,7 @@ def start(*, subject_type: str, subject_id: int | str,
                           if stage.approver_kind == ApproverKind.SUBJECT else ""),
             requires_attachment=stage.requires_attachment,
             requires_comment=stage.requires_comment,
+            votes_option=stage.votes_option,
             requirement_key=stage.requirement_key or "",
             state=StageState.WAITING,
         )
@@ -623,6 +624,26 @@ def _active_user_ids(user_ids) -> set[int]:
 # Решение
 # ═══════════════════════════════════════════════════════════════════════
 
+def stage_votes(process: ApprovalProcess, stage: ApprovalProcessStage) -> bool:
+    """Выбирает ли согласующий этого этапа вариант (исходный или альтернатива).
+
+    Маршрут называет выбирающих признаком ``votes_option`` (модуль БЗО, D-25:
+    ФД и ГД). Нет признака ни у одного этапа снимка — выбирает каждый этап
+    (ТЗ §12.4, так было до признака).
+    """
+    if stage.votes_option:
+        return True
+    return not process.stages.filter(votes_option=True).exists()
+
+
+def voting_stages_now(process: ApprovalProcess) -> bool:
+    """Идёт ли сейчас группа, где выбирают вариант, — для карточки процесса."""
+    if process.current_order is None:
+        return False
+    current = process.stages.filter(order=process.current_order)
+    return any(stage_votes(process, stage) for stage in current)
+
+
 @transaction.atomic
 def act(*, task_id: int, actor_id: int, decision: str,
         comment: str = "", option_key: str = "") -> ApprovalProcess:
@@ -711,7 +732,7 @@ def act(*, task_id: int, actor_id: int, decision: str,
                 f"На этапе «{stage.name}» сначала нужно: {reason}")
     # Выбор варианта — тем же порядком: только на согласовании и ДО записи.
     chosen_key, chosen_label = "", ""
-    if decision == APPROVE:
+    if decision == APPROVE and stage_votes(process, stage):
         options = registry.options_for(process.subject_type, process.subject_id)
         if len(options) > 1:
             labels = {item["key"]: item["label"] for item in options}
@@ -1277,14 +1298,68 @@ def _describe(process: ApprovalProcess) -> dict:
         return {"title": f"{subject.label} #{process.subject_id}", "url": None}
 
 
-def _notify(user_ids: list[int], payload: dict) -> None:
-    """Разослать уведомление ПОСЛЕ коммита, best-effort.
+#: Заголовок в центре уведомлений по событию (ТЗ §22): к заголовку документа
+#: из ``describe`` предметной аппки.
+_CENTER_TITLES = {
+    "signoff.awaiting_you": "{title} ждёт вашего согласования",
+    "signoff.approved": "{title} — согласовано",
+    "signoff.rejected": "{title} — отклонено",
+    "signoff.rework": "{title} — возвращено на доработку",
+    "signoff.cancelled": "{title} — согласование отозвано",
+    "signoff.no_executor": "{title}: этап «{stage}» ждёт исполнителя",
+    "signoff.self_approval_skipped":
+        "{title}: этап «{stage}» пропущен — автор документа и есть согласующий",
+}
 
-    ``on_commit`` — потому что рассылать по откатившейся транзакции нечего:
-    согласующий получил бы запрос, которого нет. Проглатывание ошибок —
-    потому что выключенный messenger не повод отказать в согласовании
-    (в отличие от выключенного ``users``, который решает, КТО согласует).
+
+def _notify_center(user_ids: list[int], payload: dict) -> bool:
+    """Уведомление через центр уведомлений (мастер-план БЗО, B1.2 / A1.5):
+    колокольчик, e-mail, Telegram по выбору получателя.
+
+    Запись — в транзакции согласования (откатилось решение — нет и
+    уведомления), доставку центр ставит сам после коммита. Своя точка
+    сохранения: сбой центра не роняет решение. ``False`` — центра нет или
+    он выключен, и тогда уведомление идёт старым путём, через мессенджер.
     """
+    from django.apps import apps as django_apps
+
+    if not django_apps.is_installed("apps.notifications"):
+        return False
+    from apps.notifications import interface as notifications
+    from htqweb.tenancy import current_company_or_none
+
+    kind = payload.get("type") or "signoff.event"
+    title = payload.get("title") or f"{payload.get('subject_type')} №{payload.get('subject_id')}"
+    template = _CENTER_TITLES.get(kind, "{title}")
+    try:
+        with transaction.atomic():
+            notifications.notify(
+                recipients=user_ids, event=kind,
+                title=template.format(title=title, stage=payload.get("stage", "")),
+                url=payload.get("url") or f"/signoff/processes/{payload.get('process_id')}",
+                company_slug=current_company_or_none(),
+                target_type=str(payload.get("subject_type") or ""),
+                target_id=str(payload.get("subject_id") or ""))
+    except ServiceDisabled:
+        return False
+    except Exception:
+        logger.warning("signoff: центр уведомлений не принял уведомление", exc_info=True)
+    return True
+
+
+def _notify(user_ids: list[int], payload: dict) -> None:
+    """Разослать уведомление, best-effort.
+
+    Сначала — центр уведомлений (``_notify_center``). Нет его — мессенджер
+    ПОСЛЕ коммита: ``on_commit`` — потому что рассылать по откатившейся
+    транзакции нечего, согласующий получил бы запрос, которого нет.
+    Проглатывание ошибок — потому что выключенный канал не повод отказать в
+    согласовании (в отличие от выключенного ``users``, который решает, КТО
+    согласует).
+    """
+    if _notify_center(user_ids, payload):
+        return
+
     def send() -> None:
         try:
             messenger.dispatch_notification(user_ids, payload)

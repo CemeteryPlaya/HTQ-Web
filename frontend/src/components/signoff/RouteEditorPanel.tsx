@@ -111,6 +111,8 @@ interface StageDraft {
   approverKind: ApproverKind;
   requiresAttachment: boolean;
   requiresComment: boolean;
+  /** Выбирает вариант при альтернативах (D-25). */
+  votesOption: boolean;
   /** Что этап требует от ОБЪЕКТА (ключ из `requirement_fields` типа);
    *  пусто — ничего. */
   requirementKey: string;
@@ -129,6 +131,7 @@ const emptyDraft = (order: number): StageDraft => ({
   approverKind: 'position',
   requiresAttachment: false,
   requiresComment: false,
+  votesOption: false,
   requirementKey: '',
 });
 
@@ -221,6 +224,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         approver_kind: stage.approverKind,
         requires_attachment: stage.requiresAttachment,
         requires_comment: stage.requiresComment,
+        votes_option: stage.votesOption,
         requirement_key: stage.requirementKey,
       };
       return stage.id === null
@@ -258,6 +262,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
       approverKind: stage.approver_kind,
       requiresAttachment: stage.requires_attachment,
       requiresComment: stage.requires_comment,
+      votesOption: stage.votes_option ?? false,
       requirementKey: stage.requirement_key ?? '',
     });
 
@@ -780,6 +785,26 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                       checked={draft.requiresComment}
                       onCheckedChange={(checked) =>
                         setDraft({ ...draft, requiresComment: checked })
+                      }
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="stage-votes" className="text-sm">
+                        Выбирает вариант
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Если к документу поданы альтернативы, согласующий этапа
+                        выбирает исходный документ или альтернативу. Решает голос
+                        последнего такого этапа. Не отмечено ни у одного этапа —
+                        выбирает каждый.
+                      </p>
+                    </div>
+                    <Switch
+                      id="stage-votes"
+                      checked={draft.votesOption}
+                      onCheckedChange={(checked) =>
+                        setDraft({ ...draft, votesOption: checked })
                       }
                     />
                   </div>

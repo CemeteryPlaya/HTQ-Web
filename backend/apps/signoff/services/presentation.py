@@ -74,6 +74,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "approver_key": stage.approver_key or "",
                 "requires_attachment": stage.requires_attachment,
                 "requires_comment": stage.requires_comment,
+                "votes_option": stage.votes_option,
                 "requirement_key": stage.requirement_key or "",
                 "requirement_label": requirement_labels.get(stage.requirement_key or ""),
                 "activated_at": stage.activated_at,
@@ -91,7 +92,13 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         # Между чем выбирает тот, чей ход: без этого кнопке «Согласовать»
         # нечего предложить. Только у идущего процесса — у завершённого
         # выбор уже сделан и лежит в голосах.
-        card["options"] = registry.options_for(process.subject_type, process.subject_id)
+        # Только если текущая группа выбирает вариант (``votes_option``,
+        # D-25): остальным этапам предлагать выбор незачем — движок его и
+        # не спросит.
+        from apps.signoff.services import engine
+
+        card["options"] = (registry.options_for(process.subject_type, process.subject_id)
+                           if engine.voting_stages_now(process) else [])
 
     if enrich:
         described = describe_many([(process.subject_type, process.subject_id)])

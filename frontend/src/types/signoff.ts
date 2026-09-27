@@ -203,6 +203,9 @@ export interface RouteStage {
    *  `requires_attachment` и `approver_kind` — комментарий можно требовать и
    *  от названного согласующего. На отказ/доработку не влияет. */
   requires_comment: boolean;
+  /** Выбирает вариант при альтернативах (D-25: ФД и ГД). Нет ни у одного этапа —
+   *  выбирает каждый. */
+  votes_option: boolean;
   roles: RouteRole[];
   /** `users`: люди поимённо (с именами для редактора). */
   user_ids: number[];
@@ -330,6 +333,7 @@ export interface ProcessStage {
   approver_key: string;
   requires_attachment: boolean;
   requires_comment: boolean;
+  votes_option?: boolean;
   requirement_key: string;
   requirement_label: string | null;
   /** Когда этап стал активным. */
@@ -421,6 +425,7 @@ export interface StageInput {
   approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  votes_option?: boolean;
   requirement_key?: string;
 }
 
@@ -444,6 +449,7 @@ export interface StageUpdateInput {
   approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  votes_option?: boolean;
   requirement_key?: string;
 }
 

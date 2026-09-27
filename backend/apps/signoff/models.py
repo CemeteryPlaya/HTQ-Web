@@ -498,6 +498,15 @@ class ApprovalRouteStage(models.Model):
         verbose_name="Требуется пояснение",
         help_text="Согласовать этап можно только с непустым комментарием",
     )
+    # Кто выбирает вариант (исходный документ или альтернативу, ТЗ §12.4).
+    # Модуль БЗО (D-25/D-26): выбирают ФД и ГД, решает голос последнего из
+    # них. Этап без признака в процессе, где он есть хоть у одного этапа,
+    # согласует без выбора. Нет ни у одного — выбирает каждый этап, как было.
+    votes_option = models.BooleanField(
+        default=False, db_default=False,
+        verbose_name="Выбирает вариант",
+        help_text="При альтернативах согласующий этапа выбирает вариант",
+    )
     # Третье требование этапа — к САМОМУ ОБЪЕКТУ, а не к решению. Документ и
     # пояснение приносит согласующий вместе с решением; здесь же этап ждёт,
     # чтобы на объекте что-то БЫЛО СДЕЛАНО: у заявки на закуп заполнен
@@ -723,6 +732,7 @@ class ApprovalProcessStage(models.Model):
     # должно избавлять от документа (или пояснения) тех, кто ещё не решил.
     requires_attachment = models.BooleanField(default=False, db_default=False)
     requires_comment = models.BooleanField(default=False, db_default=False)
+    votes_option = models.BooleanField(default=False, db_default=False)
     requirement_key = models.CharField(max_length=64, default="", db_default="",
                                        blank=True)
     # Когда этап стал активным — «Сейчас у … с такого-то времени» (ТЗ §16.2).

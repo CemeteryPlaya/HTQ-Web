@@ -164,6 +164,7 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
               approver_key: str = "",
               requires_attachment: bool = False,
               requires_comment: bool = False,
+              votes_option: bool = False,
               requirement_key: str = "") -> ApprovalRouteStage:
     route = get_route_or_404(route_id)
     picked = _check_approver_kind(
@@ -182,6 +183,7 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
         user_ids=picked["user_ids"], approver_key=picked["approver_key"],
         requires_attachment=requires_attachment,
         requires_comment=requires_comment,
+        votes_option=votes_option,
         requirement_key=requirement_key)
     _set_roles(stage, picked["position_ids"])
     return stage
@@ -589,6 +591,7 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "approver_kind": stage.approver_kind,
         "requires_attachment": stage.requires_attachment,
         "requires_comment": stage.requires_comment,
+        "votes_option": stage.votes_option,
         "user_ids": user_ids,
         "users": [
             {
