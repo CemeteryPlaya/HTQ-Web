@@ -1410,8 +1410,8 @@ schema the platform can run on.
 | `GET notifications/history` (`?page=&limit=&status=all\|unread\|read&target_type=`) | Страница истории + `unread_total` |
 | `POST notifications/<id>/read`, `…/unread`, `POST notifications/read-all` | Прочтение, 204 |
 | `DELETE notifications/<id>/delete` | Удалить своё, 204 |
-| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked`; колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
-| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин) |
+| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked` + `telegram_available` (бот настроен); колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
+| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин); бот не настроен (нет токена, имени или секрета вебхука) — 503 `E-NTF-03` |
 | `POST telegram/webhook` | Вебхук бота, `auth=None`; без верного `X-Telegram-Bot-Api-Secret-Token` — 403 |
 
 ---
