@@ -21,6 +21,8 @@ from apps.signoff import interface as signoff
 
 from .core import VersionedModel
 
+__all__ = ["AccountableFundsRequest", "AccountableStatus", "AdvanceReport"]
+
 
 class AccountableStatus(models.TextChoices):
     DRAFT = "draft", "Черновик"

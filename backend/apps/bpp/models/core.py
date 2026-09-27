@@ -12,6 +12,8 @@ import uuid
 from django.db import models
 from django.db.models.functions import Now
 
+__all__ = ["AuditLog", "BppModel", "NumberSequence", "VersionedModel"]
+
 
 class BppModel(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

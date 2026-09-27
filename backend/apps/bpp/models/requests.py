@@ -19,6 +19,11 @@ from apps.signoff import interface as signoff
 
 from .core import VersionedModel
 
+__all__ = [
+    "InitiatorRole", "ItemStatus", "PurchaseRequest", "PurchaseRequestItem",
+    "PurchaseType", "RequestStatus",
+]
+
 
 class InitiatorRole(models.TextChoices):
     SN = "sn", "Снабженец"

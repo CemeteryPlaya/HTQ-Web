@@ -18,6 +18,8 @@ from django.db.models import F, Q
 
 from .core import BppModel, VersionedModel
 
+__all__ = ["Budget", "BudgetLine", "BudgetStatus", "BudgetVersion", "BudgetVersionStatus"]
+
 
 class BudgetStatus(models.TextChoices):
     DRAFT = "draft", "Черновик"
