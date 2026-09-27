@@ -1,1038 +1,325 @@
-# БЗО, этап 2 — исполнитель A (Санжар, ветка `new-module-BPP-sanzhar`)
+# БЗО, этап 2 — план после сведения 27.09 (A — Санжар, остаток B — Руслан)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Дать модулю всё общее, на чём исполнитель B строит бюджет, заявку и план закупок:
-- **каркас раздела `/bpp`** — меню, реестр, форма документа, формат денег и дат, защита от двойного клика, автосохранение черновика;
-- **контрагенты** — справочник с проверкой БИН/ИИН, блокировкой и меткой «Проверенный»;
-- **экспорт реестров в xlsx и печать PDF**;
-- **экраны справочников, проектов и контрагентов**.
+**Стартовая точка:** `new-module-BPP-merge` = PR #35 (Руслан) + этап 1 A с мелкими замечаниями; обе ветки её подтянули (у A — мердж `a63e501`).
 
-**Architecture:**
-- **Подмодули подключаются сами.** `bpp/models/__init__.py` импортирует все модули пакета, `bpp/urls.py` подключает все `urls_*.py`, фронт собирает маршруты и пункты меню из `features/bpp/*/module.tsx` через `import.meta.glob`. Исполнитель B добавляет свои файлы и не правит файлы A.
-- **Общие куски документа — на сервере в `services/core/`:**
-  - `registry.py` — пагинация, сортировка и фильтры реестра;
-  - `export.py` — xlsx;
-  - `printing.py` — PDF;
-  - `files` и `history` — с реестром проверок доступа по типу владельца.
-- **На фронте — в `features/bpp/core/`:**
-  - `BppRegistry` — реестр;
-  - `BppDocumentShell` — шапка, кнопки по `allowed_actions`, вкладки;
-  - хуки `useIdempotentAction`, `useDraftAutosave`, `useUnsavedChangesGuard`;
-  - формат `lib/bpp/format.ts`.
-- **Контрагенты** — подмодуль A (`models/counterparties.py`, `services/counterparties/`). Для документов B — функции `services/counterparties/lookup.py`: `brief`, `assert_usable` (E-CTR-01), `needs_confirmation`, `record_success`.
+**Что уже сделано к старту** (по коду сведённой ветки):
 
-**Tech Stack:** Django 5.2.7, PostgreSQL (схема на компанию), Celery, openpyxl 3.1.5 (уже в `requirements.txt`), WeasyPrint (новая зависимость), pytest-django; React 18 + TypeScript + react-query + react-router 6 (`BrowserRouter`), vitest.
-
-**Spec:** [мастер-план](2026-09-26-bpp-master-plan.md): §1 (D-20, D-28, D-29, D-32, D-34, D-39), §2.2, §2.4, §2.6, §2.7, §5 «Этап 2» (A2.1–A2.4); ТЗ [§05](../tz/TZ-budget-procurement-payments-v1.0.md) (интерфейс), §13.2–13.4, §18 (справочники, алгоритм БИН), §19 (реестры), §21, §23, §26.
-
-**Как задачи соотносятся с мастер-планом:**
-
-| Мастер-план | Этот план |
+| Мастер-план | Состояние |
 |---|---|
-| — (новое, снимает общие файлы между A и B) | задача 1 |
-| A2.3 | задачи 2, 3 |
-| A2.1 | задачи 4, 5, 6, 7, 8 |
-| A2.2 | задачи 9, 10 |
-| A2.4 | задача 11 |
-| стык этапа 1 | задача 12 |
+| B0–B1 (строковый `subject_id`, временные исполнители, флаги маршрута, API движка, источник сводки) | сделано |
+| B2.1–B2.4 (бюджет, заявка, план закупок, «Задействовано» и ночная сверка) — бэкенд | сделано ([план B](2026-09-27-bpp-stage2-executor-b.md), отступления — [сверка §7](2026-09-26-bpp-reconciliation-B.md)) |
+| B4.1 (подотчёт), B5.1 (выбор варианта — часть движка), B6.3 (снятие шаблона закупа) | сделано заранее |
+| Уведомления движка через центр, документы заявки | сделано |
+| A2.1 каркас фронта, A2.2 экспорт и печать, A2.3 контрагенты, A2.4 экраны справочников | **не начато — этот план** |
+| B2.5 экраны бюджета, заявки, плана | ждёт A2.1 |
+| Этап 3 B (договор и счёт) | ждёт A2.3 |
 
-## Порядок, волны и сведение веток
+**Решения этого плана:**
+- **Одна файловая подсистема — платформенная `apps.files`** (решение Санжара 28.09, предложение B в сверке §1.2). `DocumentFile`/`FileDownload` из `bpp` удаляются: они нигде не выкатывались. `bpp/services/core/files.py` остаётся тонкой обёрткой с прежними функциями, поэтому код заявки и подотчёта B не меняется. Сканер `BPP_FILE_SCANNER` уходит в пользу антивируса `apps.files` (флаг раздела хранилища). Это закрывает двойной крючок из сверки §7.1.
+- **Узлы прав, которые предложил B** (сверка §7.3), вводятся:
+  - `bpp.requests.all` — видит все заявки. Сейчас это правило «просмотр без создания»;
+  - `bpp.plan.reassign` — переназначение исполнителя позиций. Сейчас это `bpp.settings:edit`.
 
-Ветки сводятся через `new-module-BPP-merge` (CLAUDE.md, «Модуль БЗО»).
+  Смысл матрицы Алгазы не меняется: у каждой роли явная строка ровно с тем, что роль и так получала.
+- **Каркас фронта строится на том, что уже есть у B:**
+  - `features/bpp/format.ts` — формат денег и дат, дополняется;
+  - `components/files/FilesPanel.tsx` — вкладка «Файлы»;
+  - `components/signoff/SubjectProcesses.tsx`, `ProcessTimeline.tsx` — вкладка «Согласование»;
+  - временная `features/bpp/DocumentPage.tsx` заменяется каркасом.
 
-- **До старта этапа** в `new-module-BPP-merge` должны быть этапы 0 и 1 обоих исполнителей: строковый `subject_id` (B0.1), флаги маршрута (B1.2), `current_holders` и `pending_for_user` (B1.3). Обе ветки подтягивают `new-module-BPP-merge`. Без этого задачи 7 и 8 (колонка «Сейчас у», вкладка «Согласование») и задача 12 не собираются.
-- **Волна 1** — задачи 1–10. Параллельно B делает бэкенд бюджета, заявки, плана и расчёта (B2.1–B2.4).
-- **Сведение внутри этапа.** PR обеих веток в `new-module-BPP-merge`, затем обе подтягивают. Второй PR первым подтягивает `new-module-BPP-merge` и добавляет `manage.py makemigrations bpp --merge`: у A и B будут миграции `bpp` от одного родителя `0002_files`. Без merge-миграции `migrate` откажется запускаться («Conflicting migrations»).
-- **Волна 2** — задача 11 и задача 12. Параллельно B делает экраны (B2.5) на каркасе задач 4–8.
+**Волны:**
+- **Волна 1 (A).** Задачи 1–8 — всё, что разблокирует B.
+  - Одна подсистема файлов.
+  - Автоподключение подмодулей.
+  - Узлы и функции интерфейсов.
+  - Контрагенты — ждёт этап 3 B.
+  - Экспорт и печать.
+  - Каркас фронта.
+  - B в это время может брать задачи этапа 3, не зависящие от контрагентов (в его плане этапа 3 — отметить).
+- **Сведение** через `new-module-BPP-merge` (подтверждено 27.09).
+- **Волна 2.**
+  - A: задачи 9–10 — экраны справочников, проектов и контрагентов, сквозная проверка.
+  - B: раздел «Остаток B» ниже — экраны B2.5 и переход документов на общие куски.
+
+**Tech Stack:** Django 5.2.7, PostgreSQL (схема на компанию), Celery, openpyxl 3.1.5, WeasyPrint (новая), pytest-django; React 18 + TypeScript + react-query + react-router 6 (`BrowserRouter`), vitest.
+
+**Spec:** [мастер-план](2026-09-26-bpp-master-plan.md): §1 (D-20, D-28, D-29, D-30, D-31, D-32, D-34, D-39), §2.2, §2.4, §2.6, §2.7, §5 «Этап 2»; ТЗ §05, §13.2–13.4, §16.2 п.1, §18, §19, §21, §23, §25.2, §26; [сверка B](2026-09-26-bpp-reconciliation-B.md) §1.2, §7.
 
 ---
 
 ## Global Constraints
 
-- Интерпретатор — корневой `.venv` (Python 3.13.10, Django 5.2.7); команды из `backend/`: `../.venv/Scripts/python.exe …`. Postgres: `docker compose -f docker-compose.test-local.yml up -d db`. **Один прогон pytest за раз на машине.**
-- Ветки не создавать. Коммитить только файлы своей задачи, строка соавторства — от агента.
-- Межаппный доступ — только `apps.<x>.interface`; первая строка функции `interface.py` и Celery-задачи — `require_service("<сервис>")`; задачи тенантной аппки — `@company_task`.
-- Каждая ручка — `api_view(module="bpp", level="read"|"write"|"admin")` с явным уровнем; проверки тоньше модуля — `services/core/permissions.can(request, node, flag)`.
-- Ошибки — `DomainError(code, message, fields=…, status=…)`; тексты — из ТЗ §26.1 и правил BR дословно, где они там есть.
-- Модели: UUID-ключ, `created_at/by`, `updated_at/by`; документы — `version` (`VersionedModel`) и `check_version` → 409 E-CON-01.
-- Записывающие ручки документов и справочников — `api_view(idempotent=True)`; фронт шлёт `Idempotency-Key`.
-- Суммы на проводе — строки (`"1250000.00"`), никогда `float`; на экране — `1 250 000,00 KZT`; даты — `ДД.ММ.ГГГГ`, дата-время — `ДД.ММ.ГГГГ ЧЧ:ММ` по Asia/Almaty.
-- Новые строки фронта — `t('bpp.<ключ>', 'Русский текст')`, переводы не добавлять. Typecheck — `npx tsc --noEmit -p tsconfig.app.json`: число ошибок не растёт (на 27.09 — 148).
-- Ошибки в `onError` — только через `reportApiError(err, 'запасная фраза')` (сторож `src/lib/ux/__tests__/uxContract.test.ts`).
-- `bpp` — тенантная: миграции схем компаний — `manage.py migrate_companies`; изменение схемы — только expand.
-- `STRUCTURE.md`, `CLAUDE.md`, `API.md` — в той же задаче, что меняет структуру или ручки.
+- Интерпретатор — корневой `.venv`; команды из `backend/`: `../.venv/Scripts/python.exe …`. **Один прогон pytest за раз на машине.**
+- Ветки не создавать; коммитить только файлы своей задачи. Правки в чужой зоне (§2.7: `signoff`, `files`, `bpp/services/{budget,requests,accountable}`, экраны B) — отдельным коммитом с пометкой в сообщении, B подтверждает при сведении.
+- Межаппный доступ — только `apps.<x>.interface`; `require_service` первой строкой функций `interface.py` и Celery-задач; задачи тенантных аппок — `@company_task`.
+- Ручки — `api_view(module=…, level=…)` с явным уровнем; тонкие права — `services/core/permissions.can` или `services/actor.Actor` (B) — у одного документа одна схема.
+- Ошибки — `DomainError`; коды не пересекаются с уже занятыми B (сверка §7.3): комментарий короче 10 — код `BR-060`; «страна не найдена» — `E-REF-04`; контрагенты — `E-CTR-01…04`; экспорт — `E-EXP-01`.
+- Суммы на проводе — строки; на экране — `1 250 000,00 KZT`; даты — `ДД.ММ.ГГГГ`, дата-время — `ДД.ММ.ГГГГ ЧЧ:ММ` Asia/Almaty. Округление и формат сумм на бэке — `apps/bpp/services/money.py` (B; второго модуля денег не заводить).
+- Фронт: строки — `t('bpp.<ключ>', 'Русский текст')`; ошибки в `onError` — `reportApiError`; `tsc` не выше 148 ошибок.
+- Миграции `bpp`, `files`, `access` — одной цепочкой поверх сведённой ветки; изменение схемы тенантной аппки — expand.
+- `STRUCTURE.md`, `CLAUDE.md`, `API.md` — в задаче, что меняет структуру или ручки.
 
 ## Review Focus
 
-1. **БИН на границе.**
-   - Контрольный разряд на втором проходе с остатком 10 — номер недействителен.
-   - ИИН физлица проверяется тем же алгоритмом.
-   - Нерезидент — свободный номер до 30 символов, без проверки разряда.
-   - Пробелы и дефисы при вводе отбрасываются.
-   - Тест — задача 2 (`test_bin_check_*`).
-2. **Одновременное создание одного контрагента.** Два запроса с одной парой «страна + номер»: создаётся один, второй получает 422 E-CTR-02 со ссылкой на существующего, а не 500 из `IntegrityError`. Тест — задача 3 (`test_parallel_duplicate_is_422`).
-3. **Двойной клик по кнопке документа.**
-   - Второй клик не шлёт второй запрос.
-   - Повтор после 5xx идёт с тем же `Idempotency-Key`, новое действие — с новым.
-   - Тест — задача 5 (`useIdempotentAction.test.ts`).
-4. **Граница экспорта.** 10 000 строк — файл сразу, 10 001 — фоном со ссылкой в уведомлении; пустая выборка — файл с заголовками. Тест — задача 9 (`test_export_*`).
-5. **Деньги и время.**
-   - `"1250000.5"`, `"0"`, `"-15.00"`, `"99999999999999.99"` форматируются без потери копеек (без `float`).
-   - Время `2026-09-27T20:30:00Z` показывается как `28.09.2026 01:30` (Asia/Almaty).
-   - Тест — задача 5 (`format.test.ts`).
+1. **Файл после перехода на `apps.files`.** Заявка B прикладывает КП тем же вызовом `files.attach(...)`, что и раньше, а файл виден в `/api/files/v1` панели, журналируется с IP и user-agent и не удаляется после отправки заявки. Тест — задача 1 (`test_bpp_adapter_writes_into_apps_files`) плюс неизменённые тесты заявки B.
+2. **Одновременное создание одного контрагента.** Два запроса с одной парой «страна + номер»: один создан, второй получает 422 `E-CTR-02` со ссылкой на существующего, а не 500. Тест — задача 4 (`test_parallel_duplicate_is_422`).
+3. **БИН на границе.**
+   - Второй проход с остатком 10 — номер недействителен.
+   - Нерезидент — свободный номер до 30 символов.
+   - Пробелы и дефисы отбрасываются.
+   - Тест — задача 4 (`test_bin_check_*`).
+4. **Граница экспорта.** 10 000 строк — файл сразу; 10 001 — фоном со ссылкой в уведомлении; 50 001 — 422; пустая выборка — только заголовки. Тест — задача 6.
+5. **Двойной клик и время.**
+   - Второй клик по кнопке документа не шлёт второй запрос; повтор после 5xx идёт с тем же `Idempotency-Key`.
+   - `2026-09-27T20:30:00Z` показывается как `28.09.2026 01:30`.
+   - Тест — задача 7.
 
 ---
 
-## Task 1: Подмодули `bpp` подключаются сами (бэк и фронт)
+## Task 1: Одна файловая подсистема — `apps.files`
 
 **Files:**
-- Modify: `backend/apps/bpp/models/__init__.py`, `backend/apps/bpp/urls.py`, `backend/apps/bpp/apps.py`
-- Create: `backend/apps/bpp/tests/test_autodiscovery.py`
-- Create: `frontend/src/features/bpp/modules.ts`, `frontend/src/features/bpp/modules.test.ts`
-- Modify: `STRUCTURE.md` (раскладка `apps/bpp`, `features/bpp`)
-
-**Interfaces:**
-- Produces: правило для B — модели в `apps/bpp/models/<подмодуль>.py`, маршруты в `apps/bpp/urls_<подмодуль>.py` (переменная `urlpatterns`), экраны в `frontend/src/features/bpp/<подмодуль>/module.tsx` (экспорт `bppModule: BppModule`), регистрация предметов signoff — `apps/bpp/approval_hooks.py` с функцией `register()`. Ни `models/__init__.py`, ни `urls.py`, ни `apps.py`, ни `routeDefinitions.ts` B не правит.
-- `BppModule` (TypeScript): `{ key: string; order: number; menu?: { label: string; to: string; icon: LucideIcon; visible: (p: Permissions) => boolean }[]; routes: { path: string; element: React.ReactElement; visible?: (p: Permissions) => boolean }[] }`.
-
-- [ ] **Step 1: Падающие тесты (бэк)**
-
-```python
-"""Подмодули bpp подключаются без правки общих файлов (мастер-план §0, правило 5)."""
-
-import importlib
-import pkgutil
-
-from django.urls import resolve
-
-import apps.bpp.models as bpp_models
-from apps.bpp import urls as bpp_urls
-
-
-def test_every_models_module_is_imported():
-    for info in pkgutil.iter_modules(bpp_models.__path__):
-        assert f"apps.bpp.models.{info.name}" in importlib.sys.modules, info.name
-
-
-def test_every_urls_submodule_is_included():
-    """Каждый ``urls_<подмодуль>.py`` пакета попадает в маршруты аппки."""
-    import apps.bpp as pkg
-
-    names = {info.name for info in pkgutil.iter_modules(pkg.__path__)
-             if info.name.startswith("urls_")}
-    included = {getattr(p.urlconf_module, "__name__", "").rsplit(".", 1)[-1]
-                for p in bpp_urls.urlpatterns if hasattr(p, "urlconf_module")}
-    assert names <= included
-
-
-def test_history_route_still_resolves():
-    assert resolve("/api/bpp/v1/history/bpp.x/1").func.__name__ == "object_history"
-```
-
-Пока подмодулей нет, `test_every_urls_submodule_is_included` проходит впустую, поэтому механизм проверяется отдельно подставным модулем:
-
-```python
-def test_urls_discovery_picks_a_new_module(monkeypatch):
-    import sys
-    import types
-
-    from apps.bpp import urls
-
-    probe = types.ModuleType("apps.bpp.urls_probe")
-    probe.urlpatterns = []
-    monkeypatch.setitem(sys.modules, "apps.bpp.urls_probe", probe)
-    monkeypatch.setattr(urls, "_submodule_names", lambda: ["urls_probe"])
-    assert any(getattr(p, "urlconf_module", None) is probe for p in urls._submodule_patterns())
-```
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests/test_autodiscovery.py -q`
-Expected: FAIL — `_submodule_names` нет.
-
-- [ ] **Step 2: Реализация (бэк)**
-
-`backend/apps/bpp/models/__init__.py`:
-
-```python
-"""Модели модуля БЗО.
-
-Каждый модуль пакета импортируется автоматически: исполнитель B добавляет
-``models/<подмодуль>.py`` и не правит этот файл (мастер-план §0, правило 5).
-Имена моделей наружу — через ``from apps.bpp.models.<подмодуль> import …``
-или отсюда же (всё, что модуль объявил в ``__all__``).
-"""
-
-import importlib
-import pkgutil
-
-from .core import AuditLog, BppModel, NumberSequence, VersionedModel  # noqa: F401
-from .files import DocumentFile, FileDownload  # noqa: F401
-
-for _info in pkgutil.iter_modules(__path__):
-    _module = importlib.import_module(f"{__name__}.{_info.name}")
-    for _name in getattr(_module, "__all__", ()):
-        globals()[_name] = getattr(_module, _name)
-```
-
-`backend/apps/bpp/urls.py`:
-
-```python
-"""Маршруты /api/bpp/v1/.
-
-Подмодуль держит маршруты в ``urls_<подмодуль>.py`` (``urlpatterns``) и
-вьюхи в ``views_<подмодуль>.py``; этот файл подключает все ``urls_*.py``
-пакета сам — у двух исполнителей нет общего файла, а сторожа прав
-(``apps/access/tests/test_gate.py``) видят пару ``urls_x.py`` ↔ ``views_x.py``.
-"""
-
-import importlib
-import pkgutil
-
-from django.urls import include, path
-
-from . import views
-
-
-def _submodule_names() -> list[str]:
-    import apps.bpp as package
-
-    return sorted(info.name for info in pkgutil.iter_modules(package.__path__)
-                  if info.name.startswith("urls_"))
-
-
-def _submodule_patterns() -> list:
-    return [path("", include(importlib.import_module(f"apps.bpp.{name}")))
-            for name in _submodule_names()]
-
-
-urlpatterns = [
-    path("history/<str:object_type>/<str:object_id>", views.object_history),
-    path("history/<str:object_type>/<str:object_id>/", views.object_history),
-    *_submodule_patterns(),
-]
-```
-
-`backend/apps/bpp/apps.py`, в `BppConfig.ready()`:
-
-```python
-    def ready(self):
-        # Предметы согласования модуля (заявка, договор, счёт…) регистрирует
-        # approval_hooks.py исполнителя B; пока файла нет — регистрировать нечего.
-        try:
-            from . import approval_hooks
-        except ModuleNotFoundError as exc:
-            if exc.name != "apps.bpp.approval_hooks":
-                raise
-        else:
-            approval_hooks.register()
-```
-
-(`ModuleNotFoundError` с чужим именем — сломанный импорт внутри файла B — пробрасывается, а не глотается.) Тест: `test_ready_tolerates_missing_approval_hooks` и `test_ready_reraises_broken_import` (подменить `sys.modules`).
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests apps/access/tests/test_gate.py apps/core/tests/test_invariants.py -q`
-Expected: всё PASS (сторож гейта читает `views.py`/`urls.py` как раньше).
-
-- [ ] **Step 3: Падающий тест (фронт)**
-
-Create `frontend/src/features/bpp/modules.test.ts`:
-
-```ts
-import { describe, expect, it } from 'vitest';
-
-import { collectModules } from './modules';
-
-const perms = { can: () => true } as never;
-
-describe('collectModules', () => {
-  it('сортирует модули по order и склеивает меню и маршруты', () => {
-    const mods = collectModules({
-      './b/module.tsx': { bppModule: { key: 'b', order: 20, routes: [{ path: 'b', element: null }], menu: [] } },
-      './a/module.tsx': { bppModule: { key: 'a', order: 10, routes: [{ path: 'a', element: null }], menu: [] } },
-    } as never);
-    expect(mods.map((m) => m.key)).toEqual(['a', 'b']);
-  });
-
-  it('модуль без экспорта bppModule — ошибка сборки, а не молчаливый пропуск', () => {
-    expect(() => collectModules({ './x/module.tsx': {} } as never)).toThrow(/bppModule/);
-  });
-
-  it('пункт меню скрыт без права', () => {
-    const [mod] = collectModules({
-      './a/module.tsx': { bppModule: { key: 'a', order: 1, routes: [], menu: [
-        { label: 'A', to: '/bpp/a', icon: () => null, visible: () => false }] } },
-    } as never);
-    expect(mod.menu?.filter((m) => m.visible(perms))).toEqual([]);
-  });
-});
-```
-
-Run: `npx vitest run src/features/bpp/modules.test.ts` → FAIL (нет `./modules`).
-
-- [ ] **Step 4: Реализация (фронт)**
-
-Create `frontend/src/features/bpp/modules.ts`:
-
-```ts
-/**
- * Подмодули раздела «Закупки и оплаты» (/bpp) собираются сами: каждый кладёт
- * `features/bpp/<подмодуль>/module.tsx` с экспортом `bppModule`, и ни меню,
- * ни маршруты раздела править не нужно. Так у двух исполнителей нет общего
- * файла (мастер-план §0, правило 5).
- */
-import type { LucideIcon } from 'lucide-react';
-import type React from 'react';
-
-import type { Permissions } from '@/hooks/usePermissions';
-
-export interface BppMenuItem {
-  label: string;
-  to: string;
-  icon: LucideIcon | (() => null);
-  visible: (p: Permissions) => boolean;
-}
-
-export interface BppRoute {
-  path: string; // относительно /bpp
-  element: React.ReactElement | null;
-  visible?: (p: Permissions) => boolean;
-}
-
-export interface BppModule {
-  key: string;
-  order: number;
-  menu?: BppMenuItem[];
-  routes: BppRoute[];
-}
-
-type Loaded = Record<string, { bppModule?: BppModule }>;
-
-export function collectModules(loaded: Loaded): BppModule[] {
-  return Object.entries(loaded)
-    .map(([file, mod]) => {
-      if (!mod.bppModule) throw new Error(`${file}: нет экспорта bppModule`);
-      return mod.bppModule;
-    })
-    .sort((a, b) => a.order - b.order);
-}
-
-export const bppModules: BppModule[] = collectModules(
-  import.meta.glob<{ bppModule?: BppModule }>('./*/module.tsx', { eager: true }),
-);
-```
-
-Run: `npx vitest run src/features/bpp/modules.test.ts` → PASS.
-
-- [ ] **Step 5: Документация и коммит**
-
-`STRUCTURE.md`, строка **bpp** и раздел фронта: «подмодули подключаются сами — `models/<подмодуль>.py`, `urls_<подмодуль>.py`, `features/bpp/<подмодуль>/module.tsx`».
-
-```bash
-git add backend/apps/bpp/models/__init__.py backend/apps/bpp/urls.py backend/apps/bpp/tests/test_autodiscovery.py frontend/src/features/bpp/modules.ts frontend/src/features/bpp/modules.test.ts STRUCTURE.md
-git commit -m "feat(bpp): подмодули подключаются сами — модели, маршруты, экраны раздела"
-```
-
----
-
-## Task 2: Контрагенты — модели и проверки
-
-**Files:**
-- Create: `backend/apps/bpp/models/counterparties.py`, `backend/apps/bpp/models/settings.py`, миграция `bpp/0003_counterparties` (makemigrations)
-- Create: `backend/apps/bpp/services/counterparties/__init__.py`, `validation.py`
-- Create: `backend/apps/bpp/services/core/settings.py`
-- Test: `backend/apps/bpp/tests/test_counterparty_validation.py`
+- Modify (зона B, подтверждение при сведении): `backend/apps/files/interface.py`, `backend/apps/files/services/documents.py` — загрузка байтов из кода
+- Create: миграция `files/00NN_fileevent_append_only` (триггер `BEFORE UPDATE OR DELETE` на журнале `FileEvent`, D-30 — как `bpp_auditlog`)
+- Modify: `backend/apps/bpp/services/core/files.py` → обёртка над `apps.files`
+- Delete: `backend/apps/bpp/models/files.py`, `backend/apps/bpp/services/core/scanner.py`; миграция `bpp/00NN_drop_document_files` (DeleteModel ×2)
+- Modify: `backend/apps/media_files/services/scope_policy.py` (снять `bpp_doc` из `_POLICIES` и `RESTRICTED_SCOPES`) и два инвентарных теста media
+- Modify: регистрация владельцев `bpp.*` — `backend/apps/bpp/approval_hooks.py` (зона B) или новый `backend/apps/bpp/file_owners.py` (A), вызов из `BppConfig.ready()`
+- Tests: `backend/apps/files/tests/test_attach_bytes.py`, `backend/apps/files/tests/test_event_append_only.py`; переписать `backend/apps/bpp/tests/test_files.py` на обёртку
 
 **Interfaces:**
 - Produces:
-  - `models.counterparties`: `Counterparty`, `CounterpartyBankAccount`, `CounterpartyKind` (`legal|ip|individual|nonresident`), `CounterpartyStatus` (`active|blocked|archived`);
-  - `models.settings.ModuleSetting(key, value: JSON)`;
-  - `services/core/settings.get_setting(key: str, default)`, `set_setting(key, value, *, actor_id)`;
-  - `services/counterparties/validation`: `normalize_reg_number(raw) -> str`, `bin_iin_is_valid(value: str) -> bool`, `check_reg_number(kind, country_code, value) -> str` (DomainError E-CTR-03), `iban_is_valid(value) -> bool`, `bic_is_valid(value) -> bool`.
-
-- [ ] **Step 1: Падающие тесты проверок**
-
-```python
-"""БИН/ИИН, IBAN и БИК (ТЗ §18)."""
-
-import pytest
-
-from apps.bpp.services.counterparties import validation as v
-from htqweb.errors import DomainError
-
-
-def _with_control(first11: str) -> str:
-    """Дописать контрольный разряд по алгоритму РК (для тестовых данных)."""
-    digits = [int(c) for c in first11]
-    s = sum(d * w for d, w in zip(digits, range(1, 12))) % 11
-    if s == 10:
-        s = sum(d * w for d, w in zip(digits, [3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2])) % 11
-    assert s != 10
-    return first11 + str(s)
-
-
-@pytest.mark.parametrize("raw", ["990340001234", "12345678901"])
-def test_bin_check_rejects_bad_numbers(raw):
-    assert v.bin_iin_is_valid(raw) is False
-
-
-def test_bin_check_accepts_generated_number():
-    assert v.bin_iin_is_valid(_with_control("99034000123")) is True
-
-
-def test_bin_check_second_pass_ten_is_invalid():
-    """Остаток 10 и на втором проходе — номер недействителен (ТЗ §18)."""
-    for n in range(10**10, 10**10 + 5000):
-        first11 = f"{n:011d}"
-        digits = [int(c) for c in first11]
-        s1 = sum(d * w for d, w in zip(digits, range(1, 12))) % 11
-        s2 = sum(d * w for d, w in zip(digits, [3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2])) % 11
-        if s1 == 10 and s2 == 10:
-            for last in "0123456789":
-                assert v.bin_iin_is_valid(first11 + last) is False
-            return
-    pytest.fail("не нашлось номера с двумя остатками 10 — расширьте диапазон")
-
-
-def test_spaces_and_dashes_are_dropped():
-    assert v.normalize_reg_number(" 9903 4000-1234 ") == "990340001234"
-
-
-def test_nonresident_is_free_text_up_to_30():
-    assert v.check_reg_number("nonresident", "RU", "ОГРН 1027700132195") == "ОГРН 1027700132195"
-    with pytest.raises(DomainError) as exc:
-        v.check_reg_number("nonresident", "RU", "X" * 31)
-    assert exc.value.code == "E-CTR-03"
-
-
-def test_kz_legal_entity_needs_valid_bin():
-    with pytest.raises(DomainError) as exc:
-        v.check_reg_number("legal", "KZ", "990340001234")
-    assert exc.value.code == "E-CTR-03"
-    assert "контрольн" in exc.value.message
-
-
-def _iban(bban: str) -> str:
-    rearranged = bban + "KZ00"
-    number = int("".join(str(int(c, 36)) for c in rearranged))
-    return f"KZ{98 - number % 97:02d}{bban}"
-
-
-def test_iban():
-    good = _iban("125KZT5004100100")  # 16 знаков BBAN + 4 = 20
-    assert len(good) == 20 and v.iban_is_valid(good)
-    assert not v.iban_is_valid(good[:-1] + ("0" if good[-1] != "0" else "1"))
-    assert not v.iban_is_valid("KZ" + "1" * 17)
-
-
-@pytest.mark.parametrize("bic,ok", [("HSBKKZKX", True), ("HSBKKZKXXXX", True),
-                                    ("HSBK", False), ("HSBKKZKX12345", False)])
-def test_bic(bic, ok):
-    assert v.bic_is_valid(bic) is ok
-```
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests/test_counterparty_validation.py -q` → FAIL (нет модуля).
-
-- [ ] **Step 2: Проверки**
-
-Create `backend/apps/bpp/services/counterparties/__init__.py` (пустой) и `validation.py`:
-
-```python
-"""Проверки реквизитов контрагента (ТЗ §18)."""
-
-from __future__ import annotations
-
-import re
-
-from htqweb.errors import DomainError
-
-KZ_KINDS = {"legal", "ip", "individual"}
-_W1 = list(range(1, 12))
-_W2 = [3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2]
-
-
-def normalize_reg_number(raw: str) -> str:
-    return re.sub(r"[\s\-]", "", raw or "")
-
-
-def bin_iin_is_valid(value: str) -> bool:
-    """12 цифр, контрольный разряд по алгоритму РК: веса 1…11, при остатке 10 —
-    3…11, 1, 2; остаток 10 во втором проходе — номер недействителен."""
-    if not re.fullmatch(r"\d{12}", value or ""):
-        return False
-    digits = [int(c) for c in value]
-    control = sum(d * w for d, w in zip(digits, _W1)) % 11
-    if control == 10:
-        control = sum(d * w for d, w in zip(digits, _W2)) % 11
-        if control == 10:
-            return False
-    return control == digits[11]
-
-
-def check_reg_number(kind: str, country_code: str, raw: str) -> str:
-    value = normalize_reg_number(raw) if kind in KZ_KINDS and country_code == "KZ" else (raw or "").strip()
-    if kind in KZ_KINDS and country_code == "KZ":
-        if not bin_iin_is_valid(value):
-            raise DomainError(
-                "E-CTR-03",
-                f"БИН/ИИН «{raw}» недействителен: нужно 12 цифр и верный контрольный разряд. "
-                f"Проверьте номер по документам контрагента.",
-                fields=[{"field": "reg_number", "message": "неверный БИН/ИИН"}])
-        return value
-    if not value or len(value) > 30:
-        raise DomainError(
-            "E-CTR-03", "Регистрационный номер нерезидента: от 1 до 30 символов.",
-            fields=[{"field": "reg_number", "message": "от 1 до 30 символов"}])
-    return value
-
-
-def iban_is_valid(value: str) -> bool:
-    """KZ + 18 знаков, контрольные цифры по ISO 13616 (mod 97)."""
-    value = (value or "").replace(" ", "").upper()
-    if not re.fullmatch(r"KZ\d{2}[0-9A-Z]{16}", value):
-        return False
-    rearranged = value[4:] + value[:4]
-    return int("".join(str(int(c, 36)) for c in rearranged)) % 97 == 1
-
-
-def bic_is_valid(value: str) -> bool:
-    return bool(re.fullmatch(r"[A-Z0-9]{8}([A-Z0-9]{3})?", (value or "").upper()))
-```
-
-Run: → PASS.
-
-- [ ] **Step 3: Модели и настройки модуля**
-
-Create `backend/apps/bpp/models/counterparties.py`:
-
-```python
-"""Контрагенты модуля (ТЗ §18, D-20). Без согласования: карточку заводят
-ФД, БУХ, СН и ПМ; блокирует ФД. Метка «Проверенный» — автоматически по числу
-удачных документов (порог — настройка модуля) либо вручную ФД."""
-
-from __future__ import annotations
-
-from django.db import models
-
-from .core import BppModel, VersionedModel
-
-__all__ = ["Counterparty", "CounterpartyBankAccount", "CounterpartyKind", "CounterpartyStatus"]
-
-
-class CounterpartyKind(models.TextChoices):
-    LEGAL = "legal", "Юридическое лицо"
-    IP = "ip", "Индивидуальный предприниматель"
-    INDIVIDUAL = "individual", "Физическое лицо"
-    NONRESIDENT = "nonresident", "Нерезидент"
-
-
-class CounterpartyStatus(models.TextChoices):
-    ACTIVE = "active", "Активен"
-    BLOCKED = "blocked", "Заблокирован"
-    ARCHIVED = "archived", "Архив"
-
-
-class Counterparty(BppModel, VersionedModel):
-    name = models.CharField(max_length=255)
-    short_name = models.CharField(max_length=100, default="", blank=True)
-    kind = models.CharField(max_length=16, choices=CounterpartyKind.choices)
-    country_code = models.CharField(max_length=2)
-    reg_number = models.CharField(max_length=30)
-    is_vat_payer = models.BooleanField(default=False, db_default=False)
-    vat_cert_series = models.CharField(max_length=20, default="", blank=True)
-    vat_cert_number = models.CharField(max_length=30, default="", blank=True)
-    address = models.CharField(max_length=500, default="", blank=True)
-    contact_person = models.CharField(max_length=255, default="", blank=True)
-    phone = models.CharField(max_length=50, default="", blank=True)
-    email = models.EmailField(default="", blank=True)
-    status = models.CharField(max_length=16, choices=CounterpartyStatus.choices,
-                              default=CounterpartyStatus.ACTIVE,
-                              db_default=CounterpartyStatus.ACTIVE.value)
-    block_reason = models.CharField(max_length=500, default="", blank=True)
-    blocked_at = models.DateTimeField(null=True, blank=True)
-    blocked_by = models.IntegerField(null=True, blank=True)
-    successful_documents = models.PositiveIntegerField(default=0, db_default=0)
-    # None — метку считает порог; True/False — решение ФД, порог не трогает.
-    verified_override = models.BooleanField(null=True, blank=True)
-    ext_1c_ref = models.CharField(max_length=64, default="", blank=True)
-
-    class Meta:
-        constraints = [models.UniqueConstraint(fields=["country_code", "reg_number"],
-                                               name="uq_bpp_counterparty_reg")]
-        verbose_name = "Контрагент"
-        verbose_name_plural = "Контрагенты"
-
-
-class CounterpartyBankAccount(BppModel):
-    counterparty = models.ForeignKey(Counterparty, on_delete=models.PROTECT,
-                                     related_name="bank_accounts")
-    iban = models.CharField(max_length=34, unique=True)
-    bank_name = models.CharField(max_length=255)
-    bic = models.CharField(max_length=11)
-    currency_code = models.CharField(max_length=3, default="KZT", db_default="KZT")
-    is_main = models.BooleanField(default=False, db_default=False)
-    is_active = models.BooleanField(default=True, db_default=True)
-
-    class Meta:
-        verbose_name = "Банковский счёт контрагента"
-        verbose_name_plural = "Банковские счета контрагентов"
-```
-
-Create `backend/apps/bpp/models/settings.py`:
-
-```python
-"""Настройки модуля в схеме компании (узел ``bpp.settings``, АДМ)."""
-
-from django.db import models
-
-__all__ = ["ModuleSetting"]
-
-
-class ModuleSetting(models.Model):
-    key = models.CharField(max_length=64, primary_key=True)
-    value = models.JSONField()
-    updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.IntegerField(null=True, blank=True)
-
-    class Meta:
-        verbose_name = "Настройка модуля"
-        verbose_name_plural = "Настройки модуля"
-```
-
-Create `backend/apps/bpp/services/core/settings.py`:
-
-```python
-"""Настройки модуля БЗО: значение из схемы компании, иначе умолчание кода."""
-
-from __future__ import annotations
-
-from apps.bpp.models.settings import ModuleSetting
-
-DEFAULTS = {
-    "counterparty_verified_threshold": 3,  # D-20, умолчание Q-E23
-}
-
-
-def get_setting(key: str, default=None):
-    row = ModuleSetting.objects.filter(key=key).first()
-    if row is not None:
-        return row.value
-    return DEFAULTS.get(key, default)
-
-
-def set_setting(key: str, value, *, actor_id: int | None) -> None:
-    ModuleSetting.objects.update_or_create(key=key, defaults={"value": value,
-                                                              "updated_by": actor_id})
-```
-
-Сгенерировать миграцию (dev-окружение из CLAUDE.md): `manage.py makemigrations bpp --name counterparties` → `0003_counterparties.py`.
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests -q` → PASS.
-
-- [ ] **Step 4: Коммит**
-
-```bash
-git add backend/apps/bpp/models backend/apps/bpp/migrations backend/apps/bpp/services backend/apps/bpp/tests/test_counterparty_validation.py
-git commit -m "feat(bpp): контрагенты — модели, проверка БИН/ИИН, IBAN и БИК, настройки модуля"
-```
-
----
-
-## Task 3: Контрагенты — сервис, функции для документов B, ручки
-
-**Files:**
-- Create: `backend/apps/bpp/services/counterparties/service.py`, `lookup.py`
-- Create: `backend/apps/bpp/schemas/__init__.py` (если нет), `schemas/counterparties.py`
-- Create: `backend/apps/bpp/views_counterparties.py`, `backend/apps/bpp/urls_counterparties.py`
-- Modify: `backend/apps/bpp/admin.py`, `API.md`
-- Test: `backend/apps/bpp/tests/test_counterparties.py`, `test_counterparties_api.py`
+  - `apps.files.interface.attach_bytes(owner_type: str, owner_id, *, file_type: str, data: bytes, filename: str, mime: str, actor_id: int | None) -> dict` — версия 1 нового документа; квоты, форматы, размер, антивирус — как у HTTP-загрузки, отказ — `FilesError` с конвертом D-28;
+  - `apps.files.interface.replace_bytes(owner_type, owner_id, document_id, *, data, filename, mime, actor_id) -> dict` — новая версия документа;
+  - `apps.files.interface.download_link(owner_type, owner_id, document_id, *, actor_id, ip, user_agent) -> str` — ссылка через журнал.
+- Обёртка `bpp/services/core/files.py` сохраняет сигнатуры, которые уже зовёт B:
+  - `attach(owner, file_type, *, data, filename, mime, actor_id) -> dict`;
+  - `replace(file_id, *, data, filename, mime, actor_id) -> dict`;
+  - `list_files(owner) -> list[dict]`;
+  - `download_url(file_id, *, user_id) -> str`.
+
+  Коды ошибок `E-FILE-01…04` превращаются в коды `apps.files`. Задача сверяет, какие коды проверяют тесты B, и сохраняет их через обёртку.
+- `FILE_RULES` (ТЗ §21) переезжают в `FileTypeSpec` владельцев: заявка — `request_attachment`; договор, счёт и прочие — их задачи этапа 3; подотчёт — `advance_report`.
+
+- [ ] **Step 1: Падающие тесты:**
+  - `attach_bytes` создаёт документ, пишет `FileEvent` и соблюдает квоту;
+  - `UPDATE` и `DELETE` строки `FileEvent` падают на уровне БД;
+  - `test_bpp_adapter_writes_into_apps_files` — Review Focus 1.
+- [ ] **Step 2: Реализация и перенос.** Бывшие тесты `bpp/tests/test_files.py` на лимиты, версии, отказ медиа и «сироту» в S3 переписываются на обёртку: поведение то же, хранилище `apps.files`.
+- [ ] **Step 3:** `pytest apps/files apps/bpp apps/media_files apps/core/tests/test_app_isolation.py apps/core/tests/test_invariants.py` → PASS; весь набор заявки и подотчёта B — без правок тестов.
+- [ ] **Step 4: Документация.**
+  - `STRUCTURE.md` — строка `bpp`: файлы — через `apps.files`;
+  - `CLAUDE.md` — одна подсистема файлов;
+  - сверка B §1.2 — отметить решение.
+- [ ] **Step 5: Коммит** — `refactor(bpp): файлы документов модуля — через платформенную apps.files, DocumentFile снят`.
+
+## Task 2: Подмодули `bpp` подключаются сами
+
+**Files:** `backend/apps/bpp/models/__init__.py`, `backend/apps/bpp/urls.py`, `frontend/src/features/bpp/modules.ts` + тесты `backend/apps/bpp/tests/test_autodiscovery.py`, `frontend/src/features/bpp/modules.test.ts`.
 
 **Interfaces:**
-- Consumes: `refdata.interface.country_brief`, `services/core/{audit,errors,settings,permissions,registry}` (registry — задача 4; до неё список без пагинации запрещён — выполнять задачу 4 раньше или вместе).
-- Produces для B (`services/counterparties/lookup.py`):
-  - `brief(ids: list[str]) -> dict[str, dict]` — `{id, name, short_name, reg_number, country_code, is_vat_payer, status, is_verified}`;
-  - `assert_usable(counterparty_id: str) -> None` — E-CTR-01 для «Заблокирован» и «Архив» (BR-030);
-  - `needs_confirmation(counterparty_id: str) -> bool` — непроверенный, окно подтверждения автора (D-20);
-  - `record_success(counterparty_id: str) -> None` — +1 удачный документ; зовёт B при «Действует»/«Исполнен» договора и «Оплачено» счёта.
-- Ручки `/api/bpp/v1/counterparties…` (ТЗ §23: SearchCounterparties, CreateCounterparty, BlockCounterparty).
+- Бэкенд:
+  - `models/__init__.py` импортирует все модули пакета и поднимает имена из их `__all__`;
+  - `urls.py` подключает все `urls_*.py` (`_submodule_names()`, `_submodule_patterns()`).
 
-- [ ] **Step 1: Падающие тесты сервиса**
+  Нынешние явные строки B (`budget`, `requests`, `accountable`) заменяются автоматикой, модули B получают `__all__`.
+- Фронт: `bppModules` из `import.meta.glob('./*/module.tsx', { eager: true })`, у каждого — `bppModule: { key, order, menu?, routes }`. Модуль без экспорта — ошибка сборки, а не молчаливый пропуск.
 
-```python
-"""Контрагент: создание, дубль, блокировка, метка «Проверенный» (D-20)."""
+- [ ] Тесты:
+  - каждый модуль пакета импортирован;
+  - подставной `urls_probe` подключается;
+  - маршрут `history/…` цел;
+  - `collectModules` сортирует по `order`, а без `bppModule` падает.
+- [ ] Коммит — `feat(bpp): подмодули подключаются сами — модели, маршруты, экраны раздела`.
 
-import threading
-
-import pytest
-from django.db import connection
-
-from apps.bpp.models.counterparties import Counterparty
-from apps.bpp.services.counterparties import lookup, service
-from htqweb.errors import DomainError
-
-from .test_counterparty_validation import _with_control
-
-BIN = _with_control("99034000123")
-
-
-def _create(**over):
-    data = {"name": "ТОО «Альфа»", "kind": "legal", "country_code": "KZ", "reg_number": BIN}
-    data.update(over)
-    return service.create(data, actor_id=7)
-
-
-@pytest.mark.django_db
-def test_create_normalizes_number(company_context):
-    row = _create(reg_number=f"{BIN[:4]} {BIN[4:]}")
-    assert row["reg_number"] == BIN and row["status"] == "active"
-
-
-@pytest.mark.django_db
-def test_duplicate_points_to_existing(company_context):
-    first = _create()
-    with pytest.raises(DomainError) as exc:
-        _create(name="Другое имя")
-    assert exc.value.code == "E-CTR-02"
-    assert exc.value.fields[0]["existing_id"] == first["id"]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_parallel_duplicate_is_422():
-    codes = []
-
-    def worker():
-        try:
-            _create()
-            codes.append("ok")
-        except DomainError as exc:
-            codes.append(exc.code)
-        finally:
-            connection.close()
-
-    threads = [threading.Thread(target=worker) for _ in range(3)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    assert sorted(codes) == ["E-CTR-02", "E-CTR-02", "ok"]
-
-
-@pytest.mark.django_db
-def test_blocked_is_not_usable(company_context):
-    row = _create()
-    service.block(row["id"], reason="нет оригиналов документов", actor_id=1)
-    with pytest.raises(DomainError) as exc:
-        lookup.assert_usable(row["id"])
-    assert exc.value.code == "E-CTR-01"
-    assert "нет оригиналов документов" in exc.value.message
-    assert "ТОО «Альфа»" in exc.value.message
-
-
-@pytest.mark.django_db
-def test_block_needs_reason_of_10(company_context):
-    row = _create()
-    with pytest.raises(DomainError) as exc:
-        service.block(row["id"], reason="коротко", actor_id=1)
-    assert exc.value.code == "E-REQ-02"
-
-
-@pytest.mark.django_db
-def test_verified_by_threshold_and_override(company_context):
-    row = _create()
-    assert lookup.needs_confirmation(row["id"]) is True
-    for _ in range(3):
-        lookup.record_success(row["id"])
-    assert lookup.needs_confirmation(row["id"]) is False
-    service.set_verified(row["id"], False, actor_id=1)  # ФД снял метку вручную
-    lookup.record_success(row["id"])
-    assert lookup.needs_confirmation(row["id"]) is True
-    service.set_verified(row["id"], None, actor_id=1)  # вернуть счёт по порогу
-    assert lookup.needs_confirmation(row["id"]) is False
-
-
-@pytest.mark.django_db
-def test_update_checks_version(company_context):
-    row = _create()
-    service.update(row["id"], {"phone": "+7 700 000 00 00"}, version=row["version"], actor_id=7)
-    with pytest.raises(DomainError) as exc:
-        service.update(row["id"], {"phone": "x"}, version=row["version"], actor_id=8)
-    assert exc.value.code == "E-CON-01"
-```
-
-- [ ] **Step 2: Сервис и функции для документов**
-
-`services/counterparties/service.py` — `create(data, *, actor_id)`, `update(id, data, *, version, actor_id)`, `block(id, *, reason, actor_id)`, `unblock(id, *, actor_id)`, `archive(id, *, actor_id)`, `set_verified(id, value: bool | None, *, actor_id)`, `serialize(row)`, `add_bank_account(id, data, *, actor_id)`, `update_bank_account(account_id, data, *, actor_id)`.
-
-Правила:
-- `create`: `check_reg_number` → нормализованный номер; страна должна быть в `refdata.interface.country_brief` и активна (E-REF-03 «Страна „XX“ не найдена в справочнике»); вставка в `transaction.atomic()` — `IntegrityError` по `uq_bpp_counterparty_reg` → поиск существующего → `DomainError("E-CTR-02", "Контрагент с номером {reg} уже есть: {name}. Откройте существующую карточку.", fields=[{"field": "reg_number", "message": "дубль", "existing_id": id}])`; `audit.record(row, "created", …)`.
-- `update`: `check_version`; менять `kind/country_code/reg_number` — с повторной проверкой номера и дубля; `version += 1`; в аудит — только изменённые поля `{поле: [старое, новое]}`.
-- `block`: причина ≥ 10 символов (BR-060) — иначе `DomainError("E-REQ-02", "Опишите причину: комментарий не короче 10 символов.", fields=[{"field": "reason", …}])`; статус «Заблокирован», `blocked_at/by`, аудит; уведомлений нет.
-- `record_success`: `Counterparty.objects.filter(pk=…).update(successful_documents=F("successful_documents") + 1)`.
-- `is_verified(row)`: `row.verified_override` если не `None`, иначе `row.successful_documents >= get_setting("counterparty_verified_threshold")`.
-
-`lookup.py`:
-- `assert_usable`: E-CTR-01 дословно ТЗ §26.1 с подстановкой — «Контрагент {name} заблокирован {ДД.ММ.ГГГГ}: „{reason}“. Выберите другого контрагента или обратитесь к финансовому директору.»; для архива — «Контрагент {name} в архиве. Выберите другого контрагента или обратитесь к финансовому директору.»
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests/test_counterparties.py -q` → PASS.
-
-- [ ] **Step 3: Падающие тесты ручек**
-
-`test_counterparties_api.py` (хелперы — `apps/bpp/tests/helpers.py::auth/assign`):
-- `GET /api/bpp/v1/counterparties?q=альф&status=active&page=1&page_size=25` — только активные, поиск по имени и номеру, конверт реестра `{items, total, page, page_size}` (задача 4);
-- `POST` без `create` на `bpp.counterparties` → 403; с правом → 201 и `Idempotency-Key` повтор → тот же id (`idempotent=True`);
-- `POST <id>/block` без `bpp.counterparties.block:edit` → 403 (у СН право `create` на `bpp.counterparties` есть, а блокировки нет — матрица);
-- `POST <id>/verified {"value": null}` — только ФД;
-- `PATCH <id>` с устаревшей `version` → 409 E-CON-01;
-- `GET <id>` на неверный UUID → 404;
-- `POST <id>/accounts` с неверным IBAN → 422 E-CTR-04 «IBAN „…“ неверен: KZ и 18 знаков, контрольные цифры не сходятся.».
-
-- [ ] **Step 4: Ручки**
-
-`views_counterparties.py` — все ручки `api_view(module="bpp", level=…)`; `GET` — `read`; запись — `write` + `permissions.can(request, "bpp.counterparties", "create"|"edit")`; блокировка и метка — `permissions.can(request, "bpp.counterparties.block", "edit")`; записывающие — `idempotent=True`. Диспетчеры коллекции и карточки — строгие (ветвление только по `request.method`, сторож `test_gate.py`). `urls_counterparties.py` — оба написания пути (со слэшем и без), `<str:counterparty_id>` + `uuid_or_404`.
-
-`admin.py`: `CounterpartyAdmin`, `CounterpartyBankAccountAdmin`, `ModuleSettingAdmin` с `ServiceGatedAdminMixin`, удаление контрагента запрещено (BR-080).
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests apps/access/tests/test_gate.py apps/core/tests/test_invariants.py -q` → PASS.
-
-- [ ] **Step 5: Документация и коммит**
-
-`API.md` — раздел `apps.bpp` → «Контрагенты» (ручки, коды E-CTR-01…04). `STRUCTURE.md` — `services/counterparties/`.
-
-```bash
-git commit -m "feat(bpp): контрагенты — сервис, блокировка ФД, метка «Проверенный», ручки и функции для документов"
-```
-
----
-
-## Task 4: Общие ручки документов — реестр, «кто я», файлы, «Сейчас у»
+## Task 3: Узлы прав и функции для уведомлений
 
 **Files:**
-- Create: `backend/apps/bpp/services/core/registry.py`, `backend/apps/bpp/services/core/owners.py`, `backend/apps/bpp/services/core/money.py`
-- Modify: `backend/apps/bpp/views.py`, `backend/apps/bpp/urls.py`, `backend/apps/bpp/services/core/files.py` (проверка доступа через реестр владельцев)
-- Test: `backend/apps/bpp/tests/test_registry.py`, `test_documents_api.py`
+- Modify: `backend/apps/bpp/access_functions.py`
+- Create: `backend/apps/access/migrations/00NN_bpp_requests_all_plan_reassign.py`
+- Modify: `backend/apps/project/interface.py`, `backend/apps/access/interface.py`, `docs/plans/2026-09-27-bpp-roles-matrix.md`
 
 **Interfaces:**
-- Produces (для B — все реестры и документы):
-  - `registry.page(queryset, request, *, sort: dict[str, str], default_sort: str, search: tuple[str, ...] = ()) -> dict` — `{"items": QuerySet, "total", "page", "page_size"}`; `page_size ∈ {25, 50, 100}` (иначе 50), `sort=-amount` → поле из белого списка `sort`, неизвестный ключ — 422 `E-REQ-03`; `q` — `icontains` по `search`;
-  - `owners.register(object_type: str, *, resolve: Callable[[str], object | None], can_view: Callable[[request, obj], bool], can_edit_files: Callable[[request, obj], bool])` — тип владельца файлов и журнала. Регистрация одновременно зовёт `audit.register_history_access(object_type, …)` (проверка журнала из этапа 1) — один вызов на тип документа;
-  - `GET /api/bpp/v1/me` → `{"article_groups": ["supply", …], "initiator_roles": ["sn" | "pm", …]}` (группа `supply` → роль `sn`, `pm` → `pm`; ТЗ §23 GetCurrentUser);
-  - `GET/POST /api/bpp/v1/files/<owner_type>/<owner_id>` (список / загрузка `multipart`: `file`, `file_type`), `POST files/<file_id>/replace`, `GET files/<file_id>/download` → 302 на подписанный адрес + журнал скачиваний; незарегистрированный тип или нет доступа — 404;
-  - `GET /api/bpp/v1/holders?type=<subject_type>&ids=a,b` → `signoff.interface.current_holders` (B1.3), только типы `bpp.*`;
-  - `money.round_money(value) -> Decimal` (`ROUND_HALF_UP` до 0,01), `money.format_money(amount: Decimal, currency: str = "KZT") -> str` (`1 250 000,00 KZT` — для текстов ошибок E-BUD-01 и др.), `money.vat_inside(amount, rate) -> Decimal` (CALC-008: `round(сумма × ставка / (100 + ставка), 2)`).
+- Узлы:
+  - `bpp.requests.all` (`view`) — ФД, ТД, ОД, ГД, АДМ: те, у кого `bpp.requests` — просмотр без создания (сверка §7.3);
+  - `bpp.plan.reassign` (`edit`) — АДМ: сейчас переназначение стоит на `bpp.settings:edit`.
 
-- [ ] **Step 1: Падающие тесты**
-  - `test_money.py`: `round_money("0.005") == Decimal("0.01")`, `format_money(Decimal("1250000.5")) == "1 250 000,50 KZT"`, отрицательные и ноль; `vat_inside(Decimal("1120000"), Decimal("12")) == Decimal("120000.00")` (AC-006).
-  - `test_registry.py`: страница 2 из 3 при `page_size=25`; `page_size=30` → 50; `sort=-name` работает, `sort=password` → 422 E-REQ-03; `q` ищет по полям `search`.
-  - `test_documents_api.py`: `me` у СН → `["supply"]`/`["sn"]`, у совмещающего — обе; файлы у незарегистрированного типа → 404; зарегистрированный тип без `can_view` → 404; загрузка PDF → 201 с паспортом; `download` пишет `FileDownload` и отвечает 302; `holders` на тип вне `bpp.*` → 404.
+  Явные строки у всех восьми ролей `bpp-*`: у остальных — пусто.
+- `project.interface.member_user_ids(project_id: str) -> list[int]`.
+- `access.interface.holders_of(node: str, flag: str, company: str) -> list[int]` — пользователи с признаком на узле через должности и личные назначения. Нужна B для уведомления СН и ПМ об утверждении бюджета (ТЗ §16.2 п.1, сверка §7.3 «ещё не сделано»).
 
-- [ ] **Step 2: Реализация**
+- [ ] Тесты:
+  - у каждой роли явная строка на обоих узлах;
+  - `holders_of` находит держателя через должность и через личное назначение и не находит в другой компании;
+  - `member_user_ids` — руководитель плюс участники.
+- [ ] Коммит — `feat(access): узлы bpp.requests.all и bpp.plan.reassign; держатели признака и участники проекта для уведомлений`.
+- **Переход сервисов B на новые узлы** — задача B в волне 2 (раздел «Остаток B»).
 
-`owners.py`:
-
-```python
-"""Типы документов модуля: как найти владельца файлов и журнала и кто его видит.
-
-Каждый документ (заявка, бюджет, договор, счёт…) регистрирует себя здесь
-одним вызовом рядом с моделью. Незарегистрированный тип не отдаёт ни
-файлов, ни истории — забытая регистрация закрывает, а не открывает.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable
-
-from . import audit
-
-
-@dataclass(frozen=True)
-class Owner:
-    resolve: Callable[[str], object | None]
-    can_view: Callable[[object, object], bool]
-    can_edit_files: Callable[[object, object], bool]
-
-
-_OWNERS: dict[str, Owner] = {}
-
-
-def register(object_type: str, *, resolve, can_view, can_edit_files) -> None:
-    _OWNERS[object_type] = Owner(resolve, can_view, can_edit_files)
-    audit.register_history_access(
-        object_type, lambda request, object_id: _visible(request, object_type, object_id))
-
-
-def _visible(request, object_type: str, object_id: str):
-    owner = _OWNERS.get(object_type)
-    obj = owner.resolve(object_id) if owner else None
-    return obj if obj is not None and owner.can_view(request, obj) else None
-
-
-def visible(request, object_type: str, object_id: str):
-    """Объект, если тип зарегистрирован и вызывающий его видит, иначе ``None``."""
-    return _visible(request, object_type, object_id)
-
-
-def can_edit_files(request, object_type: str, obj) -> bool:
-    owner = _OWNERS.get(object_type)
-    return bool(owner and owner.can_edit_files(request, obj))
-```
-
-Вьюхи файлов — `api_view(module="bpp", level="read"|"write")`, отказ — `Http404`; загрузка — `files.attach(obj, file_type, data=…, filename=…, mime=upload.content_type, actor_id=…)`; размер запроса ограничен настройкой Django `DATA_UPLOAD_MAX_MEMORY_SIZE` не ниже 25 МБ (ТЗ §27) — проверить `settings/base.py` и выставить явно, если меньше.
-
-Run: `../.venv/Scripts/python.exe -m pytest apps/bpp/tests apps/access/tests/test_gate.py -q` → PASS.
-
-- [ ] **Step 3: Документация и коммит** — `API.md` (`me`, `files`, `holders`), `CLAUDE.md` (правило «каждый документ модуля — `owners.register` рядом с моделью»; заменяет формулировку про `register_history_access`).
-
-```bash
-git commit -m "feat(bpp): общие ручки документов — реестр, «кто я», файлы по типу владельца, «Сейчас у»"
-```
-
----
-
-## Task 5: Фронт — формат, защита от двойного клика, автосохранение, несохранённые изменения
+## Task 4: Контрагенты (A2.3)
 
 **Files:**
-- Create: `frontend/src/lib/bpp/format.ts` + `format.test.ts`
-- Create: `frontend/src/features/bpp/core/useIdempotentAction.ts` + test
-- Create: `frontend/src/features/bpp/core/useDraftAutosave.ts` + test
-- Create: `frontend/src/features/bpp/core/useUnsavedChangesGuard.tsx` + test
-- Create: `frontend/src/api/bpp.ts` (клиент: `apiPath('bpp', …)`, заголовок `Idempotency-Key`)
+- `backend/apps/bpp/models/counterparties.py`, `models/settings.py` (`ModuleSetting`) + миграция
+- `backend/apps/bpp/services/counterparties/{validation,service,lookup}.py`, `services/core/settings.py`
+- `backend/apps/bpp/schemas/counterparties.py`, `views_counterparties.py`, `urls_counterparties.py`, `admin.py`
+- Тесты `backend/apps/bpp/tests/counterparties/`
+
+**Модели и правила** — как в ТЗ §18 и D-20:
+- `Counterparty`:
+  - `kind` — `legal|ip|individual|nonresident`;
+  - `country_code`, `reg_number` (UNIQUE пара);
+  - НДС и свидетельство;
+  - контакты;
+  - `status` — `active|blocked|archived`;
+  - `block_reason/at/by`;
+  - `successful_documents` и `verified_override` (null — по порогу, true/false — решение ФД);
+  - `ext_1c_ref`, `version`.
+- `CounterpartyBankAccount` — IBAN KZ + 18, mod 97; БИК 8 или 11.
+- Порог «Проверенный» — `ModuleSetting("counterparty_verified_threshold")`, по умолчанию 3.
+
+**Interfaces (для B, этап 3)** — `services/counterparties/lookup.py`:
+- `brief(ids) -> {id: {id, name, short_name, reg_number, country_code, is_vat_payer, status, is_verified}}`;
+- `assert_usable(id)` — E-CTR-01 дословно ТЗ §26.1 для заблокированного, отдельный текст для архивного;
+- `needs_confirmation(id) -> bool`;
+- `record_success(id)` — B зовёт при «Действует»/«Исполнен» договора и «Оплачено» счёта.
+
+**Ручки** `/api/bpp/v1/counterparties…`:
+- реестр L-08 — конверт `{items, total, page, page_size}` как у реестров B, поиск по имени и номеру, фильтры «страна», «статус»; экспорт — задача 6;
+- создание — `bpp.counterparties:create` (СН и ПМ тоже, ТЗ §05 п.9); правка — `edit`;
+- блокировка, разблокировка и метка — `bpp.counterparties.block:edit`;
+- банковские счета;
+- все записывающие — `idempotent=True`, `version`.
+
+**Ошибки:**
+- `E-CTR-02` — дубль, `fields[0].existing_id`; `IntegrityError` ловится и превращается в него;
+- `E-CTR-03` — неверный БИН/ИИН или номер нерезидента;
+- `E-CTR-04` — IBAN или БИК;
+- `BR-060` — причина блокировки короче 10;
+- `E-REF-04` — страны нет в справочнике.
+
+- [ ] Тесты:
+  - Review Focus 2 и 3;
+  - заблокированный → `assert_usable` E-CTR-01 с датой и причиной;
+  - метка по порогу; ручное снятие ФД не перебивается порогом, возврат к порогу — `null`;
+  - устаревшая `version` → 409 E-CON-01;
+  - СН создаёт, но не блокирует (403);
+  - неверный UUID → 404.
+- [ ] Коммит — `feat(bpp): контрагенты — проверка БИН/ИИН, блокировка ФД, метка «Проверенный», функции для договоров и счетов`.
+
+## Task 5: «Кто я» в модуле
+
+**Files:** `backend/apps/bpp/views.py`, `backend/apps/bpp/urls.py`; тест `backend/apps/bpp/tests/test_me.py`.
+
+**Interfaces:** `GET /api/bpp/v1/me` → `{"article_groups": [...], "initiator_roles": ["sn" | "pm", …]}` (ТЗ §23 GetCurrentUser). Правило: группа `supply` — роль `sn`, `pm` — `pm`; источник — `services/actor.Actor` B, чтобы правило было одно.
+
+- [ ] Тесты: у СН — `["supply"]`/`["sn"]`, у совмещающего — обе, без ролей — пусто.
+- [ ] Коммит — `feat(bpp): ручка «кто я» — группы статей и роли инициатора`.
+
+## Task 6: Экспорт xlsx и печать PDF (A2.2)
+
+**Files:**
+- `backend/apps/bpp/services/core/export.py`, `services/core/printing.py`, `backend/apps/bpp/templates/bpp/print/base.html`
+- `backend/apps/bpp/tasks.py` (зона B — только новая задача `export_registry`, отдельным коммитом) или `backend/apps/bpp/tasks_export.py` (A)
+- вьюха `GET /api/bpp/v1/exports/<id>`
+- `backend/requirements.txt` (WeasyPrint), `backend/Dockerfile`, `.github/workflows/backend-full.yml` (системные библиотеки Pango, шрифт DejaVu)
 
 **Interfaces:**
-- `formatMoney(amount: string | null | undefined, currency = 'KZT'): string` — `"1250000.5"` → `"1 250 000,50 KZT"` (разделитель разрядов — обычный пробел, ТЗ §05); без `float`: разбор строки; `null` → `'—'`.
-- `parseMoneyInput(text: string): string | null` — `"1 250 000,00"` → `"1250000.00"`; больше двух знаков, буквы → `null` (ТЗ §13.2).
-- `formatDate(iso)`, `formatDateTime(iso)` — `ДД.ММ.ГГГГ` и `ДД.ММ.ГГГГ ЧЧ:ММ` в `Asia/Almaty` через `Intl.DateTimeFormat('ru-RU', { timeZone: 'Asia/Almaty', … })`.
-- `useIdempotentAction<T>(fn: (key: string) => Promise<T>)` → `{ run, pending }`: пока `pending` — повторный `run` ничего не шлёт; ответ 5xx или сеть — следующий `run` того же действия с ТЕМ ЖЕ ключом; успех или 4xx — ключ сбрасывается.
-- `useDraftAutosave<T>(storageKey: string, value: T, { enabled, intervalMs = 30_000 })` → `{ draft: { savedAt, value } | null, discard() }`; `try/catch` вокруг `localStorage` (приватный режим).
-- `useUnsavedChangesGuard({ dirty, onSaveDraft })` → `beforeunload` плюс перехват кликов по внутренним ссылкам (фаза захвата `document`), диалог «Есть несохранённые изменения. Сохранить черновик / Уйти без сохранения / Отмена» (ТЗ §05). **Решение:** роутер — `BrowserRouter`, `useBlocker` недоступен; кнопку «Назад» браузера перехват не ловит — это остаётся за `beforeunload` и автосохранением. Переход на data router — вне этапа.
+- `export.Column(key, title, kind)` — `kind`: `text|money|decimal|date|datetime`.
+- `export.respond(request, *, name, columns, rows, count, rebuild) -> HttpResponse | dict`:
+  - `count ≤ 10 000` — xlsx сразу (деньги — числа с форматом `# ##0.00`);
+  - больше — Celery: пересобрать выборку функцией `rebuild`, положить файл в `apps.files`/media, прислать ссылку уведомлением центра;
+  - больше 50 000 — 422 `E-EXP-01` (ТЗ §19).
+- `printing.render_html(template, context)`, `render_pdf(...)`, `pdf_response(..., filename)`. Базовый шаблон: место под бланк (колонтитулы — Q-B31), номер, статус, таблица, блок «Лист согласования».
+- Без системных библиотек Pango на Windows-хосте тест PDF пропускается с явной причиной; HTML проверяется всегда. В Docker и CI библиотеки ставятся явно.
 
-- [ ] **Step 1: Падающие тесты** — по одному файлу на модуль, кейсы из Review Focus 3 и 5, плюс: `formatMoney("-15")` → `"-15,00 KZT"`, `formatMoney("99999999999999.99")` без потери разрядов; `useDraftAutosave` — сохраняет через 30 с (фейковые таймеры `vi.useFakeTimers`), восстанавливает при повторном монтировании, `discard` очищает; `useUnsavedChangesGuard` — клик по `<a href="/bpp/x">` при `dirty` не уходит и открывает диалог, «Уйти без сохранения» уходит, без `dirty` — уходит сразу.
-- [ ] **Step 2: Реализация**, **Step 3:** `npx vitest run src/lib/bpp src/features/bpp && npm run lint` → PASS; `tsc` — не больше 148.
-- [ ] **Step 4: Коммит** — `feat(bpp): формат денег и дат, защита от двойного клика, автосохранение черновика, диалог несохранённых изменений`.
+- [ ] Тесты: Review Focus 4; xlsx читается `openpyxl` с заголовками и числовой суммой; PDF начинается с `%PDF-`, кириллица встроена.
+- [ ] Коммит — `feat(bpp): экспорт реестров в xlsx и печать документов в PDF`.
 
----
-
-## Task 6: Фронт — раздел `/bpp`, меню и «Мои согласования»
+## Task 7: Фронт — формат, хуки, раздел и меню
 
 **Files:**
-- Create: `frontend/src/features/bpp/BppLayout.tsx` + test, `frontend/src/features/bpp/approvals/module.tsx`, `frontend/src/features/bpp/approvals/MyApprovals.tsx` + test
-- Modify: `frontend/src/app/routing/routeDefinitions.ts`, `lazyPages.ts` (один маршрут `/bpp/*`), пункт «Закупки и оплаты» в `app/navigation/navItems.ts` (видим при `atLeast('bpp', 'read')`)
+- Modify: `frontend/src/features/bpp/format.ts` (B) — добавить и покрыть тестами:
+  - `formatMoney` из строки без `float`;
+  - `formatDateTime` в Asia/Almaty;
+  - `parseMoneyInput` (ТЗ §13.2).
+
+  Сигнатуры B сохраняются.
+- Create: `frontend/src/features/bpp/core/useIdempotentAction.ts`, `useDraftAutosave.ts`, `useUnsavedChangesGuard.tsx` + тесты.
+  - Роутер — `BrowserRouter`, `useBlocker` недоступен. Диалог несохранённых изменений — перехват кликов по внутренним ссылкам плюс `beforeunload`; кнопку «Назад» браузера закрывает автосохранение.
+- Create: `frontend/src/features/bpp/BppLayout.tsx`, `features/bpp/approvals/module.tsx` («Мои согласования» — инбокс signoff с фильтром `bpp.*`, D-34).
+- Modify: `routeDefinitions.ts`, `lazyPages.ts` (один маршрут `/bpp/*`), `navItems.ts` (пункт «Закупки и оплаты» при `atLeast('bpp', 'read')`).
+- Delete: `frontend/src/features/bpp/DocumentPage.tsx` (временная рамка B). Её маршруты `/bpp/requests/:id` и `/bpp/accountable/:id` до экранов B2.5 обслуживает раздел через модули B.
+
+- [ ] Тесты: Review Focus 5; меню по правам; «Мои согласования» — только `bpp.*`.
+- [ ] Коммит — `feat(bpp): раздел «Закупки и оплаты» — меню по правам, «Мои согласования», формат и защита действий`.
+
+## Task 8: Фронт — реестр и форма документа
+
+**Files:** `frontend/src/features/bpp/core/BppRegistry.tsx`, `useRegistryState.ts`, `BppDocumentShell.tsx`, `StatusBadge.tsx`, `HistoryTab.tsx` + тесты.
 
 **Interfaces:**
-- Consumes: `bppModules` (задача 1), `usePermissions`, `signoffApi.inbox()` (`api/signoff.ts`).
-- Produces: `BppLayout` — левое меню из `bppModules` (пункты с `visible(p) === false` не рисуются, ТЗ §05) и `<Routes>` из их `routes`; «Мои согласования» (D-34) — общий инбокс signoff с фильтром `subject_type.startsWith('bpp.')`.
+- `BppRegistry` — поверх конверта реестров B `{items, total, page, page_size}`:
+  - серверные фильтры, сортировка, пагинация 25/50/100;
+  - набор колонок и фильтров в `localStorage`;
+  - массовые действия с результатом по строкам;
+  - итоговая строка;
+  - кнопка «Экспорт» (задача 6);
+  - колонка «Сейчас у» — поле строки, его уже отдают реестры B.
+- `BppDocumentShell`:
+  - шапка — номер, бейдж статуса, автор, дата;
+  - кнопки только из `allowed_actions`, через `useIdempotentAction`; диалог комментария ≥ 10 (BR-060);
+  - вкладки — «Согласование» (`SubjectProcesses`/`ProcessTimeline` B), «Файлы» (`FilesPanel` B поверх `apps.files`) и «История изменений» (`/bpp/v1/history/<type>/<id>`);
+  - встроенные автосохранение и диалог несохранённых изменений.
 
-- [ ] Тесты: меню без прав пустое; пункт с правом виден; маршрут без права — «Нет доступа»; «Мои согласования» показывает только задачи `bpp.*`, строка ведёт на карточку процесса signoff.
-- [ ] Коммит — `feat(bpp): раздел «Закупки и оплаты» — меню по правам и «Мои согласования»`.
-
----
-
-## Task 7: Фронт — реестр `BppRegistry`
-
-**Files:**
-- Create: `frontend/src/features/bpp/core/BppRegistry.tsx`, `useRegistryState.ts` + tests
-
-**Interfaces:**
-- `BppRegistry<Row>({ endpoint, columns, defaultColumns, filters, rowKey, onRowClick, selectable, massActions, totals, exportable, currentHolderType })`:
-  - серверные фильтры, сортировка, пагинация 25/50/100 (по умолчанию 50);
-  - быстрый поиск `q`;
-  - набор колонок и фильтров — в `localStorage` под ключом `bpp:registry:<endpoint>`;
-  - флажки и массовые действия с результатом по каждой строке;
-  - итоговая строка (`totals` из ответа сервера);
-  - кнопка «Экспорт» (задача 9);
-  - колонка «Сейчас у» при `currentHolderType` — пакетный запрос `holders` по видимым id.
-- Ответ сервера — конверт `registry.page` (задача 4) плюс необязательный `totals`.
-
-- [ ] Тесты: смена страницы и сортировки уходит в запрос; скрытая колонка остаётся скрытой после перемонтирования; «Сейчас у» — один запрос на страницу; массовое действие показывает успехи и отказы с причинами.
-- [ ] Коммит — `feat(bpp): реестр раздела — серверные фильтры, колонки, массовые действия, «Сейчас у»`.
+- [ ] Тесты:
+  - кнопки вне `allowed_actions` не рисуются;
+  - кнопка заблокирована на время запроса;
+  - «Отклонить» с 9 символами не отправляется;
+  - скрытая колонка остаётся скрытой после перемонтирования.
+- [ ] Коммит — `feat(bpp): реестр и форма документа раздела`.
 
 ---
 
-## Task 8: Фронт — форма документа `BppDocumentShell`
-
-**Files:**
-- Create: `frontend/src/features/bpp/core/BppDocumentShell.tsx`, `StatusBadge.tsx`, `FilesTab.tsx`, `HistoryTab.tsx`, `ApprovalTab.tsx` + tests
-
-**Interfaces:**
-- `BppDocumentShell({ number, status, statusLabel, author, createdAt, allowedActions, actions, tabs, dirty, onSaveDraft, children })`:
-  - шапка — номер, цветной бейдж статуса, автор, дата;
-  - справа — кнопки ТОЛЬКО из `allowedActions` (ТЗ §05), каждая через `useIdempotentAction`;
-  - внизу — вкладки «Согласование» (процесс signoff документа и «Сейчас у»), «Файлы» (`files/<type>/<id>`, типы и лимиты — с сервера) и «История изменений» (`history/<type>/<id>`);
-  - `useUnsavedChangesGuard` и `useDraftAutosave` встроены.
-- `actions: Record<string, { label; variant?; confirm?: { title; commentMin?: number }; run: (key: string) => Promise<unknown> }>` — диалог комментария (≥ 10 символов, BR-060) рисует оболочка.
-
-- [ ] Тесты: кнопки не из `allowedActions` не рисуются; кнопка заблокирована на время запроса; «Отклонить» с 9 символами не отправляется; вкладка «Файлы» показывает ошибку 415 текстом сервера; «История» рисует записи журнала с датой-временем Almaty.
-- [ ] Коммит — `feat(bpp): форма документа — шапка, действия по allowed_actions, вкладки согласования, файлов и истории`.
+**Сведение волны 1** — PR в `new-module-BPP-merge`, обе ветки подтягивают.
 
 ---
 
-## Task 9: Экспорт реестров в xlsx
+## Task 9 (волна 2): Экраны справочников, проектов и контрагентов (A2.4)
 
-**Files:**
-- Create: `backend/apps/bpp/services/core/export.py`, `backend/apps/bpp/tasks.py` (`export_registry`), вьюха `GET /api/bpp/v1/exports/<export_id>` в `views.py`
-- Test: `backend/apps/bpp/tests/test_export.py`
-
-**Interfaces:**
-- `export.Column(key, title, kind: Literal["text", "money", "decimal", "date", "datetime"])`.
-- `export.respond(request, *, name: str, columns: list[Column], rows: Iterable[dict], count: int, rebuild: tuple[str, dict]) -> HttpResponse | dict`:
-  - `count ≤ 10 000` — xlsx сразу (`openpyxl` write-only, деньги — числовые ячейки с форматом `# ##0.00`);
-  - `count > 10 000` — Celery `export_registry.delay(company_slug=…, rebuild=…, user_id=…)` → `{"queued": true}`. Задача пересобирает выборку функцией из `rebuild` (путь `"apps.bpp.services.<…>.export_rows"`, аргументы — фильтры запроса), кладёт файл в `media` (scope `bpp_doc`) и шлёт `notifications.notify(…, url=<ссылка на скачивание>)`.
-- Предел — `EXPORT_SYNC_LIMIT = 10_000` (D-32); верхний предел выборки — 50 000 строк (ТЗ §19), сверх — 422 `E-EXP-01` «Слишком большая выборка: N строк. Сузьте фильтры до 50 000.»
-
-- [ ] Тесты (Review Focus 4): 10 000 строк → `Content-Type` xlsx и `openpyxl.load_workbook` читает заголовки и первую сумму числом; 10 001 → `{"queued": true}` и задача поставлена (`CELERY_TASK_ALWAYS_EAGER` в тестах — проверить файл в хранилище в памяти и уведомление); пустая выборка — один ряд заголовков; 50 001 → 422.
-- [ ] Коммит — `feat(bpp): экспорт реестров в xlsx — сразу до 10 000 строк, больше — фоном с уведомлением`.
-
----
-
-## Task 10: Печать документов в PDF
-
-**Files:**
-- Modify: `backend/requirements.txt` (`weasyprint==<актуальная 6x>`), `backend/Dockerfile` (системные `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b fonts-dejavu-core`), `.github/workflows/backend-full.yml` (те же пакеты `apt-get install` перед pytest)
-- Create: `backend/apps/bpp/services/core/printing.py`, `backend/apps/bpp/templates/bpp/print/base.html`
-- Test: `backend/apps/bpp/tests/test_printing.py`
-
-**Interfaces:**
-- `printing.render_html(template: str, context: dict) -> str` — всегда;
-- `printing.render_pdf(template, context) -> bytes`;
-- `printing.pdf_response(template, context, *, filename) -> HttpResponse` (`Content-Disposition: inline`).
-- Базовый шаблон: бланк (место под колонтитулы — Q-B31, пришлёт команда), номер, статус, таблица, лист согласования (блок, который B наполняет из процесса signoff).
-
-**Решение по окружению.** WeasyPrint требует системных библиотек Pango. В Docker и CI они ставятся явно. На Windows-хосте разработчика их может не быть: тест `render_pdf` тогда пропускается с явной причиной `pytest.skip("WeasyPrint: нет системных библиотек Pango — PDF проверяется в Docker/CI")` при `OSError` импорта. Тест `render_html` идёт всегда. Цена, если неверно: локально PDF не проверяется, ошибка найдётся только в CI.
-
-- [ ] Тесты: HTML содержит номер и строки листа согласования; PDF начинается с `%PDF-`; кириллица не превращается в квадраты (в PDF есть встроенный шрифт DejaVu).
-- [ ] Коммит — `feat(bpp): печать документов в PDF — WeasyPrint, базовый шаблон с местом под бланк`.
-
----
-
-## Task 11 (волна 2): Экраны справочников, проектов и контрагентов
-
-**Files:**
-- Create: `frontend/src/features/bpp/refdata/module.tsx` + экраны: статьи и группы, НДС, МРП, валюты и курсы (ручной курс на пропущенную дату), ед. изм., страны (`/api/refdata/v1/*`)
-- Create: `frontend/src/features/bpp/projects/module.tsx` + реестр и карточка проекта, участники (`/api/project/v1/*`)
-- Create: `frontend/src/features/bpp/counterparties/module.tsx` + L-08 и карточка контрагента (БИН — `components/ui/bin-iin-input.tsx`, проверка разряда на фронте — тот же алгоритм, что в задаче 2), банковские счета, блокировка ФД, метка «Проверенный», окно подтверждения непроверенного контрагента — компонент `ConfirmCounterpartyDialog` для документов B
-- Tests: vitest на каждый экран
+**Files:** `frontend/src/features/bpp/refdata/module.tsx`, `projects/module.tsx`, `counterparties/module.tsx` с экранами; `ConfirmCounterpartyDialog` — окно подтверждения непроверенного контрагента для документов этапа 3.
 
 **Правила:**
-- **Справочники.** Правка только в управляющей компании. Кнопки правки рисуются по ответу сервера: `can_edit` приходит в списке справочника. Добавить в ответы `refdata` поле `"can_edit": bool` (ручки справочников этапа 1), тест в `apps/refdata/tests/test_api.py`.
-- **Архив.** Архивная запись скрыта из выбора в новых документах (`?active=1`), но видна в списке с меткой «Архив».
-- **Проекты.** Видимость по серверу (ПМ — только участия). Создание — `project.projects:create`, участники — `project.members:edit`.
-- **Контрагенты.** Меню «Справочники» видно АДМ, ФД, СН и ПМ (ТЗ §05 п.9): СН и ПМ — только создание контрагента.
+- **Справочники.** Правка только в управляющей компании: в ответы `refdata` добавить `can_edit`, кнопки правки — по нему. Архив скрыт в выборе для новых документов (`?active=1`), но виден в списке с меткой «Архив».
+- **Проекты.** ПМ видит только проекты-участия (сервер).
+- **Контрагенты.** Проверка БИН на фронте — тем же алгоритмом, что на сервере. СН и ПМ создают контрагента, но не блокируют.
 
 - [ ] Коммит — `feat(bpp): экраны справочников, проектов и контрагентов`.
 
----
+## Task 10 (волна 2): Сквозная проверка сводки и уведомлений
 
-## Task 12 (волна 2): Стык с этапом 1 исполнителя B
-
-**Files:**
-- Test: `backend/apps/notifications/tests/test_digest_signoff.py`
-
-- [ ] **Ежедневная сводка с настоящим источником signoff.** Процесс БЗО ждёт пользователя 7 в компании A:
-  - сводка содержит ссылку на поддомен компании A;
-  - выключенный у компании модуль `signoff` не роняет сводку — источник упал, `fallback`, остальные разделы на месте.
-- [ ] **Уведомления signoff идут через центр.** Проверить интеграционным тестом: отправка документа БЗО на согласование создаёт `notifications.Notification` получателям этапа с доставкой по e-mail (события модуля — колокольчик и e-mail, ТЗ §22). Signoff на центр переводит задача 1 плана B этапа 2; этот тест фиксирует результат с нашей стороны.
-- [ ] Коммит — `test(notifications): сводка и уведомления согласования БЗО — сквозная проверка с signoff`.
+- [ ] Процесс заявки ждёт пользователя — ежедневная сводка содержит ссылку на поддомен компании; выключенный у компании `signoff` не роняет сводку.
+- [ ] Отправка заявки на согласование создаёт уведомление центра с доставкой e-mail получателям этапа (события модуля — колокольчик и e-mail).
+- [ ] Коммит — `test(notifications): сводка и уведомления согласования БЗО — сквозная проверка`.
 
 ---
+
+## Остаток B (Руслан) — волна 2
+
+По [плану B этапа 2](2026-09-27-bpp-stage2-executor-b.md) плюс то, что появилось после сведения:
+
+| # | Что | На чём стоит |
+|---|---|---|
+| B-1 | **Экраны B2.5.** L-01/F-01, L-02/F-02, L-04 + мастер F-03 — как модули `features/bpp/budgets|requests|plan/module.tsx` на `BppRegistry`/`BppDocumentShell`. Вставка позиций из Excel, «Остаток после заявки» на лету, жёлтая плашка возврата. Роль инициатора — из `GET /bpp/v1/me` | задачи 2, 5, 7, 8 |
+| B-2 | **Файлы документов через `apps.files`.** Владельцы `bpp.purchase_request`, `bpp.accountable_*` с типами ТЗ §21. Ручки `requests/<id>/files…` снять в пользу `/api/files/v1` и `FilesPanel`, если тесты B это позволяют | задача 1 |
+| B-3 | Экспорт реестров бюджета, заявок и плана; печать заявки с листом согласования | задача 6 |
+| B-4 | Сервисы заявки и плана — на узлы `bpp.requests.all` и `bpp.plan.reassign` вместо обходных правил | задача 3 |
+| B-5 | Уведомление СН и ПМ об утверждении бюджета (ТЗ §16.2 п.1) | задача 3 (`holders_of`, `member_user_ids`) |
+| B-6 | Реестры: страница по умолчанию — 50 строк (ТЗ §19); сейчас в `read.py` — 25 | — |
+| B-7 | Этап 3 (договор и счёт) — после сведения волны 1: нужен `services/counterparties/lookup.py` | задача 4 |
 
 ## После этапа
 
-- [ ] Полный прогон бэкенда (без `ci-known-failures.txt`) и `npx vitest run` — зелёные, кроме падений, которые воспроизводятся на базовом коммите.
-- [ ] Финальное ревью ветки отдельным ревьюером; важные замечания исправить, мелкие — отдельным планом, как на этапе 1.
+- [ ] Весь бэкенд (без `ci-known-failures.txt`) и `npx vitest run` зелёные, кроме падений, воспроизводящихся на базовом коммите (8 тестов `hr` — известны).
+- [ ] Финальное ревью ветки отдельным ревьюером; важные замечания — исправить, мелкие — отдельным планом.
 - [ ] PR в `new-module-BPP-merge`.
