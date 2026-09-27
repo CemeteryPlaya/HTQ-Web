@@ -387,6 +387,10 @@ class ApprovalRoute(models.Model):
     # активным, а не на запуске; нет исполнителя — этап ждёт («Нет
     # исполнителя») вместо отказа в запуске.
     lazy_resolution = models.BooleanField(default=False, db_default=False)
+    # D-18: группа этапов, где не сошлось ни одно условие и нет «иначе»,
+    # пропускается, а не роняет запуск; пропущены все — объект согласован
+    # сразу (допсоглашение без изменения суммы).
+    skip_unmatched_groups = models.BooleanField(default=False, db_default=False)
     # «Роли» в словаре signoff — HR-должности. Кого уведомить о «Нет
     # исполнителя» (ТЗ §16.1 п.5: АДМ и ГД).
     no_executor_notify_position_ids = models.JSONField(default=list, blank=True)
