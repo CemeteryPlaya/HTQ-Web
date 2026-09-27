@@ -306,11 +306,13 @@ def count_awaiting(user_id: int) -> int:
 
 
 def configure_route(*, subject_type: str, name: str, stages: list[dict],
-                    scope: str = "") -> int:
+                    scope: str = "", flags: dict | None = None) -> int:
     """Создать активный маршрут с этапами одной транзакцией; вернуть его id.
 
     Для предметной аппки, которая заводит маршрут программно — команда
-    переезда «Запросов» со старого движка. Каждый этап — словарь в терминах
+    переезда «Запросов» со старого движка, ``bpp_setup_routes``. ``flags`` —
+    флаги маршрута (``resolution.ROUTE_FLAG_DEFAULTS``: самосогласование,
+    длина комментария, ленивое разрешение, кому уведомления; D-21). Каждый этап — словарь в терминах
     ``route_service.add_stage`` (``order``, ``name``, ``quorum``,
     ``approver_kind``, ``position_ids``/``user_ids``/``approver_key``,
     ``condition``, ``is_fallback``, ``requires_attachment``,
@@ -324,7 +326,7 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
 
     with transaction.atomic():
         route = route_service.create_route(subject_type=subject_type, name=name,
-                                           scope=scope)
+                                           scope=scope, **(flags or {}))
         for spec in stages:
             route_service.add_stage(
                 route.pk,

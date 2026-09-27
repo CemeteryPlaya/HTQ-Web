@@ -7,11 +7,13 @@
 Здесь — только ``include`` подмодулей.
 """
 
-from django.urls import path
+from django.urls import include, path
 
 from . import views
 
 urlpatterns = [
     path("history/<str:object_type>/<str:object_id>", views.object_history),
     path("history/<str:object_type>/<str:object_id>/", views.object_history),
+    path("", include("apps.bpp.urls_budget")),    # B2.1
+    path("", include("apps.bpp.urls_requests")),  # B2.2, B2.3
 ]

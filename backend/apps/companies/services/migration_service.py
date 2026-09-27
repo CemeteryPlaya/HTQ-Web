@@ -96,6 +96,7 @@ SHARED_EFFECT_MIGRATIONS = frozenset({
     ("tasks", "0003_tasks_periodic_tasks"),
     ("tasks", "0019_tasks_periodic_tasks_use_dispatchers"),
     ("signoff", "0014_retry_no_executor_periodic_task"),
+    ("bpp", "0004_committed_check_periodic_task"),
 })
 
 

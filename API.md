@@ -1513,6 +1513,58 @@ schema the platform can run on.
 
 ---
 
+## `apps.bpp` — `/api/bpp/v1` (модуль БЗО)
+
+Тенантная аппка. Каждая ручка — `api_view(module="bpp", level=…)`: `read` на
+чтение, `write` на запись; права тоньше уровня — узлы `bpp.*` (роли `bpp-*`,
+`access/0014`), принадлежность и статус проверяют сервисы. Ошибки — конверт
+D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `E-…` из
+каталога ТЗ или номер правила `BR-…`, если у правила кода нет. Записывающие
+ручки принимают `Idempotency-Key` (повтор отдаёт первый ответ с
+`Idempotent-Replay: true`) и `version` записи в теле (устарела — 409
+`E-CON-01`). Чужой документ — 404, как несуществующий.
+
+**Бюджет** — подмодуль `bpp_budget` (ТЗ §06, задача B2.1). Утверждает и
+корректирует ФД сам, без маршрута (D-07): узел `bpp.budgets.approve`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам |
+| `POST budgets` | Создать черновик (версия 1); второй бюджет проекта — 422 `BR-001` со ссылкой в `fields[0].budget_id`, дубль статьи — `BR-002` с номером строки |
+| `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`) |
+| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-04` |
+| `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку действующей версии удалить нельзя — 422 `E-BUD-05` |
+| `POST budgets/<id>/correction/approve` (`comment` ≥ 10) | Утвердить: лимит ниже задействованного — 422 `BR-004` с суммой; проверка под блокировкой строк |
+| `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
+| `POST budgets/<id>/close`, `…/reopen` (`comment` ≥ 10) | Закрыть (заявки на согласовании — 409 `E-BUD-06`) / открыть повторно |
+| `GET budgets/<id>/versions`, `…/versions/<n>` | Версии и снимок версии N |
+| `GET budgets/lines?project_id=&role=sn\|pm` | GetBudgetLines: статьи бюджета проекта в группе роли, с остатком |
+| `GET budgets/balance?project_id=&article_id=&exclude_request_id=` | GetBudgetBalance `{limit, committed, available, as_of}` по действующей версии |
+
+**Заявка на закупку и план закупок** — подмодуль `bpp_requests` (ТЗ §07, §08,
+задачи B2.2, B2.3). Согласование «ТД → ОД» — движок `signoff`, тип
+`bpp.purchase_request` (маршрут заводит `manage.py bpp_setup_routes`),
+решения — ручки `signoff`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; ТД, ОД, ФД, ГД — все. Колонка `current_holders` («Сейчас у») |
+| `POST requests` | Черновик: номер `ЗЗ-ГГГГ-NNNNNN` сразу; обязателен только проект. Нет утверждённого бюджета — 422 `E-BUD-02`, статья чужой группы — 403 `E-ACC-01` (AC-002), > 200 позиций — 422 `E-REQ-02` |
+| `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
+| `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
+| `POST requests/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STATE-01` |
+| `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
+| `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
+| `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only` |
+| `POST plan/validate` (`{item_ids, target: agreement\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `BR-021`; ответ — заготовка мастера F-03 |
+| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.settings` edit) |
+
+`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
+`bpp.purchaserequest`), читает тот, кто видит документ.
+
+---
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
