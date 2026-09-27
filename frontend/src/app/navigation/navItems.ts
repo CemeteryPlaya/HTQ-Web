@@ -22,6 +22,7 @@ import {
   Mail,
   MessageCircle,
   Newspaper,
+  ShoppingCart,
   Stamp,
   Users,
   type LucideIcon,
@@ -29,7 +30,7 @@ import {
 
 /** Какое право нужно, чтобы раздел был виден. */
 export type NavRequirement =
-  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail';
+  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail' | 'bpp';
 
 export interface NavItem {
   /** Стабильный ключ для React и тестов. */
@@ -51,6 +52,8 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'email', href: '/email', icon: Mail, labelKey: 'nav.email', labelFallback: 'Почта', requires: 'mail', inBottomNav: true },
   { id: 'contracts', href: '/contracts', icon: FileSignature, labelKey: 'contracts.nav.title', labelFallback: 'Договоры', requires: 'always' },
   { id: 'signoff', href: '/signoff', icon: Stamp, labelKey: 'signoff.nav.title', labelFallback: 'Согласования', requires: 'always' },
+  // Модуль БЗО: раздел со своим левым меню (`features/bpp/BppLayout`).
+  { id: 'bpp', href: '/bpp', icon: ShoppingCart, labelKey: 'bpp.nav.title', labelFallback: 'Закупки и оплаты', requires: 'bpp' },
   { id: 'employees', href: '/hr/employees', icon: Users, labelKey: 'profile.sidebar.employees', labelFallback: 'Сотрудники', requires: 'hr', inBottomNav: true },
   { id: 'files', href: '/files', icon: FolderOpen, labelKey: 'nav.files', labelFallback: 'Файлы', requires: 'department', inBottomNav: true },
   { id: 'news', href: '/news', icon: Newspaper, labelKey: 'header.news', labelFallback: 'Новости', requires: 'always' },
@@ -64,6 +67,8 @@ export interface NavAbilities {
   hasDepartment: boolean;
   hasMessenger: boolean;
   hasMail: boolean;
+  /** `bpp:read` — раздел «Закупки и оплаты» (гейт маршрута `/bpp/*` тот же). */
+  hasBpp: boolean;
 }
 
 const allowed = (item: NavItem, a: NavAbilities): boolean => {
@@ -75,6 +80,7 @@ const allowed = (item: NavItem, a: NavAbilities): boolean => {
     case 'department': return a.hasDepartment;
     case 'messenger': return a.hasMessenger;
     case 'mail': return a.hasMail;
+    case 'bpp': return a.hasBpp;
     default: return false;
   }
 };
