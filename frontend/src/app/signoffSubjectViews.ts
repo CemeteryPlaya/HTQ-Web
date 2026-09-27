@@ -20,47 +20,87 @@
  * Ключи — те же строки, что регистрирует бэкенд (`SIGNOFF_SUBJECT_TYPE` на
  * модели). Типа нет в карте — карточка процесса просто не покажет документ:
  * заголовок и ссылка на объект в ней остаются в любом случае.
+ *
+ * Ключ объекта signoff отдаёт строкой (`ApprovalProcess.subject_id`): у
+ * документов БЗО это UUID, у старых доменов — целое число в строке. Поэтому
+ * контракт карты — строковый `id`, а представления старых доменов, которые
+ * держат `id: number`, подключаются через `intKeyed`: переводить ключ в
+ * число — забота этого слоя, а не каждого компонента. Прямой
+ * `Number(subject_id)` на странице процесса дал бы UUID-документу `NaN`.
  */
 
-import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
+import {
+  createElement,
+  lazy,
+  type ComponentType,
+  type LazyExoticComponent,
+} from 'react';
 
-/** Контракт предметного представления: id строки и признак вставки. */
+/** Контракт предметного представления: ключ объекта и признак вставки. */
 export interface SubjectViewProps {
+  id: string;
+  embedded?: boolean;
+}
+
+/** Представление домена с целыми ключами (договоры, заявки конструктора). */
+export interface IntSubjectViewProps {
   id: number;
   embedded?: boolean;
 }
 
 export type SubjectView = LazyExoticComponent<ComponentType<SubjectViewProps>>;
 
+type Loader<P> = () => Promise<{ default: ComponentType<P> }>;
+
+/** Представление, которое принимает ключ как есть — строкой (UUID). */
+export const stringKeyed = (load: Loader<SubjectViewProps>): SubjectView =>
+  lazy(load);
+
+/** Представление с целым ключом: строка процесса переводится в число. */
+export const intKeyed = (load: Loader<IntSubjectViewProps>): SubjectView =>
+  lazy(async () => {
+    const { default: View } = await load();
+    const IntKeyed = ({ id, embedded }: SubjectViewProps) =>
+      createElement(View, { id: Number(id), embedded });
+    return { default: IntKeyed };
+  });
+
 export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
+  // Модуль БЗО — документы с UUID-ключом.
+  'bpp.purchase_request': stringKeyed(
+    () => import('@/features/bpp/requests/RequestSignoffView'),
+  ),
+  'bpp.accountable_funds_request': stringKeyed(
+    () => import('@/features/bpp/accountable/AccountableSignoffView'),
+  ),
   // Заявка конструктора «Запросы»: тот же движок согласует и её.
-  'approvals.request': lazy(
+  'approvals.request': intKeyed(
     () => import('@/features/requests/components/RequestSubjectView'),
   ),
-  'contracts.budget': lazy(() => import('@/components/contracts/BudgetDetailView')),
-  'contracts.counterparty': lazy(
+  'contracts.budget': intKeyed(() => import('@/components/contracts/BudgetDetailView')),
+  'contracts.counterparty': intKeyed(
     () => import('@/components/contracts/CounterpartyDetailView'),
   ),
-  'contracts.agreement': lazy(
+  'contracts.agreement': intKeyed(
     () => import('@/components/contracts/AgreementDetailView'),
   ),
-  'contracts.invoice': lazy(() => import('@/components/contracts/InvoiceDetailView')),
-  'contracts.advance_payment': lazy(
+  'contracts.invoice': intKeyed(() => import('@/components/contracts/InvoiceDetailView')),
+  'contracts.advance_payment': intKeyed(
     () => import('@/components/contracts/AdvancePaymentDetailView'),
   ),
-  'contracts.accountable_funds_request': lazy(
+  'contracts.accountable_funds_request': intKeyed(
     () => import('@/components/contracts/AccountableFundsRequestDetailView'),
   ),
-  'contracts.advance_report': lazy(
+  'contracts.advance_report': intKeyed(
     () => import('@/components/contracts/AdvanceReportDetailView'),
   ),
-  'contracts.contract_payment': lazy(
+  'contracts.contract_payment': intKeyed(
     () => import('@/components/contracts/ContractPaymentDetailView'),
   ),
-  'contracts.completion_act': lazy(
+  'contracts.completion_act': intKeyed(
     () => import('@/components/contracts/CompletionActDetailView'),
   ),
-  'contracts.goods_invoice': lazy(
+  'contracts.goods_invoice': intKeyed(
     () => import('@/components/contracts/GoodsInvoiceDetailView'),
   ),
 };

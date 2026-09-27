@@ -1,4 +1,4 @@
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 
 
 class SignoffConfig(AppConfig):
@@ -11,3 +11,15 @@ class SignoffConfig(AppConfig):
     # не нужна; см. apps/core/models.KNOWN_SERVICES и
     # htqweb/middleware/service_gate.PREFIX_TO_SERVICE).
     API_PREFIX = "api/signoff/v1/"
+
+    def ready(self):
+        # Очередь «ждёт меня» — источник ежедневной сводки центра уведомлений
+        # (D-23). Центр о signoff не знает: источник регистрируется сам, и
+        # только там, где центр установлен. Тенантный — задачи согласования
+        # лежат в схеме компании, сводка обходит компании пользователя.
+        if apps.is_installed("apps.notifications"):
+            from apps.notifications import interface as notifications
+            from apps.signoff.services import holders
+
+            notifications.register_digest_source(
+                "signoff", holders.digest_items, tenant=True)

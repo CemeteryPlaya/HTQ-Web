@@ -11,3 +11,9 @@ class BppConfig(AppConfig):
     # apps.core.models.KNOWN_SUBMODULES; их префиксы — в PREFIX_TO_SERVICE
     # ВЫШЕ префикса модуля.
     API_PREFIX = "api/bpp/v1/"
+
+    def ready(self):
+        # Документы модуля в движке согласования и доступ к их журналу (B).
+        from . import approval_hooks
+
+        approval_hooks.register()

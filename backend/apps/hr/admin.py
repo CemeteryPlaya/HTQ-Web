@@ -11,6 +11,7 @@ from django.contrib import admin
 from htqweb.admin_gate import ServiceGatedAdminMixin
 
 from .models import (
+    ActingAssignment,
     Application,
     AuditLog,
     CalendarDay,
@@ -106,6 +107,16 @@ class ReportingRelationAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
     list_filter = ("relation_type",)
     autocomplete_fields = ("superior_position", "subordinate_position")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ActingAssignment)
+class ActingAssignmentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+    """Временные исполнители должностей (мастер-план БЗО, D-22)."""
+
+    list_display = ("id", "position", "employee", "date_from", "date_to", "basis")
+    list_filter = ("date_from",)
+    autocomplete_fields = ("position", "employee")
+    readonly_fields = ("assigned_by_id", "created_at", "updated_at")
 
 
 @admin.register(EmployeeReportingOverride)

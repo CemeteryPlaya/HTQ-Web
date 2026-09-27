@@ -481,6 +481,61 @@ class Substitution(HrBase):
                 f"sub={self.substitute_position_id}, kind='{self.kind}')>")
 
 
+class ActingAssignment(HrBase):
+    """Временный исполнитель должности на период (мастер-план БЗО, D-22).
+
+    Отличается от ``Substitution`` по сути: там ПРАВИЛО между должностями
+    («главбуха замещает зам. главбуха» по приказу), здесь — СОБЫТИЕ: этот
+    сотрудник исполняет эту должность с такого-то по такое-то число. Одна
+    сущность закрывает оба случая ТЗ §16.1 п.6: должность пуста (новый
+    держатель ещё не назначен) и держатель отсутствует (отпуск, болезнь —
+    «заместитель пользователя на период» оформляется временным исполнителем
+    его должности на те же даты). Назначают АДМ и HR вручную.
+
+    На согласовании временный исполнитель попадает в разрешение должности
+    (``hr.interface.resolve_position_users``) на дату, когда этап получает
+    исполнителей; уже созданные задачи назначение не переписывает.
+
+    Обе границы периода ВКЛЮЧИТЕЛЬНЫЕ и обязательны: бессрочный «временный»
+    исполнитель — это новый держатель, и оформляется он назначением на
+    должность, а не здесь. Пересечения периодов разрешены: двое исполнителей
+    одной должности на одни даты получают этап оба.
+    """
+
+    position = models.ForeignKey(
+        Position, on_delete=models.CASCADE, related_name="acting_assignments",
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="acting_assignments",
+    )
+    date_from = models.DateField()
+    date_to = models.DateField()
+    # Чем оформлено (приказ, распоряжение) — в платформе назначение только
+    # отражается, юридическую силу ему даёт документ.
+    basis = models.CharField(max_length=255)
+    # Кто завёл запись (user_id из токена) — межаппный FK на users запрещён.
+    assigned_by_id = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Временный исполнитель должности"
+        verbose_name_plural = "Временные исполнители должностей"
+        ordering = ["-date_from", "-id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(date_to__gte=models.F("date_from")),
+                name="ck_acting_assignment_dates",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["position", "date_from", "date_to"],
+                         name="ix_acting_position_period"),
+        ]
+
+    def __str__(self) -> str:
+        return (f"<ActingAssignment(pos={self.position_id}, emp={self.employee_id}, "
+                f"{self.date_from}..{self.date_to})>")
+
+
 class EmployeeReportingOverride(HrBase):
     """Персональное подчинение — сотрудник X подчиняется сотруднику Y
     НЕЗАВИСИМО от связей их должностей.

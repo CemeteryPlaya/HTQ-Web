@@ -104,6 +104,9 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.cms",
     "apps.media_files",
+    # Файловая подсистема ТЗ §21 — общая: её владельцы бывают и общими
+    # (заявка), и тенантными (договор), см. apps/files/models.py.
+    "apps.files",
     # Доменные аппки миграции — скаффолд prep 4.0 (PLAN.md §5). Пустые
     # (модели/роуты/задачи приходят в их фазах §6), но уже установлены и
     # отключаемы: URL-автодискавери монтирует их по AppConfig.API_PREFIX,
@@ -698,6 +701,19 @@ MAILBOX_LOCAL_PART_PATTERN = env("MAILBOX_LOCAL_PART_PATTERN", "f.last").strip()
 # task 3.2 report). media_signed_url_* is NOT ported here either — signed
 # URLs are a later task (3.3+).
 MAX_UPLOAD_SIZE_MB = int(env("MAX_UPLOAD_SIZE_MB", "100"))
+# Потолок размера документа файловой подсистемы (apps.files, ТЗ §21):
+# справочник «Типы файлов» не даст поставить больше. Совпадает с
+# client_max_body_size локации /api/files/v1/ в infra/nginx/default.conf
+# (21M — запас на обвязку multipart) и с max_mb scope file_object в media.
+FILES_UPLOAD_CEILING_MB = 20
+# Антивирус (ТЗ §21 [Л], htqweb/antivirus.py): clamd контейнера clamav по TCP.
+# Пустой хост — проверки нет вовсе (тесты, стенд без контейнера); настроенный,
+# но недоступный сканер ЗАКРЫВАЕТ приём файлов тех scope, что требуют проверки
+# (ScopePolicy.antivirus), а не пропускает их непроверенными.
+ANTIVIRUS_CLAMD_HOST = env("ANTIVIRUS_CLAMD_HOST", "")
+ANTIVIRUS_CLAMD_PORT = int(env("ANTIVIRUS_CLAMD_PORT", "3310"))
+# 20 МБ на локальной сети clamd проверяет за секунды; таймаут — на зависание.
+ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "60"))
 ALLOWED_MIME_TYPES = env("ALLOWED_MIME_TYPES", "")  # comma-separated, "" = allow all
 IMAGE_JPEG_QUALITY = int(env("IMAGE_JPEG_QUALITY", "85"))
 THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png

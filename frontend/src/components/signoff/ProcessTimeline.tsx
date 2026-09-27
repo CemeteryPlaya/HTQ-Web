@@ -79,6 +79,14 @@ function TaskRow({
             {task.acted_at && ` · ${formatMoment(task.acted_at)}`}
           </span>
         </div>
+        {/* Голос за вариант (исходный документ или альтернатива, ТЗ §12.4):
+            следующие этапы видят, за что проголосовали предыдущие. */}
+        {task.option_label && (
+          <p className="text-sm mt-0.5 break-words">
+            <span className="text-muted-foreground">Вариант: </span>
+            {task.option_label}
+          </p>
+        )}
         {task.comment && (
           <p className="text-sm text-muted-foreground mt-0.5 whitespace-pre-wrap break-words">
             {task.comment}

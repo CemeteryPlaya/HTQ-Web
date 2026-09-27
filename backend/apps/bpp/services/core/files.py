@@ -40,6 +40,8 @@ FILE_RULES: dict[str, FileRule] = {
     "vat_invoice": FileRule("Счёт-фактура", (PDF, JPG, PNG, *XML), 10, 10),
     "bank_statement": FileRule("Выписка банка", (TXT, XLSX, CSV), 20, 1),
     "alternative_offer": FileRule("Коммерческое предложение", (PDF, DOCX, XLSX, JPG, PNG), 20, 5),
+    # Подотчёт (B4.1): один подтверждающий документ на авансовый отчёт.
+    "advance_report": FileRule("Авансовый отчёт", (PDF, JPG, PNG), 10, 1),
 }
 
 

@@ -28,7 +28,9 @@ from __future__ import annotations
 import inspect
 import logging
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
+
+from django.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +40,12 @@ class UnknownSubject(Exception):
 
 
 class Describe(Protocol):
-    def __call__(self, subject_id: int) -> dict | None:
+    def __call__(self, subject_id: Any) -> dict | None:
         """``{"title": str, "url": str}`` или ``None``, если объекта нет."""
 
 
 class Facts(Protocol):
-    def __call__(self, subject_id: int) -> dict:
+    def __call__(self, subject_id: Any) -> dict:
         """Плоский словарь скаляров, по которым выбираются ветки маршрута."""
 
 
@@ -58,7 +60,7 @@ class FactFields(Protocol):
 
 
 class ScopeOf(Protocol):
-    def __call__(self, subject_id: int) -> str:
+    def __call__(self, subject_id: Any) -> str:
         """Область объекта (``ApprovalRoute.scope``); ``""`` — весь тип."""
 
 
@@ -68,7 +70,7 @@ class Scopes(Protocol):
 
 
 class Approvers(Protocol):
-    def __call__(self, subject_id: int, key: str) -> list[int]:
+    def __call__(self, subject_id: Any, key: str) -> list[int]:
         """Кого объект называет согласующими по ключу из ``approver_fields``."""
 
 
@@ -78,7 +80,7 @@ class ApproverFields(Protocol):
 
 
 class OnEvent(Protocol):
-    def __call__(self, subject_id: int, kind: str, payload: dict) -> None:
+    def __call__(self, subject_id: Any, kind: str, payload: dict) -> None:
         """Событие процесса — после коммита, best-effort (SSE, свои журналы)."""
 
 
@@ -93,13 +95,44 @@ class RequirementFields(Protocol):
 
 
 class CheckRequirement(Protocol):
-    def __call__(self, subject_id: int, key: str) -> str | None:
+    def __call__(self, subject_id: Any, key: str) -> str | None:
         """Выполнено ли требование ``key`` на объекте.
 
         ``None`` — выполнено; строка — ПОЧЕМУ нет, по-русски и для человека:
         она уходит согласующему в отказ 409 как есть («поле «Поставщик» не
         заполнено»). Не булево намеренно: «нельзя» без «что сделать» — это
         отказ, с которым человек остаётся один на один.
+        """
+
+
+class Options(Protocol):
+    def __call__(self, subject_id: Any) -> list[dict]:
+        """Варианты, между которыми выбирает согласующий: ``[{"key", "label"}]``.
+
+        Первый — «как есть» (исходный документ), остальные — предложенные
+        замены (альтернативы снабженца, ТЗ §12). Пока вариант один или список
+        пуст, выбирать не из чего, и «согласовать» работает как всегда. Когда
+        их больше одного, решение «согласовать» обязано назвать ключ
+        (``option_key``) — он сохраняется в запросе и виден следующим этапам.
+        """
+
+
+class CheckOption(Protocol):
+    def __call__(self, subject_id: Any, key: str) -> str | None:
+        """Можно ли отдать голос за вариант ``key``. ``None`` — можно; строка —
+        почему нет, для человека (альтернатива дороже, а остатка статьи не
+        хватает). Тот же контракт, что у ``CheckRequirement``."""
+
+
+class OnOption(Protocol):
+    def __call__(self, subject_id: Any, stage_order: int, user_id: int,
+                 option_key: str) -> None:
+        """Голос за вариант записан — в той же транзакции, что решение.
+
+        Доменная запись голоса (мастер-план БЗО, D-26: «гибрид — доменная
+        запись голоса + общая возможность signoff»): предметная аппка ведёт
+        свой журнал голосов, signoff — свой, на запросе. Исключение
+        откатывает решение целиком.
         """
 
 
@@ -163,16 +196,20 @@ class Subject:
     ``takes_scope_*`` — вычисляются при регистрации по сигнатуре колбэка:
     существующие нульарные ``fact_fields`` (contracts) продолжают работать,
     а типу с областями схема нужна ПО области.
+
+    Ключ объекта колбэки получают в типе ключа ЕГО модели (``native_id``):
+    ``int`` у целочисленных моделей, ``uuid.UUID`` у моделей с UUID-ключом.
+    В ``ApprovalProcess.subject_id`` он хранится строкой (``storage_key``).
     """
 
     subject_type: str
     label: str
     model: type
-    on_approved: Callable[[int], None] | None = None
-    on_rejected: Callable[[int], None] | None = None
-    on_rework: Callable[[int], None] | None = None
-    on_started: Callable[[int], None] | None = None
-    on_cancelled: Callable[[int], None] | None = None
+    on_approved: Callable[[Any], None] | None = None
+    on_rejected: Callable[[Any], None] | None = None
+    on_rework: Callable[[Any], None] | None = None
+    on_started: Callable[[Any], None] | None = None
+    on_cancelled: Callable[[Any], None] | None = None
     describe: Describe | None = None
     facts: Facts | None = None
     fact_fields: FactFields | None = None
@@ -183,6 +220,9 @@ class Subject:
     on_event: OnEvent | None = None
     requirement_fields: RequirementFields | None = None
     check_requirement: CheckRequirement | None = None
+    options: Options | None = None
+    check_option: CheckOption | None = None
+    on_option: OnOption | None = None
     takes_scope_fact_fields: bool = False
     takes_scope_approver_fields: bool = False
     takes_scope_requirement_fields: bool = False
@@ -192,11 +232,11 @@ _SUBJECTS: dict[str, Subject] = {}
 
 
 def register_subject(subject_type: str, *, label: str, model: type,
-                     on_approved: Callable[[int], None] | None = None,
-                     on_rejected: Callable[[int], None] | None = None,
-                     on_rework: Callable[[int], None] | None = None,
-                     on_started: Callable[[int], None] | None = None,
-                     on_cancelled: Callable[[int], None] | None = None,
+                     on_approved: Callable[[Any], None] | None = None,
+                     on_rejected: Callable[[Any], None] | None = None,
+                     on_rework: Callable[[Any], None] | None = None,
+                     on_started: Callable[[Any], None] | None = None,
+                     on_cancelled: Callable[[Any], None] | None = None,
                      describe: Describe | None = None,
                      facts: Facts | None = None,
                      fact_fields: FactFields | None = None,
@@ -206,7 +246,10 @@ def register_subject(subject_type: str, *, label: str, model: type,
                      approver_fields: ApproverFields | None = None,
                      on_event: OnEvent | None = None,
                      requirement_fields: RequirementFields | None = None,
-                     check_requirement: CheckRequirement | None = None) -> Subject:
+                     check_requirement: CheckRequirement | None = None,
+                     options: Options | None = None,
+                     check_option: CheckOption | None = None,
+                     on_option: OnOption | None = None) -> Subject:
     """Объявить тип объектов согласуемым.
 
     Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
@@ -264,6 +307,13 @@ def register_subject(subject_type: str, *, label: str, model: type,
             f"«{subject_type}»: requirement_fields объявлены без "
             f"check_requirement — требование будет некому проверить"
         )
+    if (check_option is not None or on_option is not None) and options is None:
+        # Та же пара, что requirement_fields/check_requirement: голосовать
+        # не за что, а проверка или журнал голоса объявлены.
+        raise ValueError(
+            f"«{subject_type}»: check_option/on_option объявлены без options — "
+            f"вариантов для голоса нет"
+        )
     # Сами ``fact_fields()`` здесь НЕ вызываются: регистрация идёт из
     # AppConfig.ready(), где обращаться в БД нельзя (см. докстринг
     # interface.py), а варианты выбора приходят как раз из справочника.
@@ -278,6 +328,7 @@ def register_subject(subject_type: str, *, label: str, model: type,
         approvers=approvers, approver_fields=approver_fields,
         on_event=on_event,
         requirement_fields=requirement_fields, check_requirement=check_requirement,
+        options=options, check_option=check_option, on_option=on_option,
         takes_scope_fact_fields=_takes_scope(fact_fields),
         takes_scope_approver_fields=_takes_scope(approver_fields),
         takes_scope_requirement_fields=_takes_scope(requirement_fields),
@@ -377,7 +428,7 @@ def requirement_fields_for(subject_type: str, scope: str = "") -> list[dict]:
     return out
 
 
-def check_requirement_for(subject_type: str, subject_id: int, key: str) -> str | None:
+def check_requirement_for(subject_type: str, subject_id: Any, key: str) -> str | None:
     """Выполнено ли требование этапа на объекте; строка — почему нет.
 
     Ошибку НЕ глушим — как у ``facts_for`` и ``approvers_for``: здесь
@@ -387,16 +438,46 @@ def check_requirement_for(subject_type: str, subject_id: int, key: str) -> str |
     subject = get_subject(subject_type)
     if subject.check_requirement is None:
         return None
-    reason = subject.check_requirement(subject_id, key)
+    reason = subject.check_requirement(_native(subject, subject_id), key)
     return str(reason) if reason else None
 
 
-def scope_for(subject_type: str, subject_id: int) -> str:
+def options_for(subject_type: str, subject_id: Any) -> list[dict]:
+    """Варианты выбора на согласовании; пусто — выбирать не из чего.
+
+    Ошибку не глушим: список решает, что именно согласуют, и сломанный
+    колбэк обязан быть виден, а не молча превращать выбор в «как есть».
+    """
+    subject = get_subject(subject_type)
+    if subject.options is None:
+        return []
+    return [{"key": str(item["key"]), "label": str(item["label"])}
+            for item in (subject.options(_native(subject, subject_id)) or [])]
+
+
+def check_option_for(subject_type: str, subject_id: Any, key: str) -> str | None:
+    subject = get_subject(subject_type)
+    if subject.check_option is None:
+        return None
+    reason = subject.check_option(_native(subject, subject_id), key)
+    return str(reason) if reason else None
+
+
+def on_option_for(subject_type: str, subject_id: Any, stage_order: int,
+                  user_id: int, option_key: str) -> None:
+    """Сообщить предметной аппке голос за вариант (``OnOption``). Ошибку не
+    глушим: доменная запись голоса — часть решения, а не его украшение."""
+    subject = get_subject(subject_type)
+    if subject.on_option is not None:
+        subject.on_option(_native(subject, subject_id), stage_order, user_id, option_key)
+
+
+def scope_for(subject_type: str, subject_id: Any) -> str:
     """Область объекта; ``""`` у типов без областей."""
     subject = get_subject(subject_type)
     if subject.scope_of is None:
         return ""
-    return str(subject.scope_of(subject_id) or "")
+    return str(subject.scope_of(_native(subject, subject_id)) or "")
 
 
 def scopes_for(subject_type: str) -> list[dict]:
@@ -425,17 +506,17 @@ def scope_label(subject_type: str, scope: str) -> str | None:
     return None
 
 
-def approvers_for(subject_type: str, subject_id: int, key: str) -> list[int]:
+def approvers_for(subject_type: str, subject_id: Any, key: str) -> list[int]:
     """Кого объект называет согласующими по ключу. Ошибку НЕ глушим — как
     у ``facts_for``: здесь решается, кто согласует."""
     subject = get_subject(subject_type)
     if subject.approvers is None:
         return []
-    raw = subject.approvers(subject_id, key) or []
+    raw = subject.approvers(_native(subject, subject_id), key) or []
     return [int(user_id) for user_id in dict.fromkeys(raw) if user_id is not None]
 
 
-def facts_for(subject_type: str, subject_id: int) -> dict:
+def facts_for(subject_type: str, subject_id: Any) -> dict:
     """Факты объекта — то, по чему выбираются ветки и что ложится в журнал.
 
     Ошибку ``facts()`` НЕ глушим, в отличие от ``describe()``: заголовок
@@ -447,8 +528,58 @@ def facts_for(subject_type: str, subject_id: int) -> dict:
     subject = get_subject(subject_type)
     if subject.facts is None:
         return {}
-    return conditions.normalize_facts(subject.facts(subject_id))
+    return conditions.normalize_facts(subject.facts(_native(subject, subject_id)))
 
 
 def is_registered(subject_type: str) -> bool:
     return subject_type in _SUBJECTS
+
+
+class BadSubjectId(UnknownSubject):
+    """Ключ не подходит модели типа — ``"abc"`` у документа с целым ключом.
+
+    Наследует ``UnknownSubject``, чтобы все, кто уже переводит его в 409,
+    переводили и этот случай: объекта с таким ключом у типа нет и быть не может.
+    """
+
+
+def _native(subject: Subject, subject_id: Any) -> Any:
+    try:
+        return subject.model._meta.pk.to_python(subject_id)
+    except ValidationError as exc:
+        raise BadSubjectId(
+            f"«{subject_id}» не может быть ключом объекта «{subject.label}»") from exc
+
+
+def native_id(subject_type: str, subject_id: Any) -> Any:
+    """Ключ объекта в типе ключа ЕГО модели: ``"5"`` → ``5``, строка UUID → ``UUID``.
+
+    ``ApprovalProcess.subject_id`` — строка (мастер-план БЗО, D-05: документы
+    ``apps.bpp`` адресуются UUID). Колбэки предметной аппки получают ключ
+    таким, каким его знает её модель: аппкам с целыми ключами (contracts,
+    approvals, hr) менять ничего не пришлось, и ``subject_id == obj.pk`` в их
+    коде остаётся верным.
+    """
+    return _native(get_subject(subject_type), subject_id)
+
+
+def native_ids(subject_type: str, subject_ids) -> list:
+    """``native_id`` для списка; у незарегистрированного типа — ключи как есть."""
+    if not is_registered(subject_type):
+        return list(subject_ids)
+    subject = get_subject(subject_type)
+    return [_native(subject, subject_id) for subject_id in subject_ids]
+
+
+def storage_key(subject_type: str, subject_id: Any) -> str:
+    """Ключ так, как его хранит ``ApprovalProcess.subject_id``: каноническая
+    строка ключа модели (``"5"``; UUID — в нижнем регистре с дефисами).
+
+    Один объект, переданный целым, строкой или ``UUID``, адресует одну строку
+    процесса. Иначе ``"5"`` и ``"05"`` (или UUID в разном регистре) завели бы
+    два параллельных согласования в обход частичного уникального индекса.
+    У незарегистрированного типа приводить не к чему — строка как есть.
+    """
+    if not is_registered(subject_type):
+        return str(subject_id)
+    return str(native_id(subject_type, subject_id))
