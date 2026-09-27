@@ -14,9 +14,11 @@ export interface NotificationPrefs {
   telegram: boolean;
   /** Чат Telegram привязан — без него канал Telegram не включается. */
   telegram_linked: boolean;
+  /** Бот портала настроен — без него подключить Telegram нельзя (503 `E-NTF-03`). */
+  telegram_available: boolean;
 }
 
-export type NotificationPrefsPatch = Partial<Omit<NotificationPrefs, 'telegram_linked'>>;
+export type NotificationPrefsPatch = Partial<Omit<NotificationPrefs, 'telegram_linked' | 'telegram_available'>>;
 
 const path = (suffix: string) => apiPath('notifications', suffix);
 

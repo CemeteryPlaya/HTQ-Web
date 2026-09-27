@@ -13,6 +13,7 @@ BASE = "/api/notifications/v1"
 
 @pytest.mark.django_db
 def test_link_flow(settings):
+    settings.NOTIFY_TELEGRAM_BOT_TOKEN = "123:bot"
     settings.NOTIFY_TELEGRAM_BOT_NAME = "htq_notify_bot"
     settings.NOTIFY_TELEGRAM_WEBHOOK_SECRET = "s3cret"
     auth = {"HTTP_AUTHORIZATION": f"Bearer {token(user_id=7, sub='7')}"}
@@ -48,3 +49,19 @@ def test_webhook_with_broken_json_is_400(settings):
                              content_type="application/json",
                              HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="s3cret")
     assert response.status_code == 400
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("missing", ["NOTIFY_TELEGRAM_BOT_TOKEN", "NOTIFY_TELEGRAM_BOT_NAME",
+                                     "NOTIFY_TELEGRAM_WEBHOOK_SECRET"])
+def test_link_without_bot_is_503(settings, missing):
+    """Без токена, имени бота или секрета вебхука привязка не сработает — вместо
+    нерабочей ссылки ``t.me/?start=`` честный ответ «бот не настроен»."""
+    settings.NOTIFY_TELEGRAM_BOT_TOKEN = "123:bot"
+    settings.NOTIFY_TELEGRAM_BOT_NAME = "htq_notify_bot"
+    settings.NOTIFY_TELEGRAM_WEBHOOK_SECRET = "s3cret"
+    setattr(settings, missing, "")
+    auth = {"HTTP_AUTHORIZATION": f"Bearer {token(user_id=7, sub='7')}"}
+    response = Client().post(f"{BASE}/telegram/link", **auth)
+    assert response.status_code == 503 and response.json()["code"] == "E-NTF-03"
+    assert not TelegramLink.objects.exists()

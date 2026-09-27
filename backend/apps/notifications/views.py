@@ -90,7 +90,8 @@ def delete_one(request, notification_id: str):
 def _prefs_payload(user_id: int) -> dict:
     prefs = center.prefs_of(user_id)
     return {"bell": prefs.bell, "email": prefs.email, "telegram": prefs.telegram,
-            "telegram_linked": telegram.is_linked(user_id)}
+            "telegram_linked": telegram.is_linked(user_id),
+            "telegram_available": telegram.available()}
 
 
 @api_view(methods=("GET",))

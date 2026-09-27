@@ -42,7 +42,8 @@ def test_cannot_disable_every_channel():
                              content_type="application/json", **_auth())
     assert refused.status_code == 422 and refused.json()["code"] == "E-NTF-01"
     assert Client().get(url, **_auth()).json() == {"bell": True, "email": False,
-                                                   "telegram": False, "telegram_linked": False}
+                                                   "telegram": False, "telegram_linked": False,
+                                                   "telegram_available": False}
 
 
 @pytest.mark.django_db
@@ -80,3 +81,11 @@ def test_malformed_id_is_404():
 def test_bad_limit_is_422():
     response = Client().get(f"{BASE}/notifications?limit=abc", **_auth())
     assert response.status_code == 422
+
+
+@pytest.mark.django_db
+def test_prefs_report_telegram_availability(settings):
+    settings.NOTIFY_TELEGRAM_BOT_TOKEN = "123:bot"
+    settings.NOTIFY_TELEGRAM_BOT_NAME = "htq_notify_bot"
+    settings.NOTIFY_TELEGRAM_WEBHOOK_SECRET = "s3cret"
+    assert Client().get(f"{BASE}/prefs", **_auth()).json()["telegram_available"] is True
