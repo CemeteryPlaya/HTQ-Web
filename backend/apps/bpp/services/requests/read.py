@@ -14,6 +14,7 @@ from django.db.models import Q
 from apps.bpp.models import PurchaseRequest, RequestStatus
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.budget import balance as budget_balance
+from apps.bpp.services.core import files as core_files
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
@@ -103,6 +104,7 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
             "status": item.status,
         } for item in items],
         "current_holders": holders,
+        "files": core_files.list_files(req),
         "allowed_actions": service.allowed_actions(actor, req),
     }
 

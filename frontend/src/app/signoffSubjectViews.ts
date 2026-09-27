@@ -66,6 +66,10 @@ export const intKeyed = (load: Loader<IntSubjectViewProps>): SubjectView =>
   });
 
 export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
+  // Модуль БЗО — документы с UUID-ключом.
+  'bpp.purchase_request': stringKeyed(
+    () => import('@/features/bpp/requests/RequestSignoffView'),
+  ),
   // Заявка конструктора «Запросы»: тот же движок согласует и её.
   'approvals.request': intKeyed(
     () => import('@/features/requests/components/RequestSubjectView'),
