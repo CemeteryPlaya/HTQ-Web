@@ -164,6 +164,33 @@ def test_unknown_box_falls_back_to_inbox():
 # ── draft editing ───────────────────────────────────────────────────────
 
 @pytest.mark.django_db
+def test_draft_patch_does_not_overwrite_a_concurrent_submission(monkeypatch):
+    """PATCH пишет только свои поля и под блокировкой строки: отправка,
+    закоммиченная между чтением и записью черновика, не откатывается его
+    полным save() — иначе заявка «забыла» бы, что уже уходила на согласование."""
+    from django.utils import timezone
+
+    from apps.approvals.services import instance_service
+
+    instance = make_instance(make_template())
+    sent_at = timezone.now()
+    real_derived = instance_service._derived
+
+    def _submitted_meanwhile(schema, values):
+        RequestInstance.objects.filter(pk=instance.pk).update(submitted_at=sent_at)
+        return real_derived(schema, values)
+
+    monkeypatch.setattr(instance_service, "_derived", _submitted_meanwhile)
+    resp = patch_json(Client(), f"{BASE}/instances/{instance.id}/",
+                      {"form_values": {"amount": 5}}, **auth())
+
+    assert resp.status_code == 200, resp.content
+    instance.refresh_from_db()
+    assert instance.submitted_at == sent_at
+    assert instance.form_values_json == {"amount": 5}
+
+
+@pytest.mark.django_db
 def test_only_the_initiator_can_edit_a_draft():
     template = make_template()
     instance = make_instance(template, initiator_id=OTHER)

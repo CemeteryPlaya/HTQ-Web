@@ -10,6 +10,7 @@ PREFIX_TO_SERVICE = {
     "/api/requests/": "approvals",
     "/api/cms/": "cms",
     "/api/media/": "media",
+    "/api/files/": "files",
     "/api/email/": "mail",
     "/api/messenger/": "messenger",
     "/api/contracts/": "contracts",

@@ -46,14 +46,15 @@ import type { ApprovalProcess, ApprovalState } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
 import { ApprovalStateBadge } from './states';
+import type { SubjectId } from './subjectId';
 import { useTranslation } from 'react-i18next';
 
-interface Props {
+interface Props<Id extends SubjectId> {
   subjectType: string;
-  subjectId: number;
+  subjectId: Id;
   state: ApprovalState;
   /** Эндпоинт предметной аппки — `contractsApi.submitBudget` и соседи. */
-  submit: (id: number) => Promise<AxiosResponse<ApprovalProcess>>;
+  submit: (id: Id) => Promise<AxiosResponse<ApprovalProcess>>;
   /** Ключи TanStack Query, которые надо сбросить после отправки. */
   invalidate?: readonly (readonly unknown[])[];
   size?: 'sm' | 'default';
@@ -82,7 +83,7 @@ interface Props {
   blockedReason?: string | null;
 }
 
-export function SubmitForApproval({
+export function SubmitForApproval<Id extends SubjectId>({
   subjectType,
   subjectId,
   state,
@@ -92,7 +93,7 @@ export function SubmitForApproval({
   showProcessLink = false,
   showState = true,
   blockedReason = null,
-}: Props) {
+}: Props<Id>) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [startedId, setStartedId] = useState<number | null>(null);

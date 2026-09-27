@@ -22,7 +22,7 @@ def test_known_scopes_are_the_seven_source_scopes_plus_post_migration_ones():
     """
     ported = {"avatar", "news", "chat", "hr_doc", "hr_department",
               "task_attachment", "generic"}
-    added_after_cutover = {"signoff_doc", "bpp_doc"}
+    added_after_cutover = {"signoff_doc", "file_object", "bpp_doc"}
 
     assert KNOWN_SCOPES == ported | added_after_cutover
 
@@ -36,6 +36,35 @@ def test_signoff_doc_policy():
     assert p.max_mb == 25
     assert p.mimes == ("application/pdf",)
     assert p.variants == ()
+
+
+def test_file_object_policy():
+    """Документы объектов ТЗ §21 (``apps.files``): потолок форматов и размера
+    — PDF/DOCX/XLSX/JPG/PNG и xml счёт-фактуры (мастер-план БЗО, D-31) до
+    20 МБ, приватные, ключ по папке владельца, картинки без перекодирования
+    (SHA-256 должен описывать хранимые байты), отдаются только по ссылке
+    владельца (``owner_gated``)."""
+    p = get_policy("file_object")
+    assert p.public is False
+    assert p.max_mb == 20
+    assert set(p.mimes) == {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "image/jpeg",
+        "image/png",
+        "application/xml",
+    }
+    assert p.variants == ()
+    assert p.folder_layout is True
+    assert p.keep_original is True
+    assert p.owner_gated is True
+
+
+def test_only_file_object_uses_folder_layout_keeps_originals_and_is_owner_gated():
+    assert {s for s in KNOWN_SCOPES if get_policy(s).folder_layout} == {"file_object"}
+    assert {s for s in KNOWN_SCOPES if get_policy(s).keep_original} == {"file_object"}
+    assert {s for s in KNOWN_SCOPES if get_policy(s).owner_gated} == {"file_object"}
 
 
 def test_avatar_policy():
@@ -114,3 +143,15 @@ def test_resolve_is_public_allows_opt_in_for_private_scopes():
     assert resolve_is_public("chat", True) is True
     assert resolve_is_public("generic", True) is True
     assert resolve_is_public("generic", False) is False
+
+
+def test_xml_signature_accepts_markup_and_rejects_binary():
+    """Счёт-фактура в xml: разметка — с BOM UTF-8 или без, с ведущими
+    пробелами — проходит; байты другого формата — нет."""
+    from apps.media_files.services.content_signature import SignatureCheck, verify_signature
+
+    bom = bytes((0xEF, 0xBB, 0xBF))
+    for data in (b'<?xml version="1.0"?><a/>', bom + b"<a/>", b"  \n<a/>"):
+        assert verify_signature(data, "application/xml") is SignatureCheck.MATCH
+    for data in (b"%PDF-1.4", b"MZ\x90\x00", b"plain text"):
+        assert verify_signature(data, "application/xml") is SignatureCheck.MISMATCH

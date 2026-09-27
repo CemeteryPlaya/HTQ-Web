@@ -65,6 +65,8 @@ const STAGE_STATE_TONES: Record<StageState, Tone> = {
   rejected: REJECTED_TONE,
   rework: REWORK_TONE,
   skipped: MUTED_TONE,
+  // Документ ждёт назначения — внимания требует так же, как возврат.
+  no_executor: REWORK_TONE,
 };
 
 const TASK_STATE_TONES: Record<TaskState, Tone> = {

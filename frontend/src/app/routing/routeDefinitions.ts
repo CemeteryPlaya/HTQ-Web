@@ -154,6 +154,12 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/signoff/routes', component: lazyPages.SignoffRouteList, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
   { path: '/signoff/routes/:id', component: lazyPages.SignoffRouteEditor, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
 
+  // ─── Модуль БЗО (apps.bpp): документ по прямой ссылке ─────────────────
+  // Сюда ведут ссылки согласования и уведомлений. Раздел /bpp с реестрами и
+  // формами придёт с каркасом A2.1; права на сам документ проверяет бэкенд.
+  { path: '/bpp/requests/:id', component: lazyPages.BppRequest, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
+  { path: '/bpp/accountable/:id', component: lazyPages.BppAccountable, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
+
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },
 

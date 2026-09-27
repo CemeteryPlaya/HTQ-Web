@@ -77,6 +77,10 @@ urlpatterns = [
     path("positions/<int:id>/substitutions/", views.position_substitutions),
     path("substitutions/<int:sub_id>", views.substitution_detail),
     path("substitutions/<int:sub_id>/", views.substitution_detail),
+    path("acting-assignments", views.acting_collection),
+    path("acting-assignments/", views.acting_collection),
+    path("acting-assignments/<int:assignment_id>", views.acting_detail),
+    path("acting-assignments/<int:assignment_id>/", views.acting_detail),
 
     # ── employees ─────────────────────────────────────────────────────────
     # Литеральный роут (me/) — ДО /<int:id>/, ровно как в роутере исходника

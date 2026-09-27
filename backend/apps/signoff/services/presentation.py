@@ -20,6 +20,7 @@ from apps.signoff.models import (
     ApprovalProcess,
     ApprovalProcessStage,
     ApprovalTask,
+    ProcessState,
     StageState,
     TaskState,
 )
@@ -57,6 +58,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         "created_at": process.created_at,
         "finished_at": process.finished_at,
         "subject_facts": process.subject_facts or {},
+        "route_flags": process.route_flags or {},
         "stages": [
             {
                 "id": stage.pk,
@@ -72,8 +74,10 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "approver_key": stage.approver_key or "",
                 "requires_attachment": stage.requires_attachment,
                 "requires_comment": stage.requires_comment,
+                "votes_option": stage.votes_option,
                 "requirement_key": stage.requirement_key or "",
                 "requirement_label": requirement_labels.get(stage.requirement_key or ""),
+                "activated_at": stage.activated_at,
                 "decided_at": stage.decided_at,
                 "tasks": [
                     serialize_task(task, names=names, urls=enrich)
@@ -83,6 +87,18 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
             for stage in stages
         ],
     }
+
+    if enrich and process.state == ProcessState.PENDING:
+        # Между чем выбирает тот, чей ход: без этого кнопке «Согласовать»
+        # нечего предложить. Только у идущего процесса — у завершённого
+        # выбор уже сделан и лежит в голосах.
+        # Только если текущая группа выбирает вариант (``votes_option``,
+        # D-25): остальным этапам предлагать выбор незачем — движок его и
+        # не спросит.
+        from apps.signoff.services import engine
+
+        card["options"] = (registry.options_for(process.subject_type, process.subject_id)
+                           if engine.voting_stages_now(process) else [])
 
     if enrich:
         described = describe_many([(process.subject_type, process.subject_id)])
@@ -121,6 +137,10 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
         "comment": task.comment,
         "acted_at": task.acted_at,
         "file_id": task.file_id or None,
+        # За какой вариант отдан голос, если был выбор (исходный документ или
+        # альтернатива) — следующие этапы видят голоса предыдущих (ТЗ §12.4).
+        "option_key": task.option_key or None,
+        "option_label": task.option_label or None,
     }
     if urls and task.file_id:
         card["file_url"] = attachments.file_url(task.file_id)
@@ -218,7 +238,7 @@ def _stage_counts(process_ids: set[int]) -> dict[int, int]:
                 .values_list("process_id", "n"))
 
 
-def describe_many(pairs) -> dict[tuple[str, int], dict]:
+def describe_many(pairs) -> dict[tuple[str, str], dict]:
     """``{(subject_type, subject_id): {title, url}}`` через колбэки аппок.
 
     ``describe`` предметной аппки принимает по одному id, поэтому пачка
@@ -227,7 +247,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
     список «ждёт решения» у человека — это единицы строк, и лишний метод в
     контракте каждой предметной аппки стоил бы дороже.
     """
-    out: dict[tuple[str, int], dict] = {}
+    out: dict[tuple[str, str], dict] = {}
     for subject_type, subject_id in dict.fromkeys(pairs):
         try:
             subject = registry.get_subject(subject_type)
@@ -245,7 +265,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
             continue
 
         try:
-            info = subject.describe(subject_id) or {}
+            info = subject.describe(registry.native_id(subject_type, subject_id)) or {}
         except Exception:
             logger.warning("signoff: describe() для %s#%s упал",
                            subject_type, subject_id, exc_info=True)

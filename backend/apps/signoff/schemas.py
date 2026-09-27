@@ -9,9 +9,9 @@
 """
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from apps.signoff.models import (
     ApproverKind,
@@ -21,6 +21,12 @@ from apps.signoff.models import (
     TaskState,
 )
 from apps.signoff.services.conditions import OPS
+
+# Ключ объекта согласования. Хранится и отдаётся строкой
+# (ApprovalProcess.subject_id): документы модуля БЗО адресуются UUID.
+# Целое от старых клиентов принимается и приводится к строке — контракт ручек
+# предметных аппок не ломается.
+SubjectId = Annotated[str, BeforeValidator(str), StringConstraints(min_length=1, max_length=64)]
 
 _ORM = ConfigDict(from_attributes=True)
 
@@ -55,7 +61,19 @@ Condition = list[Predicate]
 
 # ── Маршруты ────────────────────────────────────────────────────────────
 
-class RouteCreate(BaseModel):
+class RouteFlags(BaseModel):
+    """Флаги маршрута (мастер-план БЗО, D-21) — все выключены по умолчанию.
+    «Роли» здесь — HR-должности, как у согласующих этапов."""
+
+    forbid_self_approval: bool = False
+    reject_comment_min: int = Field(0, ge=0, le=500)
+    lazy_resolution: bool = False
+    no_executor_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
+class RouteCreate(RouteFlags):
     subject_type: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=200)
     is_active: bool = True
@@ -64,8 +82,21 @@ class RouteCreate(BaseModel):
 
 
 class RouteUpdate(BaseModel):
+    """Патч: применяются только присланные поля (``exclude_unset``)."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     is_active: Optional[bool] = None
+    forbid_self_approval: Optional[bool] = None
+    reject_comment_min: Optional[int] = Field(None, ge=0, le=500)
+    lazy_resolution: Optional[bool] = None
+    no_executor_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
+
+
+class PositionBrief(BaseModel):
+    id: int
+    title: str = ""
 
 
 class StageCreate(BaseModel):
@@ -98,6 +129,7 @@ class StageCreate(BaseModel):
     approver_key: str = Field("", max_length=64)
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     # Что этап требует от ОБЪЕКТА (ключ из ``requirement_fields`` типа) —
     # проверяет сервис, как и ключ согласующих.
     requirement_key: str = Field("", max_length=64)
@@ -144,6 +176,7 @@ class StageUpdate(BaseModel):
     approver_key: Optional[str] = Field(None, max_length=64)
     requires_attachment: Optional[bool] = None
     requires_comment: Optional[bool] = None
+    votes_option: Optional[bool] = None
     requirement_key: Optional[str] = Field(None, max_length=64)
 
 
@@ -177,6 +210,7 @@ class StageRead(BaseModel):
     approver_kind: ApproverKind = ApproverKind.POSITION
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     # Настройка двух других видов: люди поимённо (с именами для редактора)
     # и ключ «назначает объект» с подписью из ``approver_fields``.
     user_ids: list[int] = Field(default_factory=list)
@@ -211,6 +245,16 @@ class RouteRead(BaseModel):
     scope_label: Optional[str] = None
     name: str
     is_active: bool
+    # Флаги маршрута (D-21) и подписи их должностей.
+    forbid_self_approval: bool = False
+    reject_comment_min: int = 0
+    lazy_resolution: bool = False
+    no_executor_notify_position_ids: list[int] = Field(default_factory=list)
+    escalation_position_id: Optional[int] = None
+    self_skip_notify_position_ids: list[int] = Field(default_factory=list)
+    no_executor_notify_positions: list[PositionBrief] = Field(default_factory=list)
+    escalation_position: Optional[PositionBrief] = None
+    self_skip_notify_positions: list[PositionBrief] = Field(default_factory=list)
     stages: list[StageRead]
     # Схема области — только в карточке одного маршрута (редактор): по каким
     # фактам ветвить и какие ключи «назначает объект» предлагать.
@@ -232,7 +276,7 @@ class RouteRead(BaseModel):
 
 class ProcessStart(BaseModel):
     subject_type: str = Field(..., min_length=1, max_length=64)
-    subject_id: int
+    subject_id: SubjectId
     initiator_id: Optional[int] = None
     # None — область назовёт сама предметная аппка (``Subject.scope_of``).
     scope: Optional[str] = Field(None, max_length=64)
@@ -251,6 +295,9 @@ class TaskRead(BaseModel):
     # даже там, если media выключен (см. attachments.file_url).
     file_id: Optional[str] = None
     file_url: Optional[str] = None
+    # Голос за вариант, когда было из чего выбирать (ТЗ §12.4).
+    option_key: Optional[str] = None
+    option_label: Optional[str] = None
 
 
 class ProcessStageRead(BaseModel):
@@ -274,8 +321,11 @@ class ProcessStageRead(BaseModel):
     approver_key: str = ""
     requires_attachment: bool = False
     requires_comment: bool = False
+    votes_option: bool = False
     requirement_key: str = ""
     requirement_label: Optional[str] = None
+    # Когда этап стал активным — «Сейчас у … с …» (B1.3).
+    activated_at: Optional[datetime] = None
     decided_at: Optional[datetime]
     tasks: list[TaskRead]
 
@@ -283,7 +333,7 @@ class ProcessStageRead(BaseModel):
 class ProcessRead(BaseModel):
     id: int
     subject_type: str
-    subject_id: int
+    subject_id: SubjectId
     scope: str = ""
     state: ProcessState
     initiator_id: Optional[int]
@@ -294,6 +344,8 @@ class ProcessRead(BaseModel):
     # Факты, по которым выбирались ветки, на момент запуска — ответ на
     # вопрос «почему согласуют именно эти люди» через год после запуска.
     subject_facts: dict = Field(default_factory=dict)
+    # Флаги маршрута на момент запуска (D-21); у процессов до флагов пусто.
+    route_flags: dict = Field(default_factory=dict)
     # Карточка предметного объекта — из describe() его аппки. signoff не
     # умеет её построить сам и не должен.
     subject_title: Optional[str] = None
@@ -301,6 +353,9 @@ class ProcessRead(BaseModel):
     # Имя инициатора (из apps.users) — только в обогащённой карточке; сосед
     # через interface получает по-прежнему один initiator_id.
     initiator_name: Optional[str] = None
+    # Варианты для решения «согласовать» у идущего процесса: исходный
+    # документ и его альтернативы. Пусто или один — выбирать не из чего.
+    options: list[dict] = Field(default_factory=list)
 
 
 # ── Решения ─────────────────────────────────────────────────────────────
@@ -310,6 +365,9 @@ class Decision(BaseModel):
     # отказе, но объект остаётся правимым (``models.ApprovalState``).
     decision: str = Field(..., pattern="^(approve|reject|rework)$")
     comment: str = Field("", max_length=2000)
+    # Ключ варианта из ``ProcessRead.options`` — обязателен у «согласовать»,
+    # когда вариантов больше одного.
+    option_key: str = Field("", max_length=64)
 
 
 class Rework(BaseModel):
@@ -329,7 +387,7 @@ class InboxItem(BaseModel):
     task_id: int
     process_id: int
     subject_type: str
-    subject_id: int
+    subject_id: SubjectId
     subject_title: Optional[str]
     subject_url: Optional[str]
     stage_name: str
@@ -389,12 +447,42 @@ class SubjectRead(BaseModel):
     requirement_fields: list[ApproverFieldRead] = Field(default_factory=list)
 
 
-class BatchDecision(BaseModel):
-    """Одно решение по нескольким запросам сразу — «одобрить всё выбранное»."""
+class BatchDecisionItem(BaseModel):
+    """Элемент массового решения — со своим комментарием и вариантом голоса
+    (мастер-план БЗО, B1.3)."""
 
-    task_ids: list[int] = Field(..., min_length=1, max_length=100)
+    task_id: int
     decision: str = Field(..., pattern="^(approve|reject|rework)$")
     comment: str = Field("", max_length=2000)
+    option_key: str = Field("", max_length=64)
+
+
+class BatchDecision(BaseModel):
+    """Решения по нескольким запросам сразу — «одобрить всё выбранное».
+
+    Прежняя форма — одно решение и один комментарий на все ``task_ids``;
+    новая — ``items``, у каждого своё. Ровно одна из двух."""
+
+    task_ids: Optional[list[int]] = Field(None, min_length=1, max_length=100)
+    decision: Optional[str] = Field(None, pattern="^(approve|reject|rework)$")
+    comment: str = Field("", max_length=2000)
+    items: Optional[list[BatchDecisionItem]] = Field(None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def _one_shape(self):
+        if self.items is not None:
+            if self.task_ids is not None:
+                raise ValueError("Передайте либо items, либо task_ids с decision")
+            return self
+        if not self.task_ids or not self.decision:
+            raise ValueError("Нужны items или task_ids вместе с decision")
+        return self
+
+    def as_items(self) -> list[dict]:
+        if self.items is not None:
+            return [item.model_dump() for item in self.items]
+        return [{"task_id": task_id, "decision": self.decision, "comment": self.comment}
+                for task_id in self.task_ids]
 
 
 class BatchDecisionResult(BaseModel):

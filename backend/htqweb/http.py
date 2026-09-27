@@ -27,6 +27,20 @@ def json_error(detail, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
 
 
+class ApiError(Exception):
+    """Отказ, который сам знает свой HTTP-статус и текст для человека.
+
+    ``api_view`` отдаёт его как ``{"detail": detail}`` с ``status_code``, а не
+    общим 500. Нужен там, где отказ рождается глубоко в соседе и проходит
+    сквозь чужую вьюху: отказ пайплайна загрузки media (размер, формат,
+    антивирус — ``UploadValidationError``) из вьюхи договорного контура без
+    этого становился «Internal Server Error». Наследник задаёт оба атрибута.
+    """
+
+    status_code: int = 400
+    detail: str = ""
+
+
 def validation_detail(exc: ValidationError) -> list[dict]:
     """Ошибки валидации тела в JSON-безопасном виде.
 
@@ -226,6 +240,8 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                         idempotency.release(request, idem_key)
             except DomainError as exc:
                 return JsonResponse(exc.payload(), status=exc.status)
+            except ApiError as exc:
+                return json_error(exc.detail or str(exc), exc.status_code)
             except ServiceDisabled as exc:
                 # require_service() у выключенного соседа — та же 503-envelope,
                 # что и внешний HTTP-гейт (ServiceGateMiddleware), иначе

@@ -190,6 +190,34 @@ class SubstitutionUpdate(OrderedDates):
         return self
 
 
+# ── временные исполнители должностей (мастер-план БЗО, B1.1) ────────────────
+
+class ActingAssignmentCreate(OrderedDates):
+    position_id: int
+    employee_id: int
+    date_from: date
+    date_to: date
+    basis: str = Field(..., min_length=1, max_length=255)
+
+
+class ActingAssignmentUpdate(OrderedDates):
+    """Патч через ``exclude_unset``. Все колонки NOT NULL, поэтому явный
+    ``null`` в присланном поле — 422 здесь, а не IntegrityError в БД."""
+
+    position_id: int | None = None
+    employee_id: int | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    basis: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _no_explicit_null(self):
+        for field in self.model_fields_set:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} не может быть null")
+        return self
+
+
 # ── employees — порт services/hr/app/schemas/employee.py ────────────────────
 #
 # ``status`` — ШЕСТЬ значений контракта (см. models.py::EmployeeStatus

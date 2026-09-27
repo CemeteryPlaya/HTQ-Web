@@ -14,6 +14,10 @@ from .base import *  # noqa: F403
 INSTALLED_APPS = [
     *INSTALLED_APPS,
     "apps.signoff.tests.testapp.apps.SignoffTestAppConfig",
+    # Пробные владельцы документов для файловой подсистемы — тот же приём:
+    # подсистема универсальна, а её настоящие владельцы (документы модуля
+    # БЗО) ещё не написаны.
+    "apps.files.tests.testapp.apps.FilesTestAppConfig",
 ]  # noqa: F405
 
 # Тесты бьют напрямую в Postgres контейнера htqweb1-db-1, не через PgBouncer:
@@ -52,6 +56,10 @@ CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BROKER_URL = "memory://"
 CELERY_RESULT_BACKEND = "cache+memory://"
 JWT_SECRET = "test-secret-key-for-htqweb-tests-32b"
+# Антивирус выключен явно, что бы ни лежало в окружении: тесты проверяют
+# клиент clamd поддельным сервером (apps/core/tests/test_antivirus.py), а не
+# живым контейнером.
+ANTIVIRUS_CLAMD_HOST = ""
 
 # Тесты идут в строгом режиме: fallback (htqweb/fallback.py) не подменяет
 # значение, а поднимает FallbackNotAllowed. Это и есть главная ценность

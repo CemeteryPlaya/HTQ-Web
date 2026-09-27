@@ -364,6 +364,13 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // Файловая подсистема ТЗ §21 (apps.files). Легаси-путей без /v1/ нет —
+    // одной строки достаточно; без неё загрузка документа ушла бы в сам
+    // dev-сервер (см. предупреждение у /api/access/ выше).
+    "^/api/files/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     // Модуль БЗО и его платформенные аппки. Легаси-путей без /v1/ нет — по
     // строке на домен; без неё запрос уйдёт в сам dev-сервер и вернёт
     // index.html (сторож src/api/endpoints.proxy.test.ts).

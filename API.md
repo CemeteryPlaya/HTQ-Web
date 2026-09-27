@@ -120,6 +120,7 @@ same backend.
 | `/api/email/v1/webhooks/`           | `backend` (WSGI)   | Gmail Pub/Sub + Graph + Mailcow push — **no** rate limit |
 | `/api/media/v1/files/` (POST)       | `backend` (WSGI)   | Upload — hard size/rate limit, buffering off |
 | `/api/media/`                       | `backend` (WSGI)   | Read/metadata + edge cache of public variants |
+| `/api/files/v1/`                    | `backend` (WSGI)   | Файловая подсистема ТЗ §21: `client_max_body_size 21M`, зоны `files_upload` (только POST) + `api_general`, 413 — JSON `E-FIL-02` вместо HTML nginx |
 | `/api/users/v1/*`                   | `backend` (WSGI)   | Auth, profile, registrations, items, admin   |
 | `/api/hr/v1/*`                      | `backend` (WSGI)   | Employees, departments, vacancies, time      |
 | `/api/tasks/v1/*`                   | `backend` (WSGI)   | Tasks, calendar, sequences, attachments      |
@@ -451,6 +452,8 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
 | `/api/hr/v1/positions/{id}/substitutions` | GET, POST | Substitution matrix — GET: JWT, POST: admin=True |
 | `/api/hr/v1/substitutions/{id}`          | PATCH, DELETE | Edit/delete (admin=True) |
+| `/api/hr/v1/acting-assignments`          | GET, POST | Temporary position holders (BPP D-22): who acts for a position `date_from`..`date_to` (inclusive), `basis`. GET `?position_id=&employee_id=&active_on=YYYY-MM-DD` — `hr:read`; POST — `hr:admin`. 422 with a readable reason for an inactive position, a non-working employee or one without an account, dates out of order |
+| `/api/hr/v1/acting-assignments/{id}`     | PATCH, DELETE | Edit (partial, dates re-checked) / delete — `hr:admin` |
 | `/api/hr/v1/approvals/{subject_type}/{id}/submit` | POST | Отправить кадровый объект на согласование через `apps.signoff`. JWT, БЕЗ `admin=True` — отправляет тот, кто завёл заявку, а решает маршрут. `subject_type` — один из десяти `hr.*` (матрица HR-FRM-004, список в roadmap §6.4); 404 — неизвестный тип или нет такой строки, 409 — маршрут не настроен / объект уже на согласовании / в этапе не осталось согласующих / объект заперт. Ответ — карточка процесса с этапами |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
@@ -748,6 +751,71 @@ This app is the **shared file domain** now — `hr` (department files),
 storage client. `cms` is the one exception; it kept its own bucket and
 calls `htqweb.storage` directly (it predates `media_files` as an app). See
 [STRUCTURE.md §7.1](STRUCTURE.md).
+
+---
+
+## `apps.files` — `/api/files/v1` (ТЗ §21 «Файлы и вложения»)
+
+Одна файловая подсистема на все объекты, к которым прикладываются документы
+(`UploadFile` / `DownloadFile` из ТЗ, таблица `file_object`). Владелец —
+ключ из реестра и ключ его строки — целое или UUID (документы модуля БЗО);
+неподходящий владельцу ключ — 404 `E-FIL-05`, в ответах `owner_id` — строка.
+Права решает владелец своими колбэками («все с правом просмотра объекта»,
+ТЗ §21); типы своих файлов он заводит в справочник своей миграцией.
+**Владельцев в коде пока нет:** по мастер-плану БЗО (D-01) документы договоров
+и заявок живут в `apps.bpp`, и регистрации «заявка»/«договор» сняты;
+подсистема ждёт владельцев модуля (задачи A1.1, B2.2, B3.1). Тесты идут на
+пробных владельцах `apps/files/tests/testapp`.
+
+У тенантного владельца компания — часть ключа файлов (`company_slug`), до
+первой компании — `""`; `tenancy_bootstrap` проставляет её файлам вместе с
+переездом таблиц владельца.
+
+**Гейт:** правка справочника (`PATCH types/{code}/`) — `module="files"`,
+`level="write"` (узел `files.types`); остальные ручки — в
+`access/self_service.py`: папка, загрузка, версии, удаление и ссылка —
+`scoped` (решает владелец), список типов — `open`.
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | GET | Папка владельца: `storage_prefix` (`file_object/<компания или public>/<папка>/<id>/`), `can_modify` + `modify_reason`, `delete_is_physical`, `types` (справочник + правила владельца: `cardinality`, `quota_group`, `required`, `can_add`, `reason`), `quotas` (`group, max, used` — версии не в счёт), `documents` (`current` + `versions` от новой к старой, удалённые — в конце). Ссылок на файлы в ответе нет — только `link`. `modify_reason` — только когда менять нельзя из-за состояния владельца (подсказка автору); отказ по правам не объясняется, там `null` |
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | POST | `UploadFile`: multipart `file`, `file_type`; заголовок `Idempotency-Key` (повтор отдаёт первую запись; тот же ключ для другого файла/места — 422 `E-FIL-07`) → 201, версия 1 нового документа |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/` | POST | Новая версия: multipart `file`, `base_file_id` — действующая версия, поверх которой грузят. Уже заменена → 409 `E-CON-01` («Документ изменён пользователем … в 14:32…»). Номер версии присваивается один раз и не меняется, прежняя получает «Заменён» (`is_replaced`, `replaced_by_id`) |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/` | DELETE | 204. Владелец ни разу не отправлялся — физически (строки + файл в media), повтор — 404 `E-FIL-05` (документа больше нет); иначе только `deleted_at` у всех версий, повтор — 204 |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/{file_id}/link` | GET | `DownloadFile`: `{url, expires_at}` — временная ссылка после проверки прав, выдаётся на каждое скачивание. Каждая выдача — событие `file_downloaded` в журнал владельца (ТЗ §25.2: кто, когда, IP, user-agent). Удалённые после отправки версии тоже отдаются — это история документа |
+| `/api/files/v1/types/?owner_type=` | GET | Справочник «Типы файлов»: `code, owner_type, name, formats, max_mb, sort_order` + правила владельца |
+| `/api/files/v1/types/{code}/` | PATCH | Гейт `files:write`, только `{"max_mb"}`, 1…`FILES_UPLOAD_CEILING_MB` (20) — ТЗ: «Нет / размеры / нет»; отказ гейта — общий 403 `{"detail"}` |
+
+**Ошибки — в конверте модуля БЗО (D-28):** `{"detail", "code", "fields": [{"field", "message"}], "details"}`,
+`detail` — готовый текст для человека (для формата и размера — дословно ТЗ §13.2).
+Антивирус по умолчанию выключен (D-31) — `E-FIL-08`/`E-SYS-01` возможны, только
+когда задан `ANTIVIRUS_CLAMD_HOST`. Коды: `E-FIL-01` 415 формат/содержимое,
+`E-FIL-02` 413 размер (отдаёт и nginx), `E-FIL-03` 409 предел количества /
+«1 действующий» уже есть, `E-FIL-04` 422 не приложен обязательный файл (отказ
+владельца при отправке), `E-FIL-05` 404 не найдено/не видно, `E-FIL-06` 409
+не тот статус владельца, `E-FIL-07` 422 некорректный запрос, `E-FIL-08` 422
+антивирус нашёл угрозу (файл не сохраняется, событие `file_rejected` — только
+в журнал), `E-SYS-01` 503 антивирус не ответил (файл без проверки не
+принимается — повторить позже), `E-CON-01` 409 версия изменена другим,
+`E-ACC-01` 403 нет прав; неподдерживаемый метод — 405 с кодом `E-FIL-07`.
+Антивирус проверяет и документы вне подсистемы — сканы договорного контура
+(`/api/contracts/v1/*/file`, scope `generic`) и PDF шагов согласования
+(`signoff_doc`): там отказ в обычном формате, `{"detail"}` 422 (угроза) или
+503 (сканер недоступен). 401, 403 несовпадения компании токена и 503 — общий формат
+`api_view` (`{"detail"}`): это отказы платформы, а не подсистемы.
+
+Байты — в media, scope `file_object` (`owner_gated`): по JWT media такие
+файлы не отдаёт и не подписывает никому — только по ссылке подсистемы, так что
+скачивание мимо журнала невозможно. `Content-Disposition` несёт исходное имя
+(RFC 5987, кириллица сохраняется): PDF и картинки — `inline`, остальное —
+`attachment`. Журнал загрузок, замен и удалений пишет те же IP и user-agent.
+
+Журнал — `FileEvent` (django-admin «Журнал файлов», только просмотр): одна
+запись на загрузку, новую версию, удаление и выдачу ссылки у любого
+владельца; те же события уходят владельцу в `on_event` (его лента, если
+она есть). Удаляя сам объект, владелец зовёт `files.owner_deleted`: ни разу
+не отправленный уносит файлы физически, отправлявшийся оставляет их с
+`deleted_at`.
 
 ---
 
@@ -1080,7 +1148,11 @@ Generic multi-stage approval. **Do not confuse with `apps.approvals`
 (`/api/requests/v1`)** — that one is a form *designer*: it approves
 `RequestInstance` rows holding JSON field values it owns. `signoff` approves
 rows that already exist in **another app's own table**, addressed by a
-`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. There is no
+`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. **`subject_id`
+is a string everywhere in the JSON** (responses, inbox, process cards) since
+26.09.2026: BPP documents are keyed by UUID. Requests still accept a number
+(`"subject_id": 5` and `"5"` address the same process); integer-keyed domains
+still get an `int` in their callbacks. For the BPP module `signoff.interface` also offers `decide_many`, `current_holders(subject_type, ids)` («Сейчас у»: `{stage, users[{id,name}], position, since, no_executor}` per running process), `pending_for_user(user_id)` (for the daily digest) and `start_process(..., preapproved=[{position_id, actor_id, label}])` — groups of those positions get no tasks, a stage made only of them closes at once with `stage_preapproved`; a position not on the route is `PreapprovalMismatch` (409). There is no
 `ContentType` and no cross-app FK; the domain app hands over its model class
 and callbacks at startup (`AppConfig.ready()` → `signoff.register_subject`),
 so the dependency only ever points *domain → signoff*.
@@ -1201,6 +1273,7 @@ is how `approvals` decides who may fill approver-filled fields.
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
+| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | admin | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
 | `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
 | `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
 | `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
@@ -1208,10 +1281,11 @@ is how `approvals` decides who may fill approver-filled fields.
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
+| `/api/signoff/v1/processes/{id}/retry-executors` | POST | admin | Re-resolve `no_executor` stages of the current group (lazy routes, ТЗ §16.1 п.5) → `{found, process}`. Beat does the same every 15 min (`signoff.retry_no_executor`) |
 | `/api/signoff/v1/processes/{id}/rework`     | POST   | jwt   | `{comment?}` — return an **already decided** object for rework, the only way to unlock an `approved`/`rejected` row for editing. **Approver of that process or admin** (initiator deliberately excluded — that would override someone else's decision); 409 while the round is still running (use the `rework` decision or cancel instead), 409 if the object is already open. The process moves to state `rework`, keeps its original `finished_at`, and the rework is journalled as a `reopened` event |
-| `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks; per-task `{task_id, ok, error?}`, no shared transaction |
+| `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks, **or** `{items: [{task_id, decision, comment?, option_key?}]}` — each with its own comment and vote option (BPP B1.3, `interface.decide_many`); exactly one of the two shapes, else 422; per-task `{task_id, ok, error?}`, no shared transaction |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you". Each row carries `stage_order`/`stage_count` ("step 2 of 4") so a user who holds several consecutive stages — the buyer's checklist on a purchase request — can tell their tasks on one subject apart |
-| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?, option_key?}`. With route flags: `reject`/`rework` whose comment is shorter than `reject_comment_min` → **422** (BR-060); the process author deciding under `forbid_self_approval` → **403** (BR-061). **`option_key`** — when the subject offers variants (process card `options`, today: an agreement with alternative offers, ТЗ §12), `approve` must name one of their `key`s → **422** «выберите…» without it, 422 «обновите страницу» for an unknown key, 422 with the subject's reason if the variant no longer fits (withdrawn, budget exceeded); ignored for reject/rework. The vote is stored on the task (`option_key`, `option_label` in the card), handed to the subject's `on_option` in the same transaction, and the subject reads the **last stage's** vote on approval. `batch-decision` never guesses a variant — such tasks fail there with the same error. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
 | `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
 
 `subject_title` / `subject_url` on process cards and inbox rows come from the
@@ -1436,6 +1510,80 @@ schema the platform can run on.
 только через `apps.refdata.interface`: `vat_rate`, `mrp`, `contract_threshold`
 (= 1000 × МРП), `exchange_rate` (KZT → 1), `article_brief`, `article_groups`,
 `uom_brief`, `country_brief`, `can_edit`.
+
+---
+
+## `apps.bpp` — `/api/bpp/v1` (модуль БЗО)
+
+Тенантная аппка. Каждая ручка — `api_view(module="bpp", level=…)`: `read` на
+чтение, `write` на запись; права тоньше уровня — узлы `bpp.*` (роли `bpp-*`,
+`access/0014`), принадлежность и статус проверяют сервисы. Ошибки — конверт
+D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `E-…` из
+каталога ТЗ или номер правила `BR-…`, если у правила кода нет. Записывающие
+ручки принимают `Idempotency-Key` (повтор отдаёт первый ответ с
+`Idempotent-Replay: true`) и `version` записи в теле (устарела — 409
+`E-CON-01`). Чужой документ — 404, как несуществующий.
+
+**Бюджет** — подмодуль `bpp_budget` (ТЗ §06, задача B2.1). Утверждает и
+корректирует ФД сам, без маршрута (D-07): узел `bpp.budgets.approve`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам |
+| `POST budgets` | Создать черновик (версия 1); второй бюджет проекта — 422 `BR-001` со ссылкой в `fields[0].budget_id`, дубль статьи — `BR-002` с номером строки |
+| `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`) |
+| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-04` |
+| `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку действующей версии удалить нельзя — 422 `E-BUD-05` |
+| `POST budgets/<id>/correction/approve` (`comment` ≥ 10) | Утвердить: лимит ниже задействованного — 422 `BR-004` с суммой; проверка под блокировкой строк |
+| `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
+| `POST budgets/<id>/close`, `…/reopen` (`comment` ≥ 10) | Закрыть (заявки на согласовании — 409 `E-BUD-06`) / открыть повторно |
+| `GET budgets/<id>/versions`, `…/versions/<n>` | Версии и снимок версии N |
+| `GET budgets/lines?project_id=&role=sn\|pm` | GetBudgetLines: статьи бюджета проекта в группе роли, с остатком |
+| `GET budgets/balance?project_id=&article_id=&exclude_request_id=` | GetBudgetBalance `{limit, committed, available, as_of}` по действующей версии |
+
+**Заявка на закупку и план закупок** — подмодуль `bpp_requests` (ТЗ §07, §08,
+задачи B2.2, B2.3). Согласование «ТД → ОД» — движок `signoff`, тип
+`bpp.purchase_request` (маршрут заводит `manage.py bpp_setup_routes`),
+решения — ручки `signoff`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; ТД, ОД, ФД, ГД — все. Колонка `current_holders` («Сейчас у») |
+| `POST requests` | Черновик: номер `ЗЗ-ГГГГ-NNNNNN` сразу; обязателен только проект. Нет утверждённого бюджета — 422 `E-BUD-02`, статья чужой группы — 403 `E-ACC-01` (AC-002), > 200 позиций — 422 `E-REQ-02` |
+| `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
+| `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
+| `POST requests/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STATE-01` |
+| `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
+| `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
+| `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET` / `POST requests/<id>/files` (multipart `file`) | Документы заявки (КП, ТЗ, спецификация — тип `request_attachment`, ТЗ §21): добавляет автор в черновике и на доработке |
+| `POST requests/<id>/files/<file_id>/version` | Новая версия документа — автор, кроме финальных статусов |
+| `GET requests/<id>/files/<file_id>/link` | Ссылка на скачивание; каждая выдача пишется в журнал скачиваний |
+| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only` |
+| `POST plan/validate` (`{item_ids, target: agreement\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `BR-021`; ответ — заготовка мастера F-03 |
+| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.settings` edit) |
+
+**Подотчётные средства** — подмодуль `bpp_accountable` (задача B4.1, логика
+`contracts`). Источник — статья бюджета проекта; сумма занимает бюджет с
+отправки на согласование и дальше, включая закрытую заявку. Согласование
+заявки и авансовых отчётов — движок `signoff` (типы
+`bpp.accountable_funds_request`, `bpp.advance_report`, маршрут настраивает
+администратор).
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET` / `POST accountable` | Реестр (свои; ФД и бухгалтер — все) / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
+| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (остаток, отчёты, «Сейчас у») / правка и удаление черновика |
+| `POST accountable/<id>/submit` | Отправить: остаток под блокировкой строки бюджета |
+| `POST accountable/<id>/mark-paid` | Бухгалтер выдал деньги (`bpp.accountable.payment`) — заявка ждёт отчётов |
+| `POST accountable/<id>/reports` (multipart `expense_name`, `amount`, `file`) | Авансовый отчёт; сверх остатка — 422 `E-ACN-01` |
+| `POST accountable/reports/<id>/submit`, `GET …/file-link` | Отправить отчёт на согласование / ссылка на файл |
+
+Одобренные отчёты, покрывшие сумму, закрывают заявку.
+
+`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`), читает тот, кто видит
+документ.
 
 ---
 

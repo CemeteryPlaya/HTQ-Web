@@ -24,11 +24,12 @@ import { signoffApi } from '@/api/signoff';
 import { formatMoment } from './format';
 import { labelMap } from './labels';
 import { ProcessStateBadge } from './states';
+import { isSubjectIdReady, type SubjectId } from './subjectId';
 import { useTranslation } from 'react-i18next';
 
 interface Props {
   subjectType: string;
-  subjectId: number;
+  subjectId: SubjectId;
 }
 
 export function SubjectProcesses({ subjectType, subjectId }: Props) {
@@ -43,7 +44,7 @@ export function SubjectProcesses({ subjectType, subjectId }: Props) {
       signoffApi
         .listProcesses({ subject_type: subjectType, subject_id: subjectId })
         .then((r) => r.data),
-    enabled: Number.isFinite(subjectId),
+    enabled: isSubjectIdReady(subjectId),
   });
 
   const { data: enums } = useQuery({
