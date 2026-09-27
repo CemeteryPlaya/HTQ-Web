@@ -101,6 +101,36 @@ def pending_for_user(user_id: int) -> list[dict]:
     } for row in rows]
 
 
+def digest_items(user_id: int) -> list[dict]:
+    """Источник ежедневной сводки центра уведомлений (D-23): ``[{title, url,
+    since}]`` по той же выборке, что ``pending_for_user``.
+
+    Заголовок предмета может не прийти (тип без ``describe``), а ссылки на
+    документ может не быть вовсе, — тогда строка сводки всё равно читается и
+    ведёт на карточку процесса, где стоят кнопки решения.
+
+    Выключенный у компании ``signoff`` — не сбой источника, а «ждать нечего»:
+    пустой список, без ``ServiceDisabled`` (сводка записала бы его как упавший
+    источник у каждого пользователя каждое утро).
+    """
+    from apps.core.services import service_enabled
+    from apps.signoff.services import registry
+
+    if not service_enabled("signoff"):
+        return []
+    items = []
+    for row in presentation.list_inbox(user_id):
+        label = (registry.get_subject(row["subject_type"]).label
+                 if registry.is_registered(row["subject_type"]) else row["subject_type"])
+        title = row["subject_title"] or f"{label} №{row['subject_id']}"
+        items.append({
+            "title": f"{title} — {row['stage_name']}",
+            "url": row["subject_url"] or f"/signoff/processes/{row['process_id']}",
+            "since": row["created_at"],
+        })
+    return items
+
+
 def _unique_users(tasks):
     seen = set()
     for task in tasks:

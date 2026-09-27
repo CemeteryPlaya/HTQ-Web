@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from django.test import Client
 
+from apps.core.models import ServiceStatus
 from apps.hr.models import Employee
 from apps.signoff import interface
 from apps.signoff.models import (
@@ -16,7 +17,7 @@ from apps.signoff.models import (
     Quorum,
     StageState,
 )
-from apps.signoff.services import engine
+from apps.signoff.services import engine, holders
 from apps.signoff.tests.helpers import (
     BASE,
     SUBJECT,
@@ -160,6 +161,37 @@ def test_pending_for_user_shows_only_active_stages():
     assert [(row["subject_id"], row["title"]) for row in rows] == [(str(doc.pk), doc.title)]
     assert rows[0]["since"] == process.stages.get(order=1).activated_at
     assert rows[0]["url"] == f"/probe/{doc.pk}"
+
+
+# ── источник ежедневной сводки (D-23) ───────────────────────────────────
+
+def test_signoff_is_registered_as_a_tenant_digest_source():
+    from apps.notifications.services import digest
+
+    fn, tenant = digest._SOURCES["signoff"]
+    assert fn is holders.digest_items and tenant is True
+
+
+def test_digest_items_name_the_document_and_the_stage():
+    a = make_user("a")
+    make_route([(1, "Первый", Quorum.ANY, [a.pk])])
+    doc, process = _start()
+
+    assert holders.digest_items(a.pk) == [{
+        "title": f"{doc.title} — Первый",
+        "url": f"/probe/{doc.pk}",
+        "since": process.created_at,
+    }]
+
+
+def test_digest_items_are_empty_while_signoff_is_disabled():
+    a = make_user("a")
+    make_route([(1, "Первый", Quorum.ANY, [a.pk])])
+    _start()
+    ServiceStatus.objects.update_or_create(
+        app_label="signoff", defaults={"enabled": False, "message": "выключено"})
+
+    assert holders.digest_items(a.pk) == []
 
 
 # ── предсогласованные этапы (D-26) ──────────────────────────────────────
