@@ -1556,12 +1556,34 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
 | `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
 | `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET` / `POST requests/<id>/files` (multipart `file`) | Документы заявки (КП, ТЗ, спецификация — тип `request_attachment`, ТЗ §21): добавляет автор в черновике и на доработке |
+| `POST requests/<id>/files/<file_id>/version` | Новая версия документа — автор, кроме финальных статусов |
+| `GET requests/<id>/files/<file_id>/link` | Ссылка на скачивание; каждая выдача пишется в журнал скачиваний |
 | `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only` |
 | `POST plan/validate` (`{item_ids, target: agreement\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `BR-021`; ответ — заготовка мастера F-03 |
 | `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.settings` edit) |
 
+**Подотчётные средства** — подмодуль `bpp_accountable` (задача B4.1, логика
+`contracts`). Источник — статья бюджета проекта; сумма занимает бюджет с
+отправки на согласование и дальше, включая закрытую заявку. Согласование
+заявки и авансовых отчётов — движок `signoff` (типы
+`bpp.accountable_funds_request`, `bpp.advance_report`, маршрут настраивает
+администратор).
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET` / `POST accountable` | Реестр (свои; ФД и бухгалтер — все) / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
+| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (остаток, отчёты, «Сейчас у») / правка и удаление черновика |
+| `POST accountable/<id>/submit` | Отправить: остаток под блокировкой строки бюджета |
+| `POST accountable/<id>/mark-paid` | Бухгалтер выдал деньги (`bpp.accountable.payment`) — заявка ждёт отчётов |
+| `POST accountable/<id>/reports` (multipart `expense_name`, `amount`, `file`) | Авансовый отчёт; сверх остатка — 422 `E-ACN-01` |
+| `POST accountable/reports/<id>/submit`, `GET …/file-link` | Отправить отчёт на согласование / ссылка на файл |
+
+Одобренные отчёты, покрывшие сумму, закрывают заявку.
+
 `GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
-`bpp.purchaserequest`), читает тот, кто видит документ.
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`), читает тот, кто видит
+документ.
 
 ---
 
