@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django.db import transaction
+from django.db import connection, transaction
 
 from apps.bpp.models import DocumentFile, FileDownload
 from apps.media_files import interface as media
@@ -68,8 +68,35 @@ def _check(rule: FileRule, *, data: bytes, filename: str, mime: str) -> None:
 
 
 def _store(data: bytes, filename: str, mime: str, actor_id: int) -> dict:
-    return media.store_file(data=data, filename=filename, mime=mime, scope="bpp_doc",
-                            owner_id=actor_id, internal_authorized=True)
+    try:
+        return media.store_file(data=data, filename=filename, mime=mime, scope="bpp_doc",
+                                owner_id=actor_id, internal_authorized=True)
+    except media.UploadValidationError as exc:
+        # Хранилище проверяет содержимое (подпись формата, целостность
+        # картинки) — отказ показывается как ошибка формата, а не 500.
+        raise DomainError(
+            "E-FILE-01",
+            f"Файл «{filename}» не принят: {exc.detail}. Проверьте, что файл не повреждён "
+            f"и его формат совпадает с расширением.",
+            status=415) from exc
+
+
+def _lock(owner_type: str, owner_id: str, file_type: str) -> None:
+    """Сериализовать загрузки одного типа к одному документу до конца
+    транзакции: иначе две одновременные загрузки обе увидели бы «файлов
+    меньше предела» и превысили бы его."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                       [f"bpp.file:{owner_type}:{owner_id}:{file_type}"])
+
+
+def _keep_or_discard(stored: dict, write):
+    """Выполнить запись паспорта; упала — убрать уже записанные байты."""
+    try:
+        return write()
+    except Exception:
+        media.discard_upload(stored["id"], stored["path"])
+        raise
 
 
 def _current(owner_type: str, owner_id: str, file_type: str | None = None):
@@ -83,6 +110,7 @@ def attach(owner, file_type: str, *, data: bytes, filename: str, mime: str,
            actor_id: int) -> dict:
     rule = FILE_RULES[file_type]
     owner_type, owner_id = owner._meta.label_lower, str(owner.pk)
+    _lock(owner_type, owner_id, file_type)
     if _current(owner_type, owner_id, file_type).count() >= rule.max_count:
         raise DomainError(
             "E-FILE-03",
@@ -91,15 +119,22 @@ def attach(owner, file_type: str, *, data: bytes, filename: str, mime: str,
             status=422)
     _check(rule, data=data, filename=filename, mime=mime)
     stored = _store(data, filename, mime, actor_id)
-    row = DocumentFile.objects.create(
-        owner_type=owner_type, owner_id=owner_id, file_type=file_type,
-        media_file_id=str(stored["id"]), filename=filename, mime=mime,
-        size=stored["size"], sha256=stored.get("sha256") or "",
-        created_by=actor_id, updated_by=actor_id,
-    )
-    audit.record(owner, "file_attached", actor_id=actor_id,
-                 changes={"file": str(row.id), "file_type": file_type, "filename": filename})
-    return _serialize(row)
+
+    def write() -> DocumentFile:
+        row = DocumentFile.objects.create(
+            owner_type=owner_type, owner_id=owner_id, file_type=file_type,
+            media_file_id=str(stored["id"]), filename=filename,
+            # Тип — определённый хранилищем по содержимому, не заявленный клиентом.
+            mime=stored.get("mime") or mime,
+            size=stored["size"], sha256=stored.get("sha256") or "",
+            created_by=actor_id, updated_by=actor_id,
+        )
+        audit.record(owner, "file_attached", actor_id=actor_id,
+                     changes={"file": str(row.id), "file_type": file_type,
+                              "filename": filename})
+        return row
+
+    return _serialize(_keep_or_discard(stored, write))
 
 
 @transaction.atomic
@@ -107,15 +142,24 @@ def replace(file_id: str, *, data: bytes, filename: str, mime: str, actor_id: in
     old = DocumentFile.objects.select_for_update().get(pk=file_id, replaced=False)
     _check(FILE_RULES[old.file_type], data=data, filename=filename, mime=mime)
     stored = _store(data, filename, mime, actor_id)
-    old.replaced = True
-    old.save(update_fields=["replaced", "updated_at"])
-    row = DocumentFile.objects.create(
-        owner_type=old.owner_type, owner_id=old.owner_id, file_type=old.file_type,
-        media_file_id=str(stored["id"]), filename=filename, mime=mime,
-        size=stored["size"], sha256=stored.get("sha256") or "",
-        version=old.version + 1, previous=old, created_by=actor_id, updated_by=actor_id,
-    )
-    return _serialize(row)
+
+    def write() -> DocumentFile:
+        old.replaced = True
+        old.save(update_fields=["replaced", "updated_at"])
+        row = DocumentFile.objects.create(
+            owner_type=old.owner_type, owner_id=old.owner_id, file_type=old.file_type,
+            media_file_id=str(stored["id"]), filename=filename,
+            mime=stored.get("mime") or mime,
+            size=stored["size"], sha256=stored.get("sha256") or "",
+            version=old.version + 1, previous=old, created_by=actor_id, updated_by=actor_id,
+        )
+        audit.record_for(old.owner_type, old.owner_id, "file_replaced", actor_id=actor_id,
+                         changes={"file": str(row.id), "previous": str(old.id),
+                                  "file_type": old.file_type, "filename": filename,
+                                  "version": row.version})
+        return row
+
+    return _serialize(_keep_or_discard(stored, write))
 
 
 def list_files(owner) -> list[dict]:

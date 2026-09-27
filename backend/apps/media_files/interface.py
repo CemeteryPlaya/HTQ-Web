@@ -57,7 +57,11 @@ from apps.media_files.models import FileMetadata
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
 from apps.media_files.services.scope_policy import authorize_scope_write
-from apps.media_files.services.upload_service import upload_file_bytes
+from apps.media_files.services.upload_service import (  # noqa: F401 — часть контракта
+    UploadValidationError,
+    discard,
+    upload_file_bytes,
+)
 from apps.media_files.services.url_service import build_file_url
 
 logger = logging.getLogger(__name__)
@@ -225,3 +229,16 @@ def delete_file(file_id) -> bool:
         pk=key, deleted_at__isnull=True,
     ).update(deleted_at=timezone.now())
     return bool(updated)
+
+
+def discard_upload(file_id, path: str) -> None:
+    """Откатить ``store_file``: вызывающий записал файл, но его собственная
+    запись не удалась. Удаляет объект из хранилища и помечает строку
+    удалённой, если она ещё жива (в откатившейся транзакции её уже нет).
+
+    ``UploadValidationError`` — исключение ``store_file`` — соседи берут
+    отсюда же: импортировать ``services`` чужой аппки нельзя.
+    """
+    require_service("media")
+    discard(path)
+    delete_file(file_id)

@@ -118,3 +118,101 @@ def test_scanner_can_reject(company_context, owner, settings):
 
 def _reject_all(data: bytes, filename: str) -> str | None:
     return "найден вирус EICAR"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_parallel_attach_respects_the_limit(monkeypatch):
+    """Договор — один файл. Четыре одновременные загрузки: проверка «уже
+    есть» и вставка идут под одной блокировкой, второго файла нет."""
+    import threading
+    import time
+
+    from django.db import connection
+
+    real_check = files._check
+
+    def slow_check(*args, **kwargs):  # расширяет окно между проверкой и вставкой
+        time.sleep(0.2)
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(files, "_check", slow_check)
+    owner = _Owner()
+    codes: list[str] = []
+    lock = threading.Lock()
+
+    def worker(n):
+        try:
+            files.attach(owner, "agreement", data=PDF, filename=f"{n}.pdf",
+                         mime="application/pdf", actor_id=7)
+            with lock:
+                codes.append("ok")
+        except DomainError as exc:
+            with lock:
+                codes.append(exc.code)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(codes) == ["E-FILE-03", "E-FILE-03", "E-FILE-03", "ok"]
+    assert DocumentFile.objects.filter(owner_id=str(owner.pk)).count() == 1
+
+
+@pytest.mark.django_db
+def test_replace_is_audited(company_context, owner):
+    from apps.bpp.models import AuditLog
+
+    first = files.attach(owner, "agreement", data=PDF, filename="v1.pdf",
+                         mime="application/pdf", actor_id=7)
+    second = files.replace(first["id"], data=PDF, filename="v2.pdf",
+                           mime="application/pdf", actor_id=8)
+    row = AuditLog.objects.get(action="file_replaced")
+    assert (row.object_type, row.object_id, row.actor_id) == ("bpp.probe", str(owner.pk), 8)
+    assert row.changes == {"file": second["id"], "previous": first["id"],
+                           "file_type": "agreement", "filename": "v2.pdf", "version": 2}
+
+
+@pytest.mark.django_db
+def test_media_rejection_is_a_domain_error(company_context, owner, monkeypatch):
+    """Медиа не приняло файл (подпись не совпала с форматом, картинка битая) —
+    понятная ошибка с кодом, а не 500."""
+    from apps.media_files import interface as media
+
+    def reject(**kwargs):
+        raise media.UploadValidationError(415, "File content does not match declared type")
+
+    monkeypatch.setattr(files.media, "store_file", reject)
+    with pytest.raises(DomainError) as exc:
+        files.attach(owner, "invoice", data=PDF, filename="a.pdf", mime="application/pdf",
+                     actor_id=7)
+    assert (exc.value.code, exc.value.status) == ("E-FILE-01", 415)
+    assert "a.pdf" in exc.value.message
+
+
+@pytest.mark.django_db
+def test_stored_mime_wins(company_context, owner, monkeypatch):
+    """В паспорт файла пишется тип, который определило хранилище по содержимому,
+    а не заявленный клиентом."""
+    monkeypatch.setattr(files, "_store", lambda *a: {"id": uuid.uuid4(), "size": 3,
+                                                     "sha256": "x", "mime": "image/png"})
+    row = files.attach(owner, "invoice", data=b"img", filename="scan.jpg",
+                       mime="image/jpeg", actor_id=7)
+    assert row["mime"] == "image/png"
+
+
+@pytest.mark.django_db
+def test_stored_object_is_removed_when_the_row_fails(company_context, owner, monkeypatch,
+                                                      memory_storage):
+    """Байты уже в S3, а паспорт не записался — объект удаляется, «сирот» нет."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("журнал недоступен")
+
+    monkeypatch.setattr(files.audit, "record", boom)
+    with pytest.raises(RuntimeError):
+        files.attach(owner, "invoice", data=PDF, filename="a.pdf", mime="application/pdf",
+                     actor_id=7)
+    assert memory_storage.objects == {}
+    assert not DocumentFile.objects.exists()
