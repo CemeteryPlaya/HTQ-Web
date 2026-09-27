@@ -50,16 +50,18 @@ def _budget_figures(req: PurchaseRequest) -> dict | None:
     if not req.article_id:
         return None
     try:
-        figures = budget_balance.balance(req.project_id, req.article_id,
-                                         exclude_request_id=req.pk)
+        now = budget_balance.balance(req.project_id, req.article_id)
     except DomainError:
         return None
     reserved = req.status in (RequestStatus.ON_REVIEW, RequestStatus.APPROVED,
                               RequestStatus.CLOSED)
-    return {"limit": figures["limit"], "committed": figures["committed"],
-            "available": figures["available"],
-            "after_request": figures["available"] - req.total_amount,
-            "reserved": reserved, "as_of": figures["as_of"]}
+    # «Задействовано» и «Доступно» — как есть сейчас. Заявка в резерве уже
+    # внутри них, и остаток после неё — это и есть «Доступно»; черновик ещё
+    # не занял ничего, и его сумма вычитается.
+    after = now["available"] if reserved else now["available"] - req.total_amount
+    return {"limit": now["limit"], "committed": now["committed"],
+            "available": now["available"], "after_request": after,
+            "reserved": reserved, "as_of": now["as_of"]}
 
 
 def execution(req: PurchaseRequest) -> list[dict]:

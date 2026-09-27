@@ -254,3 +254,23 @@ def test_ac004_two_parallel_submits_share_one_balance():
     assert sorted(outcome) == ["E-BUD-01", "ok"]
     assert balance.balance(proj.id, art.id)["committed"] == Decimal("2000000.00")
     assert PurchaseRequest.objects.filter(status=RequestStatus.ON_REVIEW).count() == 1
+
+
+@pytest.mark.django_db
+def test_card_budget_counts_the_request_once(company_context):
+    """Блок «Бюджет» карточки: черновик ещё не занял ничего и вычитается из
+    остатка; отправленная заявка уже внутри «Задействовано»."""
+    from apps.bpp.services.requests import read
+
+    slug = company_context["slug"]
+    proj, art, sn = _setup(slug, limit=1000)
+    req = _draft(sn, proj, art, 300)
+    figures = read.card(sn, req)["budget"]
+    assert (figures["committed"], figures["available"], figures["after_request"]) \
+        == (Decimal("0.00"), Decimal("1000.00"), Decimal("700.00"))
+
+    req = service.submit(sn, req.id, expected_version=None)
+    figures = read.card(sn, req)["budget"]
+    assert figures["reserved"] is True
+    assert (figures["committed"], figures["available"], figures["after_request"]) \
+        == (Decimal("300.00"), Decimal("700.00"), Decimal("700.00"))

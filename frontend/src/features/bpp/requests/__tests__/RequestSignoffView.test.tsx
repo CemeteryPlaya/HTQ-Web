@@ -27,7 +27,7 @@ const card: PurchaseRequestCard = {
   rework_comment: '',
   budget: {
     limit: '5000000.00', committed: '3400000.00', available: '1600000.00',
-    after_request: '-800000.00', reserved: true,
+    after_request: '1600000.00', reserved: true,
   },
   items: [{
     id: 'i1', line_no: 1, sys_number: 'ЗЗ-2026-000045-01', name: 'Швеллер 12П', specs: '',

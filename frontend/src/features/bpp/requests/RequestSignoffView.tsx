@@ -25,6 +25,16 @@ interface Props {
 
 const KIND: Record<string, string> = { goods: 'ТМЦ', works: 'Работы и услуги' };
 
+const STATUS: Record<string, string> = {
+  draft: 'Черновик',
+  on_review: 'На согласовании',
+  approved: 'Утверждена',
+  rework: 'На доработке',
+  rejected: 'Отклонена',
+  cancelled: 'Отменена',
+  closed: 'Закрыта',
+};
+
 function BudgetBlock({ card }: { card: PurchaseRequestCard }) {
   const { t } = useTranslation();
   if (!card.budget) return null;
@@ -37,7 +47,7 @@ function BudgetBlock({ card }: { card: PurchaseRequestCard }) {
       budget.reserved
         ? t('bpp.request.afterReserved', 'Остаток после заявки (уже в резерве)')
         : t('bpp.request.after', 'Остаток после заявки'),
-      budget.reserved ? budget.available : budget.after_request,
+      budget.after_request,
       true,
     ],
   ];
@@ -80,6 +90,9 @@ export default function RequestSignoffView({ id, embedded = false }: Props) {
       <div>
         <Heading className="text-lg font-semibold">
           {t('bpp.request.title', 'Заявка на закупку')} {card.number}
+          <span className="ml-2 align-middle rounded-full border px-2 py-0.5 text-xs font-normal text-muted-foreground">
+            {t(`bpp.request.status.${card.status}`, STATUS[card.status] ?? card.status)}
+          </span>
         </Heading>
         <p className="text-sm text-muted-foreground">
           {card.project.code} {card.project.name} ·{' '}
@@ -94,6 +107,12 @@ export default function RequestSignoffView({ id, embedded = false }: Props) {
           </p>
         )}
       </div>
+
+      {card.rework_comment && (
+        <p className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm text-yellow-900 dark:border-yellow-700 dark:bg-yellow-950 dark:text-yellow-100">
+          {t('bpp.request.reworkComment', 'Возвращена на доработку')}: {card.rework_comment}
+        </p>
+      )}
 
       <BudgetBlock card={card} />
 
