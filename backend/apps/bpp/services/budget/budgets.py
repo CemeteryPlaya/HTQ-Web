@@ -341,7 +341,7 @@ def approve_correction(actor: Actor, budget_id, *, expected_version: int | None,
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "E-REQ-02", "Опишите причину: комментарий не короче 10 символов.",
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     active = budget.active_version
     list(BudgetLine.objects.select_for_update().filter(version=active))
@@ -420,7 +420,7 @@ def reopen(actor: Actor, budget_id, *, expected_version: int | None, comment: st
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "E-REQ-02", "Опишите причину: комментарий не короче 10 символов.",
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     budget.status, budget.status_comment = BudgetStatus.APPROVED, comment
     _touch(budget, actor.user_id, "status", "status_comment")

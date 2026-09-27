@@ -115,7 +115,7 @@ def card(actor: Actor, budget: Budget) -> dict:
 
 
 def registry(actor: Actor, *, status: str | None = None, project_id: str | None = None,
-             page: int = 1, page_size: int = 25) -> dict:
+             page: int = 1, page_size: int = 50) -> dict:
     """Реестр L-01: бюджеты видимых проектов со своими итогами."""
     rows = Budget.objects.all().order_by("-created_at")
     if status:
@@ -125,7 +125,7 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
     if not actor.sees_all_projects:
         rows = rows.filter(project_id__in=list(actor.member_project_ids))
     total = rows.count()
-    page_size = max(1, min(int(page_size or 25), 100))
+    page_size = max(1, min(int(page_size or 50), 100))
     chunk = list(rows.select_related("active_version")[(page - 1) * page_size: page * page_size])
     briefs = projects.project_brief([str(b.project_id) for b in chunk])
     names = _names([b.active_version.approved_by for b in chunk if b.active_version])

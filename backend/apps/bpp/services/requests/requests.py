@@ -451,7 +451,7 @@ def _comment(comment: str, action: str) -> str:
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "E-REQ-02", "Опишите причину: комментарий не короче 10 символов.",
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     return comment
 

@@ -1534,7 +1534,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`) |
 | `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08` |
 | `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку с «Задействовано» > 0 удалить нельзя — 422 `E-BUD-09` |
-| `POST budgets/<id>/correction/approve` (`comment` ≥ 10, иначе `E-REQ-02`) | Утвердить: лимит ниже задействованного — 422 `E-BUD-05` с суммой; проверка под блокировкой строк |
+| `POST budgets/<id>/correction/approve` (`comment` ≥ 10, иначе `BR-060`) | Утвердить: лимит ниже задействованного — 422 `E-BUD-05` с суммой; проверка под блокировкой строк |
 | `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
 | `POST budgets/<id>/close`, `…/reopen` (`comment` ≥ 10) | Закрыть (заявки на согласовании — 409 `E-BUD-06`) / открыть повторно |
 | `GET budgets/<id>/versions`, `…/versions/<n>` | Версии и снимок версии N |
@@ -1553,7 +1553,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
 | `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
 | `POST requests/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STS-01` |
-| `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10, иначе `E-REQ-02`) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
+| `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10, иначе `BR-060`) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
 | `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
 | `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
 | `GET` / `POST requests/<id>/files` (multipart `file`) | Документы заявки (КП, ТЗ, спецификация — тип `request_attachment`, ТЗ §21): добавляет автор в черновике и на доработке |

@@ -100,7 +100,7 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
 
 
 def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
-             page_size: int = 25) -> dict:
+             page_size: int = 50) -> dict:
     filters = filters or {}
     rows = PurchaseRequest.objects.filter(is_migrated=False)
     if not service.sees_all(actor):
@@ -126,7 +126,7 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
     rows = rows.order_by("-created_at")
     total = rows.count()
     totals_amount = sum((row for row in rows.values_list("total_amount", flat=True)), ZERO)
-    page_size = page_size if page_size in (25, 50, 100) else 25
+    page_size = page_size if page_size in (25, 50, 100) else 50
     chunk = list(rows[(page - 1) * page_size: page * page_size])
     project_map = projects.project_brief(list({str(r.project_id) for r in chunk}))
     article_map = refdata.article_brief(list({str(r.article_id) for r in chunk if r.article_id}))

@@ -41,7 +41,7 @@ def request_list(request):
     }
     return read.registry(Actor(request), filters=filters,
                          page=int_param(params, "page", 1, minimum=1),
-                         page_size=int_param(params, "page_size", 25))
+                         page_size=int_param(params, "page_size", 50))
 
 
 @api_view(methods=("POST",), module="bpp", level="write", body=schemas.RequestCreate,

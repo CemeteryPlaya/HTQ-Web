@@ -161,7 +161,7 @@ def test_close_waits_for_requests_on_review_and_reopen_needs_a_comment(company_c
     request_service.withdraw(s.actor(slug, s.SN, "bpp-sn"), req.id, expected_version=None)
     budgets.close(_fd(slug), budget.id, expected_version=None)
     assert _code(lambda: budgets.reopen(_fd(slug), budget.id, expected_version=None,
-                                        comment="коротко")) == "E-REQ-02"
+                                        comment="коротко")) == "BR-060"
     reopened = budgets.reopen(_fd(slug), budget.id, expected_version=None,
                               comment="Проект продлён до весны")
     assert reopened.status == BudgetStatus.APPROVED
