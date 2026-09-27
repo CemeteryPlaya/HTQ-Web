@@ -97,9 +97,12 @@ def figures(line: BudgetLine, committed: Decimal) -> dict:
             "available": line.limit_amount - committed}
 
 
-def balance(project_id, article_id, *, exclude_request_id=None) -> dict:
-    """``{limit, committed, available, as_of}`` — контракт §2.6 (GetBudgetBalance)."""
+def balance(project_id, article_id, *, exclude_request_id=None,
+            exclude_accountable_id=None) -> dict:
+    """``{limit, committed, available, as_of}`` — контракт §2.6 (GetBudgetBalance).
+    ``exclude_accountable_id`` — сверх контракта, для подотчёта (B4.1)."""
     line = active_line(project_id, article_id)
     committed = calc.committed_for(project_id, article_id,
-                                   exclude_request_id=exclude_request_id)
+                                   exclude_request_id=exclude_request_id,
+                                   exclude_accountable_id=exclude_accountable_id)
     return {**figures(line, committed), "as_of": timezone.now()}

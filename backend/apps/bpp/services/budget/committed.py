@@ -8,8 +8,9 @@
   кроме «Отменён» и «Не к оплате»)``;
 - закрытая или аннулированная позиция — ``Σ строк счетов``.
 
-На этапе 2 договоров и счетов ещё нет: их слагаемые приходят в B3.3,
-подотчёт — в B4.1. Поэтому формула собрана из списков слагаемых
+К позициям прибавляется подотчёт (B4.1) — суммы заявок на подотчётные
+средства от «На согласовании» и дальше. Договоров и счетов ещё нет: их
+слагаемые позиции приходят в B3.3. Поэтому формула собрана из списков слагаемых
 (``_OPEN_ITEM_TERMS``, ``_CLOSED_ITEM_TERMS``): добавить слагаемое — одна
 строка в списке, сам агрегат и эталон не меняются.
 
@@ -28,7 +29,13 @@ from decimal import Decimal
 from django.db.models import Case, DecimalField, F, Sum, Value, When
 from django.db.models.functions import Coalesce, Greatest
 
-from apps.bpp.models import ItemStatus, PurchaseRequestItem, RequestStatus
+from apps.bpp.models import (
+    AccountableFundsRequest,
+    AccountableStatus,
+    ItemStatus,
+    PurchaseRequestItem,
+    RequestStatus,
+)
 
 ZERO = Decimal("0.00")
 
@@ -36,6 +43,12 @@ ZERO = Decimal("0.00")
 COMMITTING_REQUEST_STATUSES = (RequestStatus.ON_REVIEW, RequestStatus.APPROVED,
                                RequestStatus.CLOSED)
 OPEN_ITEM_STATUSES = (ItemStatus.OPEN, ItemStatus.PARTIALLY_CLOSED)
+#: Подотчёт занимает сумму заявки с отправки на согласование и дальше; выданные
+#: деньги в бюджет не возвращаются и после закрытия (B4.1, как в contracts).
+COMMITTING_ACCOUNTABLE_STATUSES = (AccountableStatus.ON_REVIEW,
+                                   AccountableStatus.AWAITING_ACCOUNTING,
+                                   AccountableStatus.AWAITING_REPORT,
+                                   AccountableStatus.CLOSED)
 
 _MONEY = DecimalField(max_digits=18, decimal_places=2)
 
@@ -71,25 +84,44 @@ def _items(project_id, article_ids=None, *, exclude_request_id=None):
     return rows
 
 
-def committed_by_article(project_id, article_ids=None, *,
-                         exclude_request_id=None) -> dict[str, Decimal]:
+def _accountable(project_id, article_ids=None, *, exclude_accountable_id=None):
+    rows = AccountableFundsRequest.objects.filter(
+        project_id=project_id, status__in=COMMITTING_ACCOUNTABLE_STATUSES)
+    if article_ids is not None:
+        rows = rows.filter(article_id__in=list(article_ids))
+    if exclude_accountable_id is not None:
+        rows = rows.exclude(pk=exclude_accountable_id)
+    return rows
+
+
+def committed_by_article(project_id, article_ids=None, *, exclude_request_id=None,
+                         exclude_accountable_id=None) -> dict[str, Decimal]:
     """``{article_id: задействовано}`` по проекту; статьи без позиций — не в ответе.
 
-    ``exclude_request_id`` — заявка, которую сравнивают с остатком: при
-    повторной отправке после возврата её собственные позиции не должны
-    съедать её же остаток.
+    ``exclude_request_id`` / ``exclude_accountable_id`` — документ, который
+    сравнивают с остатком: при повторной отправке после возврата его
+    собственная сумма не должна съедать его же остаток.
     """
     per_item = Case(When(status__in=OPEN_ITEM_STATUSES, then=_open_expr()),
                     default=_closed_expr(), output_field=_MONEY)
     rows = (_items(project_id, article_ids, exclude_request_id=exclude_request_id)
             .values("request__article_id")
             .annotate(total=Coalesce(Sum(per_item), Value(ZERO, output_field=_MONEY))))
-    return {str(row["request__article_id"]): row["total"] for row in rows}
+    totals = {str(row["request__article_id"]): row["total"] for row in rows}
+    accountable = (_accountable(project_id, article_ids,
+                                exclude_accountable_id=exclude_accountable_id)
+                   .values("article_id").annotate(total=Sum("amount")))
+    for row in accountable:
+        key = str(row["article_id"])
+        totals[key] = totals.get(key, ZERO) + row["total"]
+    return totals
 
 
-def committed_for(project_id, article_id, *, exclude_request_id=None) -> Decimal:
-    return committed_by_article(project_id, [article_id],
-                                exclude_request_id=exclude_request_id).get(str(article_id), ZERO)
+def committed_for(project_id, article_id, *, exclude_request_id=None,
+                  exclude_accountable_id=None) -> Decimal:
+    return committed_by_article(
+        project_id, [article_id], exclude_request_id=exclude_request_id,
+        exclude_accountable_id=exclude_accountable_id).get(str(article_id), ZERO)
 
 
 # ── эталон для сверки ───────────────────────────────────────────────────
@@ -105,4 +137,6 @@ def committed_reference(project_id, article_id) -> Decimal:
     total = ZERO
     for item in _items(project_id, [article_id]).select_related("request"):
         total += _item_reference(item)
+    for accountable in _accountable(project_id, [article_id]):
+        total += accountable.amount
     return total

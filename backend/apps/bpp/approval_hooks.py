@@ -15,7 +15,14 @@ register_history_access``): журнал документа читает тот,
 
 from __future__ import annotations
 
-from apps.bpp.models import Budget, PurchaseRequest, PurchaseType
+from apps.bpp.models import (
+    AccountableFundsRequest,
+    AdvanceReport,
+    Budget,
+    PurchaseRequest,
+    PurchaseType,
+)
+from apps.bpp.services.accountable import accountable as accountable_service
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.budget import budgets as budget_service
 from apps.bpp.services.core import audit
@@ -68,6 +75,36 @@ def _request_fact_fields() -> list[dict]:
     ]
 
 
+def _describe_accountable(subject_id) -> dict | None:
+    req = AccountableFundsRequest.objects.filter(pk=subject_id).first()
+    if req is None:
+        return None
+    return {"title": f"Подотчёт {req.number} на {fmt(req.amount, req.currency)}",
+            "url": f"/bpp/accountable/{req.pk}"}
+
+
+def _accountable_facts(subject_id) -> dict:
+    req = AccountableFundsRequest.objects.filter(pk=subject_id).first()
+    return {} if req is None else {"amount": req.amount, "currency": req.currency}
+
+
+def _describe_report(subject_id) -> dict | None:
+    report = AdvanceReport.objects.select_related("request").filter(pk=subject_id).first()
+    if report is None:
+        return None
+    return {"title": f"Авансовый отчёт «{report.expense_name}» по {report.request.number} "
+                     f"на {fmt(report.amount, report.request.currency)}",
+            "url": f"/bpp/accountable/{report.request_id}"}
+
+
+def _report_facts(subject_id) -> dict:
+    report = AdvanceReport.objects.filter(pk=subject_id).first()
+    return {} if report is None else {"amount": report.amount}
+
+
+_AMOUNT_FIELDS = [{"key": "amount", "label": "Сумма", "type": "number"}]
+
+
 def _history_of(model, can_view):
     def check(request, object_id: str) -> bool:
         obj = model.objects.filter(pk=object_id).first()
@@ -102,6 +139,31 @@ def register() -> None:
         facts=_request_facts,
         fact_fields=_request_fact_fields,
     )
+    signoff.register_subject(
+        AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE,
+        label="Заявка на подотчётные средства",
+        model=AccountableFundsRequest,
+        on_started=accountable_service.on_request_started,
+        on_approved=accountable_service.on_request_approved,
+        on_rejected=accountable_service.on_request_back_to_draft,
+        on_rework=accountable_service.on_request_back_to_draft,
+        on_cancelled=accountable_service.on_request_back_to_draft,
+        describe=_describe_accountable,
+        facts=_accountable_facts,
+        fact_fields=lambda: _AMOUNT_FIELDS,
+    )
+    signoff.register_subject(
+        AdvanceReport.SIGNOFF_SUBJECT_TYPE,
+        label="Авансовый отчёт",
+        model=AdvanceReport,
+        on_approved=accountable_service.on_report_approved,
+        describe=_describe_report,
+        facts=_report_facts,
+        fact_fields=lambda: _AMOUNT_FIELDS,
+    )
+    audit.register_history_access(
+        AccountableFundsRequest._meta.label_lower,
+        _valid_uuid_guard(_history_of(AccountableFundsRequest, accountable_service.can_view)))
     audit.register_history_access(
         Budget._meta.label_lower,
         _valid_uuid_guard(_history_of(Budget, budget_service.can_view)))

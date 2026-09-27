@@ -16,4 +16,5 @@ urlpatterns = [
     path("history/<str:object_type>/<str:object_id>/", views.object_history),
     path("", include("apps.bpp.urls_budget")),    # B2.1
     path("", include("apps.bpp.urls_requests")),  # B2.2, B2.3
+    path("", include("apps.bpp.urls_accountable")),  # B4.1
 ]
