@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { companiesApi } from '@/api/companies';
 import { Switch } from '@/components/ui/switch';
 import { reportApiError } from '@/lib/apiError';
+import { cn } from '@/lib/utils';
 
 export function CompanyModulesPanel({ slug, canEdit }: { slug: string; canEdit: boolean }) {
   const { t } = useTranslation();
@@ -22,13 +23,29 @@ export function CompanyModulesPanel({ slug, canEdit }: { slug: string; canEdit: 
         {t('companies.modules.hint', 'Модули ядра есть у каждой компании и не выключаются. Выключенный модуль отвечает 503 только в этой компании.')}
       </p>
       <ul className="divide-y rounded-lg border">
-        {(query.data ?? []).map((m) => (
-          <li key={m.app_label} className="flex items-center justify-between px-3 py-2 text-sm">
-            <span className="font-mono">{m.app_label}{m.is_core && <span className="ml-2 text-xs text-muted-foreground">{t('companies.modules.core', 'ядро')}</span>}</span>
-            <Switch aria-label={m.app_label} checked={m.enabled} disabled={m.is_core || !canEdit || mutation.isPending}
-              onCheckedChange={(enabled) => mutation.mutate({ appLabel: m.app_label, enabled })} />
-          </li>
-        ))}
+        {(query.data ?? []).map((m) => {
+          // Подмодуль гаснет вместе с родителем: пока родитель выключен,
+          // собственный рубильник подмодуля ничего не решает.
+          const parent = m.parent ? query.data?.find((row) => row.app_label === m.parent) : undefined;
+          const parentOff = parent !== undefined && !parent.enabled;
+          return (
+            <li key={m.app_label} className={cn('flex items-center justify-between px-3 py-2 text-sm', m.parent && 'pl-8')}>
+              <span className="font-mono">
+                {m.parent && <span aria-hidden className="mr-1 text-muted-foreground">↳</span>}
+                {m.app_label}
+                {m.is_core && <span className="ml-2 text-xs text-muted-foreground">{t('companies.modules.core', 'ядро')}</span>}
+                {parentOff && (
+                  <span className="ml-2 font-sans text-xs text-muted-foreground">
+                    {t('companies.modules.parentOff', 'выключен вместе с {{parent}}', { parent: m.parent })}
+                  </span>
+                )}
+              </span>
+              <Switch aria-label={m.app_label} checked={m.enabled && !parentOff}
+                disabled={m.is_core || parentOff || !canEdit || mutation.isPending}
+                onCheckedChange={(enabled) => mutation.mutate({ appLabel: m.app_label, enabled })} />
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

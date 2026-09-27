@@ -91,6 +91,10 @@ x-django-env: &django-env
   GF_TELEGRAM_BOT_TOKEN: ""
   TELEGRAM_BOT_TOKEN: ""
   TELEGRAM_DIGEST_CHAT_ID: ""
+  # Бот уведомлений пользователей: на тестовом стенде выключен (доставки skipped).
+  NOTIFY_TELEGRAM_BOT_TOKEN: ""
+  NOTIFY_TELEGRAM_BOT_NAME: ""
+  NOTIFY_TELEGRAM_WEBHOOK_SECRET: ""
 
   # Антивирус загрузок — см. docker-compose.yml: по умолчанию выключен (D-31).
   # Включить: ANTIVIRUS_CLAMD_HOST=clamav в окружении и `--profile antivirus`

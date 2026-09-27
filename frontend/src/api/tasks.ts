@@ -878,11 +878,11 @@ export const fetchNotificationHistory = async (
   return res.data;
 };
 
-export const markNotificationRead = async (id: number): Promise<void> => {
+export const markNotificationRead = async (id: string): Promise<void> => {
   await api.post(`${BASE}notifications/${id}/mark_read/`);
 };
 
-export const markNotificationUnread = async (id: number): Promise<void> => {
+export const markNotificationUnread = async (id: string): Promise<void> => {
   await api.post(`${BASE}notifications/${id}/mark_unread/`);
 };
 
@@ -890,7 +890,7 @@ export const markAllNotificationsRead = async (): Promise<void> => {
   await api.post(`${BASE}notifications/mark-all-read/`);
 };
 
-export const deleteNotification = async (id: number): Promise<void> => {
+export const deleteNotification = async (id: string): Promise<void> => {
   await api.delete(`${BASE}notifications/${id}/`);
 };
 
@@ -900,7 +900,7 @@ export const deleteNotification = async (id: number): Promise<void> => {
  * concrete entity reference).
  */
 export const notificationTargetUrl = (
-  n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb'>,
+  n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb' | 'url'>,
 ): string | null => {
   if (n.target_type === 'task' && n.target_id) return `/tasks/${n.target_id}`;
   if (n.target_type === 'calendar_event' && n.target_id)
@@ -934,6 +934,10 @@ export const notificationTargetUrl = (
   const verb = n.verb || '';
   const calMatch = verb.match(/^calendar_(?:invited|updated):event:(\d+):/);
   if (calMatch) return `/calendar?event=${calMatch[1]}`;
+  // Цель, которой нет в карте выше (документы модуля БЗО и прочие новые
+  // писатели центра уведомлений), — переход по ссылке, которую положил
+  // писатель. Только внутренний путь: внешний адрес колокольчик не открывает.
+  if (n.url && n.url.startsWith('/') && !n.url.startsWith('//')) return n.url;
   return null;
 };
 

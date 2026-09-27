@@ -125,6 +125,10 @@ x-django-env: &django-env
   # его здесь значило бы завести вторую правду о том, куда шлём.
   # Пусто = сводка молча не отправляется.
   TELEGRAM_DIGEST_CHAT_ID: ${TELEGRAM_DIGEST_CHAT_ID:-}
+  # Бот уведомлений пользователей (центр уведомлений, D-24) — отдельный от бота алертов.
+  NOTIFY_TELEGRAM_BOT_TOKEN: ${NOTIFY_TELEGRAM_BOT_TOKEN:-}
+  NOTIFY_TELEGRAM_BOT_NAME: ${NOTIFY_TELEGRAM_BOT_NAME:-}
+  NOTIFY_TELEGRAM_WEBHOOK_SECRET: ${NOTIFY_TELEGRAM_WEBHOOK_SECRET:-}
 
   # ── Антивирус загрузок (ТЗ §21 [Л], htqweb/antivirus.py) ─────────────────
   # По умолчанию ВЫКЛЮЧЕН: мастер-план БЗО, D-31 — «задел под ClamAV, по

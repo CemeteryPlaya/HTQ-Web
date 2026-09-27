@@ -31,8 +31,11 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 
+from apps.notifications import interface as notifications
+from htqweb.tenancy.context import current_company_or_none
+
 from ..models import (
-    CalendarEvent, CalendarEventParticipant, EventException, Notification,
+    CalendarEvent, CalendarEventParticipant, EventException,
     ProductionDay, Task,
 )
 from . import hydration
@@ -283,12 +286,11 @@ def _notify_invitees(event: CalendarEvent, *, actor_id: int | None,
     title = (event.title or "")[:140]
     prefix = _VERB_TEXT.get(verb)
     readable = f"{prefix} «{title}»" if prefix else f"{verb}: «{title}»"
-    Notification.objects.bulk_create([
-        Notification(recipient_id=uid, actor_id=actor_id, task=None,
-                     target_type="calendar_event", target_id=event.id,
-                     verb=readable)
-        for uid in sorted(targets)
-    ])
+    # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
+    notifications.notify(
+        recipients=sorted(targets), event=f"tasks.{verb}", title=readable,
+        company_slug=current_company_or_none(), target_type="calendar_event",
+        target_id=str(event.id), actor_id=actor_id, deliver=False)
 
 
 def _sync_is_global(payload: dict) -> None:

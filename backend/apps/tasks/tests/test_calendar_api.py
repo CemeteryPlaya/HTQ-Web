@@ -13,8 +13,10 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
+# Колокольчик — в центре уведомлений (A1.5 модуля БЗО).
+from apps.notifications.models import Notification
 from apps.tasks.models import (
-    CalendarEvent, CalendarEventParticipant, EventException, Notification,
+    CalendarEvent, CalendarEventParticipant, EventException,
     ProductionDay, Task,
 )
 from apps.users.models import User, UserStatus
@@ -124,7 +126,7 @@ def test_create_event_invites_and_notifies():
     assert recipients == {11, 12}          # the author is not notified
     note = Notification.objects.first()
     assert note.target_type == "calendar_event"
-    assert "пригласил(а) на событие" in note.verb
+    assert "пригласил(а) на событие" in note.title
 
 
 @pytest.mark.django_db

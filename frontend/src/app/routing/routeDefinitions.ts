@@ -57,6 +57,8 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },
+  // Каналы уведомлений (центр уведомлений) — свои настройки, гейта модуля нет.
+  { path: '/settings/notifications', component: lazyPages.NotificationSettings, requiresAuth: true },
   { path: '/calendar', component: lazyPages.HRCalendar, requiresAuth: true },
   { path: '/files', component: lazyPages.DepartmentFiles, requiresAuth: true },
   { path: '/conference', component: lazyPages.ConferencePage, requiresAuth: true },

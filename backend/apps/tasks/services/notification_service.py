@@ -1,67 +1,63 @@
-"""Notifications — the bell dropdown and the history page.
+"""Колокольчик и история — фасад над центром уведомлений (A1.5 модуля БЗО).
 
-Ported from ``services/task/app/api/v1/notifications.py``. Every read and
-write is scoped to ``recipient_id == caller``: a notification is private to
-its recipient, so "not yours" and "does not exist" both answer 404 and the
-endpoints cannot be used to probe other people's feeds.
+Хранит уведомления ``apps.notifications`` (public); этот модуль сохраняет
+контракт ручек ``/api/tasks/v1/notifications…``, на который смонтированы
+колокольчик и страница истории, и добавляет то, что знает только домен
+задач: ключ задачи (``task_key``) и имя актора. Лента на поддомене —
+уведомления этой компании плюс общие (без компании).
 
-``actor_avatar_url`` is the one denormalised field that does NOT come from
-``apps.users.interface``: it is a snapshot taken when the row was written.
-The original added it so a lagging replica could not blank the toast's
-photo; here it survives for a better reason — it is a point-in-time record,
-and a later avatar change should not rewrite history. The actor's *name*
-still hydrates live, matching the original.
+Каждое чтение и запись ограничены получателем: чужое уведомление и
+несуществующее одинаково отвечают 404 — ручки нельзя использовать, чтобы
+прощупать чужую ленту.
+
+``actor_avatar_url`` — снимок на момент записи (точка во времени, смена
+аватара историю не переписывает); имя актора гидрируется вживую.
+
+``tasks.Notification`` больше не пишется: он остался только источником
+переноса (``manage.py notifications_import_tasks --company <slug>``).
 """
 
 from __future__ import annotations
 
-from django.http import Http404
-from django.utils import timezone
+from apps.notifications import interface as notifications
+from htqweb.tenancy.context import current_company_or_none
 
 from .. import schemas
-from ..models import Notification, Task
+from ..models import Task
 from . import hydration
 
 
-def _hydrate(rows: list[Notification]) -> list[schemas.NotificationResponse]:
+def _task_id(row: dict) -> int | None:
+    target = row["target_id"] or ""
+    return int(target) if row["target_type"] == "task" and target.isdigit() else None
+
+
+def _hydrate(rows: list[dict]) -> list[schemas.NotificationResponse]:
     if not rows:
         return []
-
-    users = hydration.user_briefs([row.actor_id for row in rows])
-
-    # A row points at a task either through the legacy FK or through the
-    # generic ``target_type='task'`` pair; both are resolved in one query.
-    task_ids: set[int] = set()
-    for row in rows:
-        if row.task_id:
-            task_ids.add(row.task_id)
-        if row.target_type == "task" and row.target_id:
-            task_ids.add(row.target_id)
+    users = hydration.user_briefs([row["actor_id"] for row in rows])
+    task_ids = {tid for tid in (_task_id(row) for row in rows) if tid is not None}
     task_keys = dict(Task.objects.filter(id__in=task_ids)
                      .values_list("id", "key")) if task_ids else {}
-
     out = []
     for row in rows:
-        effective_task_id = row.task_id or (
-            row.target_id if row.target_type == "task" else None)
+        task_id = _task_id(row)
         out.append(schemas.NotificationResponse.model_validate({
-            "id": row.id,
-            "recipient_id": row.recipient_id,
-            "actor_id": row.actor_id,
-            "actor_name": hydration.user_name(users, row.actor_id),
-            # Snapshot first; the live brief carries no avatar today (see the
-            # gap documented in services/hydration.py).
-            "actor_avatar_url": (row.actor_avatar_url
-                                 or hydration.user_avatar(users, row.actor_id)),
-            "verb": row.verb,
-            "task_id": row.task_id,
-            "task_key": task_keys.get(effective_task_id) if effective_task_id
-            else None,
-            "target_type": row.target_type,
-            "target_id": row.target_id,
-            "is_read": row.is_read,
-            "read_at": row.read_at,
-            "created_at": row.created_at,
+            "id": row["id"],
+            "recipient_id": row["recipient_id"],
+            "actor_id": row["actor_id"],
+            "actor_name": hydration.user_name(users, row["actor_id"]),
+            "actor_avatar_url": (row["actor_avatar_url"]
+                                 or hydration.user_avatar(users, row["actor_id"])),
+            "verb": row["title"],
+            "task_id": task_id,
+            "task_key": task_keys.get(task_id) if task_id else None,
+            "target_type": row["target_type"],
+            "target_id": row["target_id"],
+            "url": row["url"] or None,
+            "is_read": row["is_read"],
+            "read_at": row["read_at"],
+            "created_at": row["created_at"],
         }))
     return out
 
@@ -69,62 +65,33 @@ def _hydrate(rows: list[Notification]) -> list[schemas.NotificationResponse]:
 def latest(user_id: int, limit: int = 50) -> list[schemas.NotificationResponse]:
     """Newest first, flat (no pagination envelope) — the bell dropdown's
     shape, kept for backwards compatibility with ``NotificationsViewer``."""
-    rows = list(Notification.objects.filter(recipient_id=user_id)
-                .order_by("-created_at")[:limit])
-    return _hydrate(rows)
+    return _hydrate(notifications.latest(user_id, company_slug=current_company_or_none(),
+                                         limit=limit))
 
 
 def history(user_id: int, *, page: int = 1, limit: int = 25,
             status: str = "all", target_type: str | None = None) -> schemas.NotificationsPage:
-    qs = Notification.objects.filter(recipient_id=user_id)
-    if status == "unread":
-        qs = qs.filter(is_read=False)
-    elif status == "read":
-        qs = qs.filter(is_read=True)
-    if target_type:
-        qs = qs.filter(target_type=target_type)
-
-    total = qs.count()
-    # The unread counter deliberately ignores the read-state filter so the
-    # header badge stays the same number whichever tab is open.
-    unread_total = Notification.objects.filter(recipient_id=user_id,
-                                               is_read=False).count()
-    rows = list(qs.order_by("-created_at")[(page - 1) * limit:page * limit])
-    pages = (total + limit - 1) // limit if total else 0
+    # unread_total считается центром без фильтра вкладки — счётчик в шапке
+    # один и тот же, какая бы вкладка ни была открыта.
+    data = notifications.history(user_id, company_slug=current_company_or_none(),
+                                 page=page, limit=limit, status=status,
+                                 target_type=target_type)
     return schemas.NotificationsPage(
-        items=_hydrate(rows), total=total, page=page, pages=pages,
-        limit=limit, unread_total=unread_total,
-    )
+        items=_hydrate(data["items"]), total=data["total"], page=data["page"],
+        pages=data["pages"], limit=data["limit"], unread_total=data["unread_total"])
 
 
-def _own(notification_id: int, user_id: int) -> Notification:
-    row = Notification.objects.filter(pk=notification_id,
-                                      recipient_id=user_id).first()
-    if row is None:
-        raise Http404("Notification not found")
-    return row
+def mark_read(notification_id: str, user_id: int) -> None:
+    notifications.mark_read(notification_id, user_id)
 
 
-def mark_read(notification_id: int, user_id: int) -> None:
-    row = _own(notification_id, user_id)
-    if not row.is_read:
-        row.is_read = True
-        row.read_at = timezone.now()
-        row.save(update_fields=["is_read", "read_at", "updated_at"])
-
-
-def mark_unread(notification_id: int, user_id: int) -> None:
-    row = _own(notification_id, user_id)
-    if row.is_read:
-        row.is_read = False
-        row.read_at = None
-        row.save(update_fields=["is_read", "read_at", "updated_at"])
+def mark_unread(notification_id: str, user_id: int) -> None:
+    notifications.mark_unread(notification_id, user_id)
 
 
 def mark_all_read(user_id: int) -> None:
-    Notification.objects.filter(recipient_id=user_id, is_read=False).update(
-        is_read=True, read_at=timezone.now(), updated_at=timezone.now())
+    notifications.mark_all_read(user_id, company_slug=current_company_or_none())
 
 
-def delete(notification_id: int, user_id: int) -> None:
-    _own(notification_id, user_id).delete()
+def delete(notification_id: str, user_id: int) -> None:
+    notifications.delete(notification_id, user_id)

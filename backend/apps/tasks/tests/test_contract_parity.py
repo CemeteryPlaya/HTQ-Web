@@ -26,7 +26,7 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.tasks.models import (
-    AssigneeRole, CalendarEvent, Equipment, Label, Notification, Project,
+    AssigneeRole, CalendarEvent, Equipment, Label, Project,
     Task, TaskActivity, TaskAssignee, ResourceAllocation, TaskAttachment,
     TaskComment, TaskDelegate, TaskType, TaskWatcher,
 )
@@ -205,10 +205,15 @@ def test_project_responses_match_the_fastapi_schema():
 
 @pytest.mark.django_db
 def test_notification_responses_match_the_fastapi_schemas():
+    # Колокольчик — в центре уведомлений (A1.5 модуля БЗО).
+    from apps.notifications.models import Notification as CenterNotification
+
+    from .helpers import COMPANY
+
     task = Task.objects.create(key="TASK-1", summary="A")
-    Notification.objects.create(recipient_id=7, actor_id=11, task=task,
-                                verb="task_assigned:TASK-1",
-                                target_type="task", target_id=task.id)
+    CenterNotification.objects.create(recipient_id=7, actor_id=11, event="tasks.task",
+                                      title="task_assigned:TASK-1", company_slug=COMPANY,
+                                      target_type="task", target_id=str(task.id))
     client = Client()
     assert_each(client.get(f"{BASE}/notifications/", **auth()).json(),
                 "NotificationResponse")

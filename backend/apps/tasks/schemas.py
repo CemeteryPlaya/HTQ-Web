@@ -1033,9 +1033,13 @@ class NotificationResponse(BaseModel):
     reference; the frontend maps the type to a route, so the backend stays
     free of UI knowledge. ``task_key`` is filled when the row references a
     task (legacy ``task_id`` FK OR ``target_type='task'``) so the dropdown
-    can show «В задаче: ABC-123» without a second roundtrip."""
+    can show «В задаче: ABC-123» without a second roundtrip.
 
-    id: int
+    С переезда ленты в центр уведомлений ``id`` и ``target_id`` — строки
+    (UUID центра и id цели любого типа), ``url`` — ссылка, которую положил
+    писатель (у уведомлений модуля БЗО), для целей без карты маршрутов."""
+
+    id: str
     recipient_id: int
     actor_id: int | None = None
     actor_name: str | None = None
@@ -1044,7 +1048,8 @@ class NotificationResponse(BaseModel):
     task_id: int | None = None
     task_key: str | None = None
     target_type: str | None = None
-    target_id: int | None = None
+    target_id: str | None = None
+    url: str | None = None
     is_read: bool
     read_at: datetime | None = None
     created_at: datetime

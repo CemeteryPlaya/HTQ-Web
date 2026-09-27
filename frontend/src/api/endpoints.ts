@@ -24,6 +24,13 @@ export const API_ENDPOINTS = {
   // Реестр компаний группы (Django app apps.companies): мои компании для
   // переключателя, дерево владения, модули и членство.
   companies: 'companies/v1',
+  // Модуль БЗО «Бюджет, закупки и оплаты» и его платформенные аппки
+  // (docs/plans/2026-09-26-bpp-master-plan.md): «Проект», справочники,
+  // центр уведомлений, сам модуль.
+  project: 'project/v1',
+  refdata: 'refdata/v1',
+  notifications: 'notifications/v1',
+  bpp: 'bpp/v1',
   // Django "core" app (Phase 0) — service on/off registry (Task 0.5/0.7).
   // Not fronted by nginx yet; see hooks/useServiceStatus.ts for the
   // graceful-degradation contract while the Django backend isn't in traffic.

@@ -215,19 +215,19 @@ urlpatterns = [
     # Notifications — frontend: 'notifications/', 'notifications/history/',
     # 'notifications/mark-all-read/', 'notifications/{id}/mark_read/',
     # '{id}/mark_unread/', '{id}/'. ``history/`` and ``mark-all-read/`` are
-    # registered before the ``<int:notification_id>`` routes so a converter
+    # registered before the ``<str:notification_id>`` routes so a converter
     # change can never let the id pattern swallow them.
     path("notifications/", views.notifications_collection),
     path("notifications/history/", views.notification_history),
     path("notifications/history", views.notification_history),
     path("notifications/mark-all-read/", views.notifications_mark_all_read),
     path("notifications/mark-all-read", views.notifications_mark_all_read),
-    path("notifications/<int:notification_id>/mark_read/",
+    path("notifications/<str:notification_id>/mark_read/",
          views.notification_mark_read),
-    path("notifications/<int:notification_id>/mark_unread/",
+    path("notifications/<str:notification_id>/mark_unread/",
          views.notification_mark_unread),
-    path("notifications/<int:notification_id>", views.notification_detail),
-    path("notifications/<int:notification_id>/", views.notification_detail),
+    path("notifications/<str:notification_id>", views.notification_detail),
+    path("notifications/<str:notification_id>/", views.notification_detail),
 
     # Labels — frontend: 'labels/', 'labels/{id}/'.
     path("labels/", views.labels_collection),

@@ -32,7 +32,7 @@ def revoke(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("access", "0012_seed_services_admin_role"),
+        ("access", "0015_project_all_node"),
     ]
 
     operations = [

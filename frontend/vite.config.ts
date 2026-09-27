@@ -371,6 +371,25 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // Модуль БЗО и его платформенные аппки. Легаси-путей без /v1/ нет — по
+    // строке на домен; без неё запрос уйдёт в сам dev-сервер и вернёт
+    // index.html (сторож src/api/endpoints.proxy.test.ts).
+    "^/api/project/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
+    "^/api/refdata/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
+    "^/api/notifications/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
+    "^/api/bpp/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,

@@ -133,6 +133,13 @@ INSTALLED_APPS = [
     # до первого ready(), поэтому предметная аппка вправе регистрировать
     # свой тип независимо от того, стоит она здесь выше или ниже.
     "apps.signoff",
+    # Модуль БЗО «Бюджет, закупки и оплаты» и его платформенные аппки
+    # (docs/plans/2026-09-26-bpp-master-plan.md). project и bpp — тенантные,
+    # но в TENANT_APPS попадают вместе с первой миграцией (задачи A1.3, A1.1).
+    "apps.refdata",        # справочники, public · /api/refdata/v1/
+    "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
+    "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
+    "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
@@ -141,7 +148,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
@@ -401,6 +408,12 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 # Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
 # сводку когда-нибудь захотят слать другим ботом.
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# Бот уведомлений пользователей (D-24, Q-E20) — ОТДЕЛЬНЫЙ от бота алертов
+# Grafana: токен алертов не должен попадать в пользовательский контур.
+# Пусто — канал Telegram выключен для всех (доставки помечаются skipped).
+NOTIFY_TELEGRAM_BOT_TOKEN = env("NOTIFY_TELEGRAM_BOT_TOKEN", "")
+NOTIFY_TELEGRAM_BOT_NAME = env("NOTIFY_TELEGRAM_BOT_NAME", "")
+NOTIFY_TELEGRAM_WEBHOOK_SECRET = env("NOTIFY_TELEGRAM_WEBHOOK_SECRET", "")
 # А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
 # contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
 # там), и продублировать его ещё и здесь значило бы завести вторую правду о

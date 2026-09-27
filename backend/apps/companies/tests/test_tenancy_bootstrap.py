@@ -206,7 +206,7 @@ def test_migration_state_travels_with_the_tables():
             [list(settings.TENANT_APPS)],
         )
         before = {row[0] for row in cur.fetchall()}
-    assert before == {"hr", "tasks", "contracts", "signoff"}, (
+    assert before == set(settings.TENANT_APPS), (
         "предусловие теста: до переноса тенантные аппки обязаны быть "
         "мигрированы в public — иначе тест ничего не доказывает"
     )
@@ -216,7 +216,7 @@ def test_migration_state_travels_with_the_tables():
     with connection.cursor() as cur:
         cur.execute(f"SELECT DISTINCT app FROM {SCHEMA}.django_migrations")
         apps_in_schema = {row[0] for row in cur.fetchall()}
-    assert apps_in_schema == {"hr", "tasks", "contracts", "signoff"}
+    assert apps_in_schema == set(settings.TENANT_APPS)
 
     with connection.cursor() as cur:
         cur.execute(

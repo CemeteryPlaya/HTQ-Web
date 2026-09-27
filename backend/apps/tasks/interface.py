@@ -25,8 +25,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from django.utils import timezone
-
 from apps.core.services import require_service
 
 _BRIEF_FIELDS = ("id", "key", "summary", "status", "assignee_id",
@@ -132,6 +130,26 @@ def find_project_by_name(name: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def projects_without_ref() -> list[dict]:
+    """Проекты доски без ссылки на «Проект» БЗО — для ``project_link_tasks``.
+
+    Ровно ``id`` и ``name``: своего кода у доски нет, код «Проекта» команда
+    выводит из ``id``.
+    """
+    require_service("tasks")
+    from .models import Project
+
+    return list(Project.objects.filter(project_ref="").order_by("id").values("id", "name"))
+
+
+def set_project_ref(project_id: int, project_ref: str) -> None:
+    """Записать ссылку доски на «Проект» БЗО (строка UUID, не FK)."""
+    require_service("tasks")
+    from .models import Project
+
+    Project.objects.filter(pk=project_id).update(project_ref=project_ref)
+
+
 class ContractorLinkConflict(Exception):
     """Связать партнёра с контрагентом нельзя: партнёр уже за другим
     контрагентом, БИН/ИИН пары расходится и т. п. Текст — для человека,
@@ -193,11 +211,17 @@ def push_notification(*, recipient_id: int, verb: str,
                       actor_id: int | None = None,
                       actor_avatar_url: str | None = None,
                       target_type: str | None = None,
-                      target_id: int | None = None) -> dict | None:
+                      target_id: int | str | None = None) -> dict | None:
     """Создать уведомление в колокольчике от имени соседней аппки.
 
-    Замена подписчику ``notify_sync``: messenger («вам написали») и mail
-    («новое письмо») зовут это вместо публикации в Redis.
+    Замена подписчику ``notify_sync``: messenger («вам написали»), mail
+    («новое письмо»), конференции и кадры зовут это вместо публикации в Redis.
+
+    С задачи A1.5 модуля БЗО строка пишется в центр уведомлений
+    (``apps.notifications``, public), а не в ``tasks.Notification``: сигнатура
+    и окно дедупликации прежние, компания — из текущего контекста (без
+    контекста уведомление общее). Только колокольчик (``deliver=False``):
+    письмо о каждом сообщении было бы новым поведением, а не переездом.
 
     Идемпотентно в пределах ``_DEDUPE_WINDOW``: если такое же уведомление
     этому получателю уже создано за последние 5 минут — возвращается
@@ -205,26 +229,38 @@ def push_notification(*, recipient_id: int, verb: str,
 
     ``actor_avatar_url`` сохраняется снимком на момент записи: это
     точка-во-времени, и последующая смена аватара не должна переписывать
-    историю (см. ``apps.tasks.models.Notification``).
+    историю.
+    """
+    require_service("tasks")
+    from apps.notifications import interface as notifications
+    from htqweb.tenancy.context import current_company_or_none
+
+    ids = notifications.notify(
+        recipients=[recipient_id], event=f"tasks.{target_type or 'generic'}", title=verb,
+        company_slug=current_company_or_none(), target_type=target_type or "",
+        target_id=str(target_id) if target_id is not None else "", actor_id=actor_id,
+        actor_avatar_url=actor_avatar_url, deliver=False,
+        dedupe_window_seconds=int(_DEDUPE_WINDOW.total_seconds()))
+    if not ids:
+        return None
+    return {"id": ids[0], "recipient_id": recipient_id, "verb": verb,
+            "target_type": target_type, "target_id": target_id}
+
+
+def legacy_notifications() -> list[dict]:
+    """Все строки старой ленты ``tasks.Notification`` текущей компании — для
+    переноса в центр уведомлений (``manage.py notifications_import_tasks``).
+
+    Ключи: ``id, recipient_id, actor_id, verb, actor_avatar_url, target_type,
+    target_id, task_id, is_read, read_at, created_at``. После переноса на бою
+    модель удаляется отдельной contract-миграцией.
     """
     require_service("tasks")
     from .models import Notification
 
-    since = timezone.now() - _DEDUPE_WINDOW
-    if Notification.objects.filter(
-            recipient_id=recipient_id, actor_id=actor_id, verb=verb,
-            target_type=target_type, target_id=target_id,
-            created_at__gte=since).exists():
-        return None
-
-    row = Notification.objects.create(
-        recipient_id=recipient_id, actor_id=actor_id, verb=verb,
-        actor_avatar_url=actor_avatar_url, target_type=target_type,
-        target_id=target_id,
-    )
-    return {"id": row.id, "recipient_id": row.recipient_id, "verb": row.verb,
-            "target_type": row.target_type, "target_id": row.target_id,
-            "created_at": row.created_at}
+    return list(Notification.objects.order_by("id").values(
+        "id", "recipient_id", "actor_id", "verb", "actor_avatar_url", "target_type",
+        "target_id", "task_id", "is_read", "read_at", "created_at"))
 
 
 def _conference_payload(event, invitee_ids: list[int]) -> dict:

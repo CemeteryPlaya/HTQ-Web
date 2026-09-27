@@ -51,7 +51,8 @@ def test_modules_list_and_patch(client, company):
     res = client.get(f"{BASE}/companies/htq/modules", **auth(superuser_token()))
     assert res.status_code == 200
     tasks = next(m for m in res.json() if m["app_label"] == "tasks")
-    assert tasks == {"app_label": "tasks", "enabled": True, "message": "", "is_core": False}
+    assert tasks == {"app_label": "tasks", "enabled": True, "message": "",
+                     "is_core": False, "parent": None}
 
     res = patch_json(client, f"{BASE}/companies/htq/modules/tasks",
                      {"enabled": False, "message": "Закрыто на инвентаризацию"},

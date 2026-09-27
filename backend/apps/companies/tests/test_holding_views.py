@@ -153,8 +153,17 @@ def test_holding_models_covers_every_tenant_app():
     пятая тенантная аппка, заведённая без holding.py, обязана уронить этот
     тест, а не пройти мимо него.
     """
+    from django.apps import apps as django_apps
+
     labels = {model._meta.app_label for model in holding_views.holding_models()}
-    assert labels == set(django_settings.TENANT_APPS)
+    # HOLDING_MODELS = () — штатное «сводить нечего» (докстринг holding_views);
+    # такая аппка в сводках не появляется, но объявление у неё обязано быть.
+    declaring = {
+        label for label in django_settings.TENANT_APPS
+        if __import__(f"{django_apps.get_app_config(label).name}.holding",
+                      fromlist=["holding"]).HOLDING_MODELS
+    }
+    assert labels == declaring
 
 
 def test_tenant_app_without_holding_module_is_an_error(settings):

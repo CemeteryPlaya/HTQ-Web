@@ -66,6 +66,14 @@ const writeSeen = (set: Set<string>) => {
     }
 };
 
+/** В «показанных» только числовые id — список остался от старой ленты
+ *  (`tasks.Notification`). С переезда в центр уведомлений id — UUID, и те же
+ *  уведомления приходят под новыми id: показывать их заново значило бы
+ *  засыпать человека карточками со звуком в день выкатки. Пустой список —
+ *  это не переезд, а первое открытие на устройстве: там всё как раньше. */
+const isLegacySeen = (seen: Set<string>): boolean =>
+    seen.size > 0 && Array.from(seen).every((key) => /^\d+$/.test(key));
+
 export const NotificationToasts: React.FC = () => {
     const { t } = useTranslation();
     const navigate = useNavigate();
@@ -95,6 +103,12 @@ export const NotificationToasts: React.FC = () => {
         if (!toastHostMounted) return;
 
         const seen = readSeen();
+        if (isLegacySeen(seen)) {
+            // Переезд: текущую ленту молча считаем показанной.
+            for (const n of notifications) seen.add(String(n.id));
+            writeSeen(seen);
+            return;
+        }
         for (const n of notifications) {
             const key = String(n.id);
             if (seen.has(key)) continue;

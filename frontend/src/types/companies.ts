@@ -85,6 +85,8 @@ export interface CompanyModule {
   enabled: boolean;
   message: string;
   is_core: boolean;
+  /** Родительский модуль подмодуля (`apps.core.models.KNOWN_SUBMODULES`); null — модуль. */
+  parent?: string | null;
 }
 
 export interface CompanyMembership {

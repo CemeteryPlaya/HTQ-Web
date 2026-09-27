@@ -721,7 +721,8 @@ export type NotificationTargetType =
   | null;
 
 export interface Notification {
-  id: number;
+  /** UUID строки центра уведомлений (apps.notifications) — с переезда ленты. */
+  id: string;
   recipient: number;
   actor: number | null;
   actor_name: string | null;
@@ -730,7 +731,10 @@ export interface Notification {
   task: number | null;
   task_key: string | null;
   target_type: NotificationTargetType;
-  target_id: number | null;
+  /** Id цели любого типа — строкой (у документов модуля БЗО это UUID). */
+  target_id: string | null;
+  /** Ссылка, которую положил писатель: переход для целей без карты маршрутов. */
+  url?: string | null;
   is_read: boolean;
   read_at: string | null;
   created_at: string;

@@ -517,3 +517,14 @@ def participant_position() -> dict | None:
         return None
     return {"id": position.id, "title": position.title,
             "is_active": position.is_active}
+
+
+def positions_by_title(titles: list[str]) -> dict[str, int]:
+    """Активные должности компании по точному названию — для сидов и выдачи
+    ролей (``bpp_assign_roles``). Название неуникально — берётся первая по id."""
+    require_service("hr")
+    found: dict[str, int] = {}
+    for row in (Position.objects.filter(title__in=titles, is_active=True)
+                .order_by("id").values("id", "title")):
+        found.setdefault(row["title"], row["id"])
+    return found
