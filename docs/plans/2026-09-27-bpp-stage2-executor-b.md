@@ -248,7 +248,7 @@
 | L-02 / F-02 заявка | `requests/RequestList.tsx`, `requests/RequestForm.tsx`, `requests/ItemsTable.tsx` | роль инициатора, проект → статьи группы → остаток, «Остаток после заявки» на лету, «Отправить» недоступна при превышении с текстом, жёлтая плашка комментария возврата, вставка позиций из Excel, блок «Исполнение», колонка «Сейчас у» |
 | L-04 + F-03 план | `plan/PlanList.tsx`, `plan/PlanWizard.tsx` | фильтры §8.2, выбор позиций, кнопки блокируются при разных статьях, мастер ведёт в F-04/F-05 (этап 3) |
 
-**Карточка процесса `signoff`.** `SIGNOFF_SUBJECT_VIEWS` (`frontend/src/app/signoffSubjectViews.ts`) переходит на строковый id: `SubjectViewProps.id: SubjectId` вместо `Number(process.subject_id)`. Регистрируется `bpp.purchase_request` → `RequestSubjectView`.
+**Карточка процесса `signoff`.** Сделано заранее, 27.09. `SIGNOFF_SUBJECT_VIEWS` (`frontend/src/app/signoffSubjectViews.ts`) переведена на строковый id: `SubjectViewProps.id: string`, представления старых доменов с целыми id подключены через `intKeyed`, документы БЗО подключаются через `stringKeyed`. Остаётся зарегистрировать `bpp.purchase_request` → `RequestSubjectView` через `stringKeyed`.
 
 **Тесты (vitest):**
 - пересчёт остатка при вводе;
@@ -256,7 +256,7 @@
 - выбор позиций разных статей блокирует кнопки;
 - роль инициатора скрыта при одной роли;
 - корректировка требует комментарий ≥ 10;
-- строковый id в `SIGNOFF_SUBJECT_VIEWS`.
+- строковый id в `SIGNOFF_SUBJECT_VIEWS` — есть (`src/app/__tests__/signoffSubjectViews.test.tsx`).
 
 ---
 
