@@ -39,3 +39,12 @@ def test_expired_or_unknown_code_does_not_link(settings):
     Client().post(f"{BASE}/telegram/webhook", data=json.dumps(update),
                   content_type="application/json", HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="s3cret")
     assert not TelegramLink.objects.exclude(chat_id="").exists()
+
+
+@pytest.mark.django_db
+def test_webhook_with_broken_json_is_400(settings):
+    settings.NOTIFY_TELEGRAM_WEBHOOK_SECRET = "s3cret"
+    response = Client().post(f"{BASE}/telegram/webhook", data="{not json",
+                             content_type="application/json",
+                             HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN="s3cret")
+    assert response.status_code == 400

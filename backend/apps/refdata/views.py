@@ -12,7 +12,7 @@ from django.forms.models import model_to_dict
 from django.http import Http404
 
 from htqweb.errors import DomainError
-from htqweb.http import api_view, json_error
+from htqweb.http import api_view, json_error, uuid_or_404
 
 from . import models, schemas
 from .services import editing
@@ -86,7 +86,7 @@ def _item(model, schema_patch):
     @api_view(methods=("PATCH",), module="refdata", level="write", body=schema_patch)
     def patch(request, obj_id: str, data):
         _deny_unless_editor(request)
-        obj = model.objects.filter(pk=obj_id).first()
+        obj = model.objects.filter(pk=uuid_or_404(obj_id)).first()
         if obj is None:
             raise Http404("Запись справочника не найдена")
         for key, value in data.model_dump(exclude_unset=True).items():

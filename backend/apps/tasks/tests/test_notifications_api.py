@@ -208,3 +208,8 @@ def test_another_users_notification_is_404_not_403(method, suffix):
         f"{BASE}/notifications/{row.id}{suffix}", **auth(token()))
     assert resp.status_code == 404
     assert Notification.objects.filter(pk=row.id).exists()
+
+
+@pytest.mark.django_db
+def test_malformed_id_is_404():
+    assert Client().post(f"{BASE}/notifications/42/mark_read/", **auth()).status_code == 404

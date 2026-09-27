@@ -81,3 +81,11 @@ def test_article_code_is_unique(holding):
     assert _post("articles", body, holding.slug).status_code == 201
     second = _post("articles", body, holding.slug)
     assert second.status_code == 422 and second.json()["code"] == "E-REF-02"
+
+
+@pytest.mark.django_db
+def test_malformed_id_is_404(holding):
+    assign(holding.slug, 7, "refdata", "full")
+    response = Client().patch(f"{BASE}/uoms/not-a-uuid", data=json.dumps({"name": "x"}),
+                              content_type="application/json", **_auth(holding.slug))
+    assert response.status_code == 404

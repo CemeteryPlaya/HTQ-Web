@@ -24,17 +24,41 @@ def _company(request):
     return (getattr(request, "company", None) or {}).get("slug")
 
 
+class _BadParam(Exception):
+    pass
+
+
+def _int_param(request, name: str, default: int, low: int, high: int) -> int:
+    """Целый параметр запроса в пределах ``[low, high]``; не число — 422."""
+    raw = request.GET.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise _BadParam(f"Параметр «{name}» должен быть целым числом.") from None
+    return max(low, min(value, high))
+
+
 @api_view(methods=("GET",))
 def feed(request):
+    try:
+        limit = _int_param(request, "limit", 50, 1, 200)
+    except _BadParam as exc:
+        return json_error(str(exc), 422)
     return interface.latest(request.token.user_id, company_slug=_company(request),
-                            limit=min(int(request.GET.get("limit", 50)), 200))
+                            limit=limit)
 
 
 @api_view(methods=("GET",))
 def feed_history(request):
+    try:
+        page = _int_param(request, "page", 1, 1, 10_000)
+        limit = _int_param(request, "limit", 25, 1, 100)
+    except _BadParam as exc:
+        return json_error(str(exc), 422)
     return interface.history(request.token.user_id, company_slug=_company(request),
-                             page=max(int(request.GET.get("page", 1)), 1),
-                             limit=min(int(request.GET.get("limit", 25)), 100),
+                             page=page, limit=limit,
                              status=request.GET.get("status", "all"),
                              target_type=request.GET.get("target_type") or None)
 
@@ -116,5 +140,10 @@ def telegram_link(request):
 def telegram_webhook(request):
     if not telegram.secret_ok(request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")):
         return json_error("Forbidden", 403)
-    telegram.complete_link(json.loads(request.body or b"{}"))
+    try:
+        update = json.loads(request.body or b"{}")
+    except ValueError:
+        return json_error("Bad Request", 400)
+    if isinstance(update, dict):
+        telegram.complete_link(update)
     return {"ok": True}

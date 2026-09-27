@@ -68,3 +68,15 @@ def test_telegram_needs_a_linked_chat():
     ok = Client().patch(url, data=json.dumps({"telegram": True}),
                         content_type="application/json", **_auth())
     assert ok.status_code == 200 and ok.json()["telegram"] is True
+
+
+@pytest.mark.django_db
+def test_malformed_id_is_404():
+    """Неверный id в пути — «не найдено», а не 500 из недр ORM."""
+    assert Client().post(f"{BASE}/notifications/not-a-uuid/read", **_auth()).status_code == 404
+
+
+@pytest.mark.django_db
+def test_bad_limit_is_422():
+    response = Client().get(f"{BASE}/notifications?limit=abc", **_auth())
+    assert response.status_code == 422

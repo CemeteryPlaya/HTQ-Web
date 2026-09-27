@@ -11,7 +11,7 @@ from django.http import Http404
 
 from apps.access import interface as access
 from htqweb.errors import DomainError
-from htqweb.http import api_view, json_error
+from htqweb.http import api_view, json_error, uuid_or_404
 
 from . import schemas
 from .models import Project
@@ -32,7 +32,7 @@ def _sees_all(request) -> bool:
 def _project(request, project_id: str) -> Project:
     """Проект, видимый вызывающему. Без узла ``project.all`` — только проект,
     где он участник; чужой отвечает 404, как несуществующий (мастер-план A1.3)."""
-    project = Project.objects.filter(pk=project_id).first()
+    project = Project.objects.filter(pk=uuid_or_404(project_id)).first()
     if project is None or not (
             _sees_all(request) or project.members.filter(user_id=request.token.user_id).exists()):
         raise Http404("Проект не найден")
