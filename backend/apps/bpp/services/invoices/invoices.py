@@ -136,7 +136,9 @@ def allowed_actions(actor: Actor, inv: Invoice) -> list[str]:
         actions += ["save", "submit"]
         if inv.status == InvoiceStatus.DRAFT:
             actions.append("delete")
-    if (author and inv.status in BEFORE_DECISION) or (
+    # Черновик не отменяют, а удаляют: «Отменить» — для отправленного и
+    # возвращённого счёта (у них уже есть номер в журнале и согласовании).
+    if (author and inv.status in BEFORE_DECISION and inv.status != InvoiceStatus.DRAFT) or (
             fd and inv.status in (InvoiceStatus.UNDER_REVIEW, InvoiceStatus.TO_PAY)
             and not _has_payments(inv)):
         actions.append("cancel")

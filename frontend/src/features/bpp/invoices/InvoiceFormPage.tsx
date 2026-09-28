@@ -610,8 +610,9 @@ export function InvoiceFormPage() {
               </label>
               {form.with_vat && (editable && noContract ? (
                 <div className="flex items-center gap-2">
-                  <Input aria-label={t('bpp.invoices.vatRate', 'Ставка НДС, %')} className="w-20 text-right"
+                  <Input aria-label={t('bpp.invoices.vatRate', 'Ставка НДС, %')} className="w-32 text-right"
                     inputMode="decimal" value={form.vat_rate}
+                    placeholder={t('bpp.invoices.vatAuto', 'по справочнику')}
                     onChange={(event) => setForm({ ...form, vat_rate: event.target.value, vat_manual: true })} />
                   <span className="text-sm">%</span>
                   {form.vat_manual && (

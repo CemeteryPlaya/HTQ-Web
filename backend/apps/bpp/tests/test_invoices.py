@@ -410,6 +410,8 @@ def test_http_create_patch_and_registry_tabs(company_context):
     card = created.json()
     assert card["number"].startswith("СЧ-") and card["basis"] == "no_contract"
     assert card["threshold"] == "4325000.00" and card["initiator_role"] == "sn"
+    # Черновик удаляют, а не отменяют.
+    assert "delete" in card["allowed_actions"] and "cancel" not in card["allowed_actions"]
 
     patched = client.patch(f"{BASE}/invoices/{card['id']}", data={
         "version": card["version"], "counterparty_id": str(cp.pk), "ext_number": "7"},
@@ -418,6 +420,7 @@ def test_http_create_patch_and_registry_tabs(company_context):
     submitted = client.post(f"{BASE}/invoices/{card['id']}/submit",
                             data={"version": patched.json()["version"]}, **s.auth(slug, s.SN))
     assert submitted.status_code == 200, submitted.content
+    assert "cancel" in submitted.json()["allowed_actions"]
 
     s.grant(slug, s.FD, "bpp-fd")
     tab = client.get(f"{BASE}/invoices?tab=fd", **s.auth(slug, s.FD)).json()
