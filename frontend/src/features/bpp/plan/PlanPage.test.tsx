@@ -19,8 +19,14 @@ import { qtyProblem, selectionProblem, shownQty } from './planSelection';
 
 const get = vi.hoisted(() => vi.fn());
 const post = vi.hoisted(() => vi.fn());
-vi.mock('@/api/client', () => ({ default: { get, post } }));
+const patch = vi.hoisted(() => vi.fn());
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock('@/api/client', () => ({ default: { get, post, patch } }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => navigate,
+}));
 
 const item = (over: Partial<PlanItem>): PlanItem => ({
   id: 'i1', sys_number: 'ЗЗ-2026-000045-01', request_id: 'r1', request_number: 'ЗЗ-2026-000045',
@@ -120,6 +126,42 @@ describe('PlanPage', () => {
     await userEvent.clear(qty);
     await userEvent.type(qty, '12');
     expect(within(dialog).getByText('Не больше остатка 10')).toBeInTheDocument();
+  });
+
+  it('«Продолжить» создаёт договор и пересчитывает сумму под количество', { timeout: 15000 }, async () => {
+    serve([item({})]);
+    post.mockImplementation((url: string) => {
+      if (url.endsWith('plan/validate')) {
+        return Promise.resolve({ data: {
+          ok: true, target: 'contract', project_id: 'p1', article_id: 'a1', purchase_type: 'goods',
+          items: [{ id: 'i1', sys_number: 'ЗЗ-2026-000045-01', name: 'Швеллер 12П',
+            qty_left: '10.000', amount_left: '2400000.00' }],
+        } });
+      }
+      return Promise.resolve({ data: {
+        id: 'agr-1', version: 1,
+        items: [{ id: 'ai1', request_item_id: 'i1' }],
+      } });
+    });
+    patch.mockResolvedValue({ data: { id: 'agr-1', version: 2, items: [] } });
+    renderPlan();
+
+    await userEvent.click(await screen.findByRole(
+      'checkbox', { name: 'Отметить ЗЗ-2026-000045-01' }, { timeout: 4000 },
+    ));
+    await userEvent.click(screen.getByRole('button', { name: 'Оформить договор' }));
+    const dialog = await screen.findByRole('dialog');
+    const qty = within(dialog).getByRole('textbox', { name: 'Количество ЗЗ-2026-000045-01' });
+    await userEvent.clear(qty);
+    await userEvent.type(qty, '2,5');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Продолжить' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/bpp/agreements/agr-1'));
+    const created = post.mock.calls.find(([url]) => String(url).endsWith('agreements'));
+    expect(created?.[1]).toEqual({ item_ids: ['i1'], role: 'sn' });
+    expect(patch.mock.calls[0][1]).toEqual({
+      version: 1, amount: '600000.00', items: [{ id: 'ai1', qty: '2.500', amount: '600000.00' }],
+    });
   });
 
   it('ФД — все позиции без флажков и кнопок, с исполнителем', { timeout: 15000 }, async () => {

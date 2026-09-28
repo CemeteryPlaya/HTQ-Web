@@ -98,7 +98,35 @@ export interface InvoiceCard {
   allowed_actions: string[];
 }
 
+/** Тело правки черновика — только присланные поля (сервер меняет их одни). */
+export interface InvoicePatch {
+  basis?: 'no_contract';
+  counterparty_id?: string | null;
+  ext_number?: string;
+  ext_date?: string | null;
+  amount?: string;
+  currency_code?: string;
+  rate?: string | null;
+  with_vat?: boolean;
+  vat_rate?: string | null;
+  purchase_type?: 'goods' | 'works';
+  is_advance?: boolean;
+  due_date?: string | null;
+  author_comment?: string;
+  lines?: { id: string; qty: string; amount: string }[];
+}
+
+const path = (suffix = '') => apiPath('bpp', suffix ? `invoices/${suffix}` : 'invoices');
+const withKey = (key: string) => ({ headers: { 'Idempotency-Key': key } });
+
 export const invoiceApi = {
-  get: (id: string) =>
-    api.get<InvoiceCard>(apiPath('bpp', `invoices/${id}`)).then((r) => r.data),
+  get: (id: string) => api.get<InvoiceCard>(path(id)).then((r) => r.data),
+  createFromPlan: (key: string, itemIds: string[], role: 'sn' | 'pm' | null) =>
+    api.post<InvoiceCard>(path(), { item_ids: itemIds, ...(role ? { role } : {}) },
+      withKey(key)).then((r) => r.data),
+  createFromAgreement: (key: string, agreementId: string) =>
+    api.post<InvoiceCard>(path(), { agreement_id: agreementId }, withKey(key))
+      .then((r) => r.data),
+  save: (id: string, key: string, body: InvoicePatch & { version: number }) =>
+    api.patch<InvoiceCard>(path(id), body, withKey(key)).then((r) => r.data),
 };

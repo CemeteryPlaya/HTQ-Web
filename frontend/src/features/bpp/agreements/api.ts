@@ -8,6 +8,7 @@ import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 
 import type { CurrentHolders } from '../core/registryTypes';
+import type { InitiatorRole } from '../requests/api';
 
 export type Money = string;
 
@@ -17,6 +18,8 @@ export const AGREEMENT_SUBJECT = 'bpp.agreement';
 export const AGREEMENT_HISTORY_TYPE = 'bpp.agreement';
 
 export const agreementKey = (id: string) => ['bpp', 'agreement', id] as const;
+
+export type AgreementType = 'goods' | 'works' | '';
 
 export interface AgreementItem {
   id: string;
@@ -59,7 +62,7 @@ export interface AgreementCard {
   name: string;
   ext_number: string;
   ext_date: string | null;
-  agreement_type: 'goods' | 'works' | '';
+  agreement_type: AgreementType;
   is_open: boolean;
   amount: Money | null;
   currency_code: string;
@@ -83,7 +86,76 @@ export interface AgreementCard {
   allowed_actions: string[];
 }
 
+export interface AgreementRow {
+  id: string;
+  number: string;
+  status: string;
+  created_at: string;
+  author_name: string | null;
+  ext_number: string;
+  ext_date: string | null;
+  name: string;
+  project_code: string | null;
+  article_name: string | null;
+  counterparty_name: string | null;
+  is_open: boolean;
+  amount: Money | null;
+  currency_code: string;
+  remaining: Money | null;
+  valid_to: string | null;
+  is_supplement: boolean;
+  current_holders: CurrentHolders | null;
+}
+
+export interface AgreementExecution {
+  invoices: { id: string; number: string; ext_number: string; ext_date: string | null;
+    amount: Money; currency_code: string; status: string; paid_bank_amount: Money }[];
+  effective_amount: Money | null;
+  remaining: Money | null;
+}
+
+/** Тело правки черновика — только присланные поля (сервер меняет их одни). */
+export interface AgreementPatch {
+  counterparty_id?: string | null;
+  name?: string;
+  ext_number?: string;
+  ext_date?: string | null;
+  agreement_type?: AgreementType;
+  is_open?: boolean;
+  amount?: string | null;
+  with_vat?: boolean;
+  vat_rate?: string | null;
+  valid_to?: string | null;
+  items?: { id: string; qty: string; amount: string | null }[];
+}
+
+const path = (suffix = '') => apiPath('bpp', suffix ? `agreements/${suffix}` : 'agreements');
+const withKey = (key: string) => ({ headers: { 'Idempotency-Key': key } });
+
 export const agreementApi = {
-  get: (id: string) =>
-    api.get<AgreementCard>(apiPath('bpp', `agreements/${id}`)).then((r) => r.data),
+  get: (id: string) => api.get<AgreementCard>(path(id)).then((r) => r.data),
+  createFromPlan: (key: string, itemIds: string[], role: InitiatorRole | null) =>
+    api.post<AgreementCard>(path(), { item_ids: itemIds, ...(role ? { role } : {}) },
+      withKey(key)).then((r) => r.data),
+  save: (id: string, key: string, body: AgreementPatch & { version: number }) =>
+    api.patch<AgreementCard>(path(id), body, withKey(key)).then((r) => r.data),
+  remove: (id: string, key: string, version: number) =>
+    api.delete(path(id), { ...withKey(key), params: { version } }).then(() => undefined),
+  submit: (id: string, key: string, version: number, counterpartyConfirmed: boolean) =>
+    api.post<AgreementCard>(path(`${id}/submit`),
+      { version, counterparty_confirmed: counterpartyConfirmed }, withKey(key))
+      .then((r) => r.data),
+  withdraw: (id: string, key: string, version: number) =>
+    api.post<AgreementCard>(path(`${id}/withdraw`), { version }, withKey(key))
+      .then((r) => r.data),
+  fulfil: (id: string, key: string, version: number) =>
+    api.post<AgreementCard>(path(`${id}/fulfil`), { version }, withKey(key))
+      .then((r) => r.data),
+  terminate: (id: string, key: string, version: number, comment: string) =>
+    api.post<AgreementCard>(path(`${id}/terminate`), { version, comment }, withKey(key))
+      .then((r) => r.data),
+  supplement: (id: string, key: string) =>
+    api.post<AgreementCard>(path(`${id}/supplement`), {}, withKey(key)).then((r) => r.data),
+  execution: (id: string) =>
+    api.get<AgreementExecution>(path(`${id}/execution`)).then((r) => r.data),
 };

@@ -6,8 +6,8 @@
  * проверяет сервер (чужой документ — 404), вход в раздел — гейт `/bpp/*`
  * (`bpp:read`).
  *
- * Договор и счёт пока открываются тем же телом, что и в карточке
- * согласования (`documentRoute`); формы F-04 / F-05 заменят эти строки.
+ * Договор открывается формой F-04; счёт пока — тем же телом, что и в
+ * карточке согласования (`documentRoute`), форма F-05 заменит эту строку.
  * Реестр и создание заявки — в подмодуле `requests` с гейтом по узлу.
  */
 import { lazy } from 'react';
@@ -20,10 +20,7 @@ export const bppModule: BppGatedModule = {
   order: 1000,
   routes: [
     { path: 'requests/:id', element: lazy(() => import('../requests/RequestFormPage')) },
-    {
-      path: 'agreements/:id',
-      element: documentRoute(() => import('../agreements/AgreementSignoffView')),
-    },
+    { path: 'agreements/:id', element: lazy(() => import('../agreements/AgreementFormPage')) },
     {
       path: 'invoices/:id',
       element: documentRoute(() => import('../invoices/InvoiceSignoffView')),

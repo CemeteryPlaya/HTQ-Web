@@ -29,6 +29,21 @@ export function qtyProblem(entered: string, left: string): string | null {
   return null;
 }
 
+/**
+ * Сумма под выбранное количество: остаток суммы позиции × кол-во / остаток
+ * кол-ва, до копейки по правилу «половина — вверх» (как CALC-004), без
+ * `float`. Всё количество — весь остаток суммы как есть.
+ */
+export function proportionalAmount(amountLeft: string, qty: string, qtyLeft: string): string {
+  const q = milli(qty) ?? 0n;
+  const left = milli(qtyLeft.replace('.', ',')) ?? 0n;
+  const cents = BigInt(amountLeft.replace('.', ''));
+  if (left <= 0n || q >= left) return amountLeft;
+  const value = (cents * q * 2n + left) / (left * 2n);
+  const text = value.toString().padStart(3, '0');
+  return `${text.slice(0, -2)}.${text.slice(-2)}`;
+}
+
 /** `"10.000"` → `"10"`, `"2.500"` → `"2,5"`; целое без точки — как есть. */
 export const shownQty = (value: string) =>
   (value.includes('.') ? value.replace(/\.?0+$/, '') : value).replace('.', ',');

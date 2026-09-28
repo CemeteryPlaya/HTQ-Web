@@ -1,15 +1,18 @@
 /**
  * Мастер F-03 «Сформировать закупку» (ТЗ §8.4): после проверки выбора
- * сервером (`plan/validate`, BR-021) — проект, статья, вид закупки и
- * позиции; количество по каждой позиции правится, но не больше «Остатка
- * кол-во» (шаг 2).
+ * сервером (`plan/validate`, BR-021) — позиции с количеством; количество по
+ * каждой позиции правится, но не больше «Остатка кол-во» (шаг 2).
  *
- * Шаг 3 — сохранение документа — открывает форму договора (F-04) или счёта
- * (F-05). Эти формы — этап 3 (B3.1, B3.2); до них мастер показывает
- * заготовку и честно говорит, что оформить документ пока нельзя.
+ * Шаг 3 — «Продолжить» создаёт черновик договора (F-04) или счёта без
+ * договора (F-05) из этих позиций и открывает его форму. Если количество
+ * меньше остатка, сумма позиции пересчитывается пропорционально остатку
+ * суммы (до копейки, без `float`) — дальше её правят на форме.
  */
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -19,18 +22,28 @@ import { Input } from '@/components/ui/input';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { reportApiError } from '@/lib/apiError';
+
+import { agreementApi, AGREEMENTS_BASE } from '../agreements/api';
+import { sumMoney } from '../budgets/cents';
+import { useIdempotentAction } from '../core/useIdempotentAction';
+import { invoiceApi, INVOICES_BASE } from '../invoices/api';
+import type { InitiatorRole } from '../requests/api';
+import { parseQtyInput } from '../requests/requestForm';
 
 import type { PlanSelection } from './api';
-import { qtyProblem, shownQty } from './planSelection';
+import { proportionalAmount, qtyProblem, shownQty } from './planSelection';
 
 const TITLES = { contract: 'Оформить договор', invoice: 'Оформить счёт' } as const;
 
-
-export function PlanWizardDialog({ selection, onClose }: {
+export function PlanWizardDialog({ selection, role, onClose }: {
   selection: PlanSelection | null;
+  role: InitiatorRole | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [qty, setQty] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -39,10 +52,49 @@ export function PlanWizardDialog({ selection, onClose }: {
     }
   }, [selection]);
 
+  const create = useIdempotentAction(async (key: string) => {
+    if (!selection) return;
+    const ids = selection.items.map((item) => item.id);
+    const wanted = new Map(selection.items.map((item) => {
+      const entered = parseQtyInput(qty[item.id] ?? '') ?? item.qty_left;
+      return [item.id, {
+        qty: entered, amount: proportionalAmount(item.amount_left, qty[item.id] ?? '', item.qty_left),
+      }];
+    }));
+    const changed = selection.items.some((item) =>
+      wanted.get(item.id)!.qty !== parseQtyInput(shownQty(item.qty_left)));
+    if (selection.target === 'contract') {
+      let card = await agreementApi.createFromPlan(key, ids, role);
+      if (changed) {
+        const items = card.items.map((item) => ({
+          id: item.id, ...wanted.get(item.request_item_id)!,
+        }));
+        card = await agreementApi.save(card.id, `${key}-qty`, {
+          version: card.version, items, amount: sumMoney(items.map((item) => item.amount)),
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: ['bpp', 'registry'] });
+      navigate(`${AGREEMENTS_BASE}/${card.id}`);
+      return;
+    }
+    let card = await invoiceApi.createFromPlan(key, ids, role);
+    if (changed) {
+      const lines = card.lines.map((line) => ({
+        id: line.id, ...wanted.get(line.request_item_id)!,
+      }));
+      card = await invoiceApi.save(card.id, `${key}-qty`, {
+        version: card.version, lines, amount: sumMoney(lines.map((line) => line.amount)),
+      });
+    }
+    void queryClient.invalidateQueries({ queryKey: ['bpp', 'registry'] });
+    navigate(`${INVOICES_BASE}/${card.id}`);
+  });
+
   if (!selection) return null;
   const problems = Object.fromEntries(selection.items.map((item) => [
     item.id, qtyProblem(qty[item.id] ?? '', item.qty_left),
   ]));
+  const blocked = Object.values(problems).some(Boolean);
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -84,15 +136,19 @@ export function PlanWizardDialog({ selection, onClose }: {
             ))}
           </TableBody>
         </Table>
-        <p className="text-sm text-muted-foreground">
-          {t('bpp.plan.documentsLater',
-            'Формы договора и счёта появятся на этапе 3 модуля — тогда мастер откроет документ с этими позициями.')}
-        </p>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose}>
             {t('bpp.document.cancel', 'Отмена')}
           </Button>
-          <Button type="button" disabled>
+          <Button
+            type="button"
+            disabled={blocked || create.pending}
+            onClick={() => {
+              create.run().catch((error: unknown) =>
+                reportApiError(error, t('bpp.plan.createFailed', 'Не удалось оформить документ')));
+            }}
+          >
+            {create.pending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             {t('bpp.plan.continue', 'Продолжить')}
           </Button>
         </DialogFooter>

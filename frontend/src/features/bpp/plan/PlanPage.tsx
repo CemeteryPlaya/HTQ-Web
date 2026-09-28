@@ -292,7 +292,7 @@ export function PlanPage() {
         </div>
       </div>
 
-      <PlanWizardDialog selection={wizard} onClose={() => setWizard(null)} />
+      <PlanWizardDialog selection={wizard} role={activeRole} onClose={() => setWizard(null)} />
     </div>
   );
 }
