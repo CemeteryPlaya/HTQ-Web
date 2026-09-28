@@ -133,6 +133,19 @@ def test_datetime_is_written_in_platform_time_zone():
     assert ws.cell(row=2, column=1).number_format == "dd.mm.yyyy hh:mm"
 
 
+def test_integer_is_a_whole_number_without_decimals():
+    """Счётчики (строк, дублей) — целым числом с разрядами, без «,00»;
+    не число — текстом, а не падением выгрузки."""
+    columns = (export.Column("n", "Строк", kind="integer"),)
+    rows = [{"n": 1250}, {"n": "17"}, {"n": None}, {"n": "много"}]
+
+    ws = openpyxl.load_workbook(io.BytesIO(export.write_xlsx("Р", columns, rows))).active
+
+    assert [ws.cell(row=r, column=1).value for r in range(2, 6)] == [1250, 17, None, "много"]
+    assert ws.cell(row=2, column=1).number_format == "#,##0"
+    assert isinstance(ws.cell(row=2, column=1).value, int)
+
+
 def test_text_starting_with_equals_is_not_a_formula():
     """Наименование «=HYPERLINK(…)» не должно выполниться у читателя файла."""
     columns = (export.Column("name", "Наименование"),)

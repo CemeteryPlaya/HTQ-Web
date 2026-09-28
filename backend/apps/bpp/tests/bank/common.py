@@ -1,7 +1,8 @@
-"""Помощники тестов счетов организации и шаблонов выписок (A3.1).
+"""Помощники тестов счетов организации, шаблонов выписок (A3.1) и загрузки
+выписки (A4.1).
 
-Файлы образцов собираются в тесте (openpyxl, csv) — бинарных фикстур в
-репозитории нет. IBAN — с верной контрольной суммой, по той же независимой
+Файлы образцов собираются в тесте (openpyxl, csv, текст 1С в cp1251 с
+CRLF) — бинарных фикстур в репозитории нет. IBAN — с верной контрольной суммой, по той же независимой
 записи ISO 13616, что у тестов контрагентов.
 """
 
@@ -17,7 +18,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from apps.bpp.models.bank import StatementTemplate
 from apps.bpp.tests.counterparties.common import kz_iban
 
-__all__ = ["HEADERS", "csv_file", "iban", "template", "truncated_xlsx", "xlsx_file"]
+__all__ = ["HEADERS", "csv_file", "iban", "onec_bytes", "onec_doc", "onec_file", "template",
+           "truncated_xlsx", "xlsx_file"]
 
 #: Заголовки «как у банка» → поле шаблона.
 HEADERS = {
@@ -77,3 +79,39 @@ def csv_file(rows, *, name: str = "vypiska.csv", delimiter: str = ";",
     for row in rows:
         writer.writerow(row)
     return SimpleUploadedFile(name, text.getvalue().encode(encoding), content_type="text/csv")
+
+
+# ── выписка 1С (1CClientBankExchange) ──────────────────────────────────
+
+def onec_doc(number: str, day: str, amount: str, payer: str, *,
+             recipient_bin: str = "050140000656", recipient: str = "ТОО «Ромашка»",
+             recipient_iban: str = "", purpose: str = "Оплата по счёту СЧ-2026-000001",
+             payer_key: str = "ПлательщикИИК", bin_key: str = "ПолучательБИН",
+             date_key: str = "Дата", extra: tuple[str, ...] = ()) -> list[str]:
+    """Строки одного документа ``СекцияДокумент`` … ``КонецДокумента``."""
+    return ["СекцияДокумент=Платежное поручение", f"Номер={number}", f"{date_key}={day}",
+            f"Сумма={amount}", f"{payer_key}={payer}", f"{bin_key}={recipient_bin}",
+            f"Получатель1={recipient}", f"ПолучательИИК={recipient_iban}",
+            f"НазначениеПлатежа={purpose}", *extra, "КонецДокумента"]
+
+
+def onec_lines(account_iban: str, docs, *, header: bool = True,
+               period: tuple[str, str] | None = ("01.09.2026", "30.09.2026")) -> list[str]:
+    head = ["1CClientBankExchange"] if header else []
+    head += ["ВерсияФормата=1.03", "Кодировка=Windows", "Отправитель=Бухгалтерия"]
+    if period:
+        head += [f"ДатаНачала={period[0]}", f"ДатаКонца={period[1]}"]
+    head += ["СекцияРасчСчет", f"РасчСчет={account_iban}", "КонецРасчСчет"]
+    body = [text for doc in docs for text in doc]
+    return [*head, *body, "КонецФайла"]
+
+
+def onec_bytes(account_iban: str, docs, **kwargs) -> bytes:
+    """Выписка 1С как её отдаёт банк-клиент: cp1251 и CRLF."""
+    return "\r\n".join(onec_lines(account_iban, docs, **kwargs)).encode("cp1251") + b"\r\n"
+
+
+def onec_file(account_iban: str, docs, *, name: str = "kl_to_1c.txt",
+              **kwargs) -> SimpleUploadedFile:
+    return SimpleUploadedFile(name, onec_bytes(account_iban, docs, **kwargs),
+                              content_type="text/plain")

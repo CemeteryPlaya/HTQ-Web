@@ -1645,16 +1645,38 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 |---|---|
 | `GET bank/accounts` (`?active=1`) | Счета организации `[{id, iban, bank_name, bic, currency, template: {id, name, format}, is_active, version, …}]`; `?active=1` — без архивных (список формы загрузки выписки) |
 | `POST bank/accounts` (`{iban, bic, bank_name, currency, template_id}`) | Завести счёт; IBAN — KZ + 18 знаков, mod 97, БИК — 8 или 11 знаков, иначе 422 `E-CTR-04` (та же проверка, что у счетов контрагентов); IBAN уже заведён (и в архиве тоже) — 422 `E-BNK-01` с `fields[0].existing_id`, в том числе при одновременной вставке; шаблон не найден или в архиве — 422 `E-VAL-01` |
-| `GET` / `PATCH bank/accounts/<id>` | Карточка / правка (`{version, …поля, is_active}`) |
+| `GET` / `PATCH bank/accounts/<id>` | Карточка / правка (`{version, …поля, is_active}`); IBAN счёта, по которому уже загружали выписки, не меняется — 409 `E-STATE-01` |
 | `GET bank/templates` (`?active=1`) | Шаблоны `[{id, name, format: onec\|xlsx\|csv, encoding, delimiter, date_format, columns, amount_mode: signed\|split, is_active, active_accounts, version, …}]` |
 | `POST bank/templates` (`{name, format, columns, amount_mode?, encoding?, delimiter?, date_format?}`) | Завести шаблон; кодировка по умолчанию — `cp1251` для 1С и CSV, `utf-8` для xlsx; `date_format` — маска «ДД.ММ.ГГГГ»; неизвестное поле, повтор заголовка, нет обязательной колонки — 422 `E-VAL-01` |
 | `GET` / `PATCH bank/templates/<id>` | Карточка / правка; архив шаблона действующего счёта — 409 `E-STATE-01` |
 | `POST bank/templates/<id>/preview` (multipart `file`, до 20 МБ) | Предпросмотр образца по шаблону, ничего не сохраняет: `{header_row, columns: [{field, label, header, index}], rows: [первые 20 строк: row_no, date, doc_number, amount (строка Decimal, по модулю), direction: debit\|credit, …], errors: ["Строка N: не распознана дата „31.02.2026“", …]}`. Колонки ищутся по заголовку (регистр и пробелы не важны, лишние колонки не мешают) в первых 30 строках; нет обязательной — 422 `E-IMP-02` с её названием; расширение не того формата или файл не читается — 422 `E-IMP-01`; шаблон 1С — 422 `E-VAL-01` (предпросмотр только для Excel и CSV). Чтение — как у справочника |
 
+**Загрузка выписки** — тот же подмодуль `bpp_bank` (ТЗ §11.2, §11.3 п.1–3,
+§15.5, BR-075, L-07; этап 3 A, задача 3 — A4.1). Загружает `bpp.bank` edit
+(ФД), реестр, карточку и строки видит `bpp.bank` view (ФД, БУХ), иначе 403
+`E-ACC-01`. Разбор — в фоне (Celery `apps.bpp.tasks_bank.run_bank_import`,
+`@company_task`): экран опрашивает карточку, пока `status: processing`.
+Загружаются только списания со счёта организации (поступления и платежи
+другого плательщика считаются в `rows_total`, но строк не дают). Дубль
+(BR-075) — «счёт организации + дата + № документа + сумма + БИН
+получателя»: повторная загрузка той же выписки (и одновременная — тоже) не
+создаёт второй строки, а считает её в `duplicates` («Пропущено дублей: N»).
+Сверки со счетами ещё нет (этап 4, A4.2): загрузка останавливается на
+`loaded`, строки — `match_status: unmatched`. Файл выписки — в `apps.files`
+(владелец `bpp.bank_import`, тип `bank_statement`: TXT/XLSX/CSV до 20 МБ),
+после загрузки не меняется.
+
+| Метод и путь | Что делает |
+|---|---|
+| `POST bank/imports` (multipart: `account_id`, `file`, `period_from?`, `period_to?` — ГГГГ-ММ-ДД, `comment?`) | Загрузить выписку. До сохранения проверяется: счёт действующий (иначе 422 `E-VAL-01`, поле `account_id`), файл до 20 МБ (413 `E-FIL-02`), расширение — формата шаблона счёта (`.txt` — 1С, `.xlsx`, `.csv`/`.txt` — CSV; иначе 422 `E-IMP-01`), у 1С — строка `1CClientBankExchange` (422 `E-IMP-01` «Файл не распознан как выписка формата 1С: нет строки „1CClientBankExchange“. Выберите другой формат или файл.») и `РасчСчет` выбранного счёта (иначе 422 `E-VAL-01`), у Excel/CSV — обязательные колонки шаблона (422 `E-IMP-02` с названием колонки), не больше 10 000 строк/документов (422 `E-IMP-03`). Период — из заголовка файла 1С (`ДатаНачала`/`ДатаКонца`), иначе из формы; «по» ≥ «с» и не позже сегодня (422 `E-VAL-01`). Ответ 201 — карточка (`status: processing`) плюс `warnings`: «Период взят из файла выписки: … Период, указанный в форме, не учтён.» (период из файла 1С заменил другой, введённый в форме) и «Период пересекается с загрузкой ВП-2026-0003 (…) этого счёта: …». Очередь фоновых задач недоступна — загрузка сразу `failed` с причиной. Идемпотентна (`Idempotency-Key`) |
+| `GET bank/imports` (`?account_id=&period_from=&period_to=&status=&page=&page_size=`) | Реестр L-07 `{items, total, page, page_size}` (по умолчанию 50, 25/50/100): `{id, number: "ВП-ГГГГ-0001", account: {id, iban, bank_name, currency}, bank_name, format, period_from, period_to, status: processing\|loaded\|failed\|cancelled, status_label, filename, comment, rows_total, debits, rows_done, duplicates, errors_count, lines, matched, unmatched, author_id, author_name, created_at, finished_at}`, новые сверху. Фильтры: счёт (повторяемый `account_id`), период (пересечение с `period_from`…`period_to`), статус (повторяемый; неизвестный — 422). `?format=xlsx` — выгрузка той же выборки (`export.respond`: до 10 000 строк сразу, больше — фоном) |
+| `GET bank/imports/<id>` | Карточка — её опрашивает экран: поля реестра плюс `errors: ["Строка 17: не распознана дата „31.02.2026“", …]` (у выписки 1С без единого поля `ПлательщикСчет`/`ПлательщикИИК` первой идёт «В выписке нет счёта плательщика — списания не определены…»), `failure` (почему вся выписка не загрузилась — статус `failed`; строки такой загрузки отменены; разбор, не закончившийся за 15 минут, периодика `bpp.bank_import_reaper` (раз в 10 минут, веером по компаниям) переводит в `failed` с причиной «Загрузка прервана — повторите загрузку…»), `progress` (0–100, `rows_done / debits`), `file` (карточка файла выписки: `id`, `filename`, `size`, …; ссылка на скачивание — панель `/api/files/v1`) |
+| `GET bank/imports/<id>/lines` (`?match_status=&include_cancelled=&page=&page_size=`) | Строки загрузки по порядку в файле — только действующие; отменённые (строки загрузки `failed`) — с `include_cancelled=1`: `{items: [{id, row_no, doc_date, doc_number, amount, currency, recipient_name, recipient_bin, recipient_iban, purpose, match_status, match_status_label, cancelled_at}], total, page, page_size}` |
+
 `GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
 `bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
-`bpp.orgbankaccount`, `bpp.statementtemplate`), читает тот, кто видит
-документ.
+`bpp.orgbankaccount`, `bpp.statementtemplate`, `bpp.bankimport` — загрузка,
+файл, итог разбора), читает тот, кто видит документ.
 
 `GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
 ["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в

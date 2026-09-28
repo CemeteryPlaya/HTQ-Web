@@ -16,7 +16,10 @@ mod 97; БИК — 8 или 11 знаков; отказ — её код ``E-CTR-
 
 Шаблон, по которому разбирается выписка действующего счёта, в архив не
 уходит (``E-STATE-01``): иначе загрузка этого счёта осталась бы без
-правил разбора. Счёт привязывается только к действующему шаблону.
+правил разбора. Счёт привязывается только к действующему шаблону. IBAN
+счёта, по которому уже загружали выписки, не меняется (``E-STATE-01``):
+строки выписок и ключи их дублей принадлежат этому счёту
+(``services/bank/imports.py``).
 """
 
 from __future__ import annotations
@@ -415,6 +418,16 @@ def update_account(account_id, data: dict, *, expected_version: int | None,
             changed[column] = [_plain(before), _plain(after)]
     if not changed:
         return account
+    if "iban" in changed and account.imports.exists():
+        # По счёту уже грузили выписки: их строки и ключи дублей (BR-075)
+        # принадлежат этому счёту, а сверка сравнивает плательщика с его
+        # IBAN. Другой IBAN — другой счёт, его заводят отдельно.
+        raise DomainError(
+            "E-STATE-01",
+            f"По счёту {account.iban} уже загружены выписки — IBAN у него не меняется. "
+            f"Если у организации новый счёт, заведите его отдельно, а этот переведите "
+            f"в архив.",
+            status=409)
     if "iban" in changed:
         existing = _existing_account(clean["iban"], exclude_id=account.pk)
         if existing is not None:

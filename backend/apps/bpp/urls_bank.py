@@ -1,5 +1,6 @@
 """Маршруты «Счета организации и шаблоны выписок» ``/api/bpp/v1/bank/…``
-(A3.1) — подмодуль ``bpp_bank`` (рубильник по префиксу ``/api/bpp/v1/bank``).
+(A3.1) и загрузок выписок (A4.1) — подмодуль ``bpp_bank`` (рубильник по
+префиксу ``/api/bpp/v1/bank``).
 
 ``APPEND_SLASH = False``: каждый путь — в обоих написаниях. Строки явные:
 сторож прав (``test_gate.py``) читает ``path(…, views.<имя>)``. Ключ в
@@ -13,6 +14,7 @@ from . import views_bank as views
 
 A = "bank/accounts/<str:account_id>"
 T = "bank/templates/<str:template_id>"
+IMP = "bank/imports/<str:import_id>"
 
 urlpatterns = [
     path("bank/accounts", views.accounts_collection),
@@ -25,4 +27,11 @@ urlpatterns = [
     path(f"{T}/", views.template_detail),
     path(f"{T}/preview", views.template_preview),
     path(f"{T}/preview/", views.template_preview),
+    # Загрузки выписок (A4.1, задача 3).
+    path("bank/imports", views.imports_collection),
+    path("bank/imports/", views.imports_collection),
+    path(IMP, views.import_get),
+    path(f"{IMP}/", views.import_get),
+    path(f"{IMP}/lines", views.import_lines),
+    path(f"{IMP}/lines/", views.import_lines),
 ]
