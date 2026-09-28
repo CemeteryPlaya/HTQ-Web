@@ -25,8 +25,8 @@ import { bppModules } from './modules';
 vi.mock('@/components/Header', () => ({ Header: () => null }));
 vi.mock('@/components/Footer', () => ({ Footer: () => null }));
 
-vi.mock('@/features/bpp/requests/RequestSignoffView', () => ({
-  default: ({ id }: { id: string }) => <div>Заявка {id}</div>,
+vi.mock('@/features/bpp/requests/RequestFormPage', () => ({
+  default: () => <div>Заявка {window.location.pathname}</div>,
 }));
 vi.mock('@/features/bpp/accountable/AccountableSignoffView', () => ({
   default: ({ id }: { id: string }) => <div>Подотчёт {id}</div>,
@@ -149,16 +149,16 @@ describe('BppLayout — подмодули пакета', () => {
     expect(screen.getByText('Нет доступа')).toBeInTheDocument();
   });
 
-  it('у переходников заявки и подотчёта нет пунктов меню (реестры — B2.5)', () => {
+  it('у заявок пункт меню появился с реестром B2.5; у подотчёта и ссылок — нет', () => {
     // Не точный список пунктов: он растёт с каждым подмодулем (справочники,
-    // проекты, контрагенты), а проверяется здесь только отсутствие пунктов
-    // у двух переходников.
+    // проекты, контрагенты), а проверяется здесь только наличие и отсутствие
+    // пунктов у подмодулей документов.
     const keys = bppModules.filter((m) => m.menu).map((m) => m.key);
-    expect(keys).toContain('approvals');
-    expect(keys).not.toContain('requests');
+    expect(keys).toEqual(expect.arrayContaining(['approvals', 'budgets', 'requests']));
     expect(keys).not.toContain('accountable');
+    expect(keys).not.toContain('links');
     expect(bppModules.map((m) => m.key)).toEqual(
-      expect.arrayContaining(['approvals', 'requests', 'accountable']),
+      expect.arrayContaining(['approvals', 'requests', 'accountable', 'links']),
     );
   });
 });
@@ -178,8 +178,26 @@ describe('ссылки на документы из колокольчика и 
     expect(bpp[0].requires).toEqual({ module: 'bpp', level: 'read' });
   });
 
+  it('/bpp/requests/<id> открывает форму заявки и без роли в модуле (подмодуль links)', async () => {
+    permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));
+    const route = protectedRoutes.find((r) => r.path === '/bpp/*')!;
+    const Page = route.component;
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={[`/bpp/requests/${UUID}`]}>
+          <Suspense fallback={null}>
+            <Routes>
+              <Route path={route.path} element={<Page />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/^Заявка/)).toBeInTheDocument();
+    expect(screen.queryByText('Нет доступа')).not.toBeInTheDocument();
+  });
+
   it.each([
-    [`/bpp/requests/${UUID}`, `Заявка ${UUID}`],
     [`/bpp/accountable/${UUID}`, `Подотчёт ${UUID}`],
   ])('%s открывает документ через таблицу маршрутов приложения', async (url, text) => {
     permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));

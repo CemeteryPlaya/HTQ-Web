@@ -367,8 +367,13 @@ frontend/src/
 │   │                   #   core/ — BppRegistry (+useRegistryState, registryExport: та же ручка реестра с
 │   │                   #   ?format=xlsx), BppDocumentShell (тип истории = label_lower модели, не тип signoff),
 │   │                   #   HistoryTab, StatusBadge+statusDictionaries, useIdempotentAction, useDraftAutosave,
-│   │                   #   useUnsavedChangesGuard; подмодули approvals, requests, accountable, exports
-│   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog)
+│   │                   #   useUnsavedChangesGuard; подмодули approvals, accountable, exports
+│   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog);
+│   │                   #   экраны B2.5: budgets (L-01, F-01 с корректировкой; budgetForm.ts, cents.ts —
+│   │                   #   деньги в копейках BigInt, money.tsx — денежная колонка), requests (L-02, F-02:
+│   │                   #   requestForm.ts — CALC-004, «остаток после заявки», вставка из Excel; ItemsEditor),
+│   │                   #   plan (L-04 + мастер F-03, planSelection.ts), links — /bpp/requests/:id без гейта
+│   │                   #   по узлу (туда ведут согласование и колокольчик)
 │   ├── messenger/      # MessengerPage + api/ + hooks/ + types.ts (feature-sliced)
 │   └── requests/       # ⭐ RequestsLayout + pages/ + components/ + hooks.ts + types.ts
 ├── components/
