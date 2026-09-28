@@ -243,7 +243,9 @@ checks the parent first, and the 503 names whichever layer is off. `manage.py se
 company-modules screen accept submodule names; the access registry does not (rights are granted on
 the module). In `PREFIX_TO_SERVICE` a submodule prefix sits ABOVE its module prefix (first match
 wins) and has no trailing slash — `prefix_matches()` then matches it only on a path-segment
-boundary, so `/api/bpp/v1/bank` does not swallow `/api/bpp/v1/bank-accounts`.
+boundary, so `/api/bpp/v1/bank` does not swallow a neighbour like `/api/bpp/v1/bank-xyz`
+(org bank accounts and statement templates live under `bank/` on purpose and are switched off
+with `bpp_bank`).
 
 Flip one: `manage.py service <name> --on/--off [--message "..."]`. A disabled app answers `503`
 `{"detail", "code": "service_disabled", "service"}` at the HTTP edge and via any `interface.py`

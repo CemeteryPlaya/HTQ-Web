@@ -66,7 +66,7 @@ def prefix_matches(path: str, prefix: str) -> bool:
     Префикс со слешем на конце — обычное «начинается с». Префикс без слеша
     (подмодули БЗО: голый путь коллекции ``/api/bpp/v1/budgets`` тоже
     гейтится, ``APPEND_SLASH = False``) совпадает только на границе сегмента:
-    иначе ``/api/bpp/v1/bank`` захватил бы соседний ``/api/bpp/v1/bank-accounts``
+    иначе ``/api/bpp/v1/bank`` захватил бы условного соседа ``/api/bpp/v1/bank-xyz``
     и погасил его чужим рубильником.
     """
     if prefix.endswith("/"):

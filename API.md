@@ -761,7 +761,14 @@ calls `htqweb.storage` directly (it predates `media_files` as an app). See
 ключ из реестра и ключ его строки — целое или UUID (документы модуля БЗО);
 неподходящий владельцу ключ — 404 `E-FIL-05`, в ответах `owner_id` — строка.
 Права решает владелец своими колбэками («все с правом просмотра объекта»,
-ТЗ §21); типы своих файлов он заводит в справочник миграцией.
+ТЗ §21); типы своих файлов он заводит в справочник миграцией. Владелец может
+уточнить права по типу файла (`can_view_type`/`can_modify_type`, ТЗ §21: АВР
+видят не все, кто видит счёт): документов невидимого типа нет в папке и в
+`types`, ссылка, новая версия и удаление такого документа — 404 `E-FIL-05`,
+как у несуществующего; запрет правки типа — 403 `E-ACC-01` или 409
+`E-FIL-06` (с объяснением владельца), в папке — `can_add: false` у типа.
+Владельцы договора, счёта и выписки — модули
+`apps/bpp/services/<подмодуль>/file_owner.py`, подключаются сами (этап 3).
 **Владельцы — документы модуля БЗО** (`apps/bpp/file_owners.py`):
 `bpp.purchase_request` (документы заявки, тип `request_attachment`) и
 `bpp.advance_report` (подтверждающий документ авансового отчёта, тип
@@ -1619,8 +1626,32 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 подтверждения у непроверенного), `record_success(id)` (+1 удачный документ).
 
 `GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
-`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`),
-читает тот, кто видит документ.
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
+`bpp.orgbankaccount`, `bpp.statementtemplate`), читает тот, кто видит
+документ.
+**Счета организации и шаблоны выписок** — подмодуль `bpp_bank` (ТЗ §11.1,
+§18, задача A3.1). Справочник АДМ: чтение — `bpp.bank` view (ФД, БУХ) или
+`bpp.settings` view (ФД, АДМ), создание и правка — `bpp.settings` edit
+(АДМ), иначе 403 `E-ACC-01`. Удаления нет — архив `is_active: false`, из
+архива — `is_active: true`. Записывающие ручки идемпотентны, правка сверяет
+`version` (409 `E-CON-01`); неверный UUID в адресе — 404. Шаблон описывает
+чтение Excel/CSV банка: `columns` — «поле выписки → текст заголовка
+колонки», поля `date`, `doc_number`, `amount` (или `debit` + `credit` при
+`amount_mode: split`), `currency`, `payer_account`, `recipient_name`,
+`recipient_bin`, `recipient_iban`, `purpose`; обязательны дата, номер,
+сумма и назначение. Шаблону 1С колонки не нужны — поля задаёт стандарт
+1CClientBankExchange.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET bank/accounts` (`?active=1`) | Счета организации `[{id, iban, bank_name, bic, currency, template: {id, name, format}, is_active, version, …}]`; `?active=1` — без архивных (список формы загрузки выписки) |
+| `POST bank/accounts` (`{iban, bic, bank_name, currency, template_id}`) | Завести счёт; IBAN — KZ + 18 знаков, mod 97, БИК — 8 или 11 знаков, иначе 422 `E-CTR-04` (та же проверка, что у счетов контрагентов); IBAN уже заведён (и в архиве тоже) — 422 `E-BNK-01` с `fields[0].existing_id`, в том числе при одновременной вставке; шаблон не найден или в архиве — 422 `E-VAL-01` |
+| `GET` / `PATCH bank/accounts/<id>` | Карточка / правка (`{version, …поля, is_active}`) |
+| `GET bank/templates` (`?active=1`) | Шаблоны `[{id, name, format: onec\|xlsx\|csv, encoding, delimiter, date_format, columns, amount_mode: signed\|split, is_active, active_accounts, version, …}]` |
+| `POST bank/templates` (`{name, format, columns, amount_mode?, encoding?, delimiter?, date_format?}`) | Завести шаблон; кодировка по умолчанию — `cp1251` для 1С и CSV, `utf-8` для xlsx; `date_format` — маска «ДД.ММ.ГГГГ»; неизвестное поле, повтор заголовка, нет обязательной колонки — 422 `E-VAL-01` |
+| `GET` / `PATCH bank/templates/<id>` | Карточка / правка; архив шаблона действующего счёта — 409 `E-STATE-01` |
+| `POST bank/templates/<id>/preview` (multipart `file`, до 20 МБ) | Предпросмотр образца по шаблону, ничего не сохраняет: `{header_row, columns: [{field, label, header, index}], rows: [первые 20 строк: row_no, date, doc_number, amount (строка Decimal, по модулю), direction: debit\|credit, …], errors: ["Строка N: не распознана дата „31.02.2026“", …]}`. Колонки ищутся по заголовку (регистр и пробелы не важны, лишние колонки не мешают) в первых 30 строках; нет обязательной — 422 `E-IMP-02` с её названием; расширение не того формата или файл не читается — 422 `E-IMP-01`; шаблон 1С — 422 `E-VAL-01` (предпросмотр только для Excel и CSV). Чтение — как у справочника |
+
 
 `GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
 ["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в
