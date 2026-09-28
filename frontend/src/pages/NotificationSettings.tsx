@@ -102,7 +102,12 @@ export default function NotificationSettings() {
                   <div className="min-w-0">
                     <div className="font-medium">{label}</div>
                     <div className="text-sm text-muted-foreground">{hint}</div>
-                    {key === 'telegram' && !prefs.telegram_linked && (
+                    {key === 'telegram' && !prefs.telegram_linked && !prefs.telegram_available && (
+                      <div className="text-sm text-muted-foreground mt-1">
+                        {t('notifications.settings.telegramUnavailable', 'Telegram-бот портала пока не настроен.')}
+                      </div>
+                    )}
+                    {key === 'telegram' && !prefs.telegram_linked && prefs.telegram_available && (
                       <Button
                         variant="outline"
                         size="sm"

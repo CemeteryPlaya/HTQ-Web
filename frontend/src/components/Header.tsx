@@ -126,6 +126,7 @@ export const Header = () => {
     hasDepartment: Boolean(activeProfile?.department),
     hasMessenger: permissions.atLeast('messenger', 'read'),
     hasMail: permissions.atLeast('mail', 'read'),
+    hasBpp: permissions.atLeast('bpp', 'read'),
   });
 
   // Вкладок стало больше, чем помещается в один ряд: держим в ряду первые

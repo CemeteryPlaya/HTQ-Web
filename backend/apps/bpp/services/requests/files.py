@@ -1,20 +1,23 @@
 """Документы заявки — КП, ТЗ, спецификация, прочее (ТЗ §7.5, §21; B2.2).
 
-Хранение, версии, лимиты и журнал скачиваний — ядро модуля
-(``services/core/files.py``, A1.1), тип файла ``request_attachment``: PDF,
-DOCX, XLSX, JPG, PNG до 20 МБ, до 20 документов. Здесь — кто и когда:
+Хранение, версии, лимиты и журнал скачиваний — платформенная ``apps.files``
+через обёртку модуля (``services/core/files.py``), тип файла
+``request_attachment``: PDF, DOCX, XLSX, JPG, PNG до 20 МБ, до 20
+документов (владелец ``bpp.purchase_request`` — ``apps/bpp/file_owners.py``).
+Здесь — кто и когда:
 
 - добавить документ — автор, пока заявка в черновике или на доработке;
 - новая версия — автор в любом статусе, кроме финальных: после отправки
   документ не удаляется, а заменяется версией (ТЗ §21);
 - список и ссылку на скачивание получает тот, кто видит заявку.
 
-Удаления нет: у ядра файлов его пока нет (к сверке — A1.1).
+Удаление документа — на панели файлов ``/api/files/v1`` (автор, в черновике
+и на доработке; после первой отправки — только пометкой).
 """
 
 from __future__ import annotations
 
-from apps.bpp.models import DocumentFile, PurchaseRequest, RequestStatus
+from apps.bpp.models import PurchaseRequest, RequestStatus
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.core import files as core_files
 from htqweb.errors import DomainError
@@ -32,9 +35,8 @@ def _upload(upload) -> tuple[bytes, str, str]:
     return upload.read(), upload.name, upload.content_type or "application/octet-stream"
 
 
-def _own_file(req: PurchaseRequest, file_id) -> DocumentFile:
-    row = DocumentFile.objects.filter(pk=file_id, owner_type=req._meta.label_lower,
-                                      owner_id=str(req.pk)).first()
+def _own_file(req: PurchaseRequest, file_id) -> dict:
+    row = core_files.get_file(req, file_id)
     if row is None:
         raise DomainError("E-NOT-FOUND", "Файл не найден.", status=404)
     return row
@@ -50,7 +52,7 @@ def attach(actor: Actor, request_id, upload) -> dict:
     service._require_status(req, service.EDITABLE, "добавление документа")
     data, name, mime = _upload(upload)
     return core_files.attach(req, FILE_TYPE, data=data, filename=name, mime=mime,
-                             actor_id=actor.user_id)
+                             actor_id=actor.user_id, request=actor.request)
 
 
 def replace(actor: Actor, request_id, file_id, upload) -> dict:
@@ -59,15 +61,16 @@ def replace(actor: Actor, request_id, file_id, upload) -> dict:
     if req.status in FINAL:
         service._require_status(req, (), "замена документа")
     old = _own_file(req, file_id)
-    if old.replaced:
+    if old["replaced"]:
         raise DomainError("E-CON-01", "Эта версия файла уже заменена — обновите страницу.",
                           status=409)
     data, name, mime = _upload(upload)
-    return core_files.replace(str(old.pk), data=data, filename=name, mime=mime,
-                              actor_id=actor.user_id)
+    return core_files.replace(old["id"], data=data, filename=name, mime=mime,
+                              actor_id=actor.user_id, request=actor.request)
 
 
 def link(actor: Actor, request_id, file_id) -> dict:
     req = service.get_visible(actor, request_id)
     row = _own_file(req, file_id)
-    return {"url": core_files.download_url(str(row.pk), user_id=actor.user_id)}
+    return {"url": core_files.download_url(row["id"], user_id=actor.user_id,
+                                           request=actor.request)}

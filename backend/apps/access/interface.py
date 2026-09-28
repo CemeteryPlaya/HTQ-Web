@@ -126,6 +126,24 @@ def serving_holders(company: str) -> list[int]:
     return holders.serving_holder_ids(company)
 
 
+def holders_of(node: str, flag: str, company: str) -> list[int]:
+    """Id участников ``company``, у которых на узле ``node`` действует признак
+    ``flag`` (``view``/``create``/``edit``/``delete``) — через роли должности,
+    обслуживающие должности предков и личные назначения, с наследованием
+    глубины от предка узла, как в ``flags_for``
+    (``apps.access.services.holders.node_holder_ids``).
+
+    Нужна для уведомлений «всем, кто может…»: например, СН и ПМ об
+    утверждении бюджета (ТЗ БЗО §16.2 п.1).
+    """
+    require_service("access")
+    from apps.access import depth
+
+    if flag not in depth.FLAGS:
+        raise ValueError(f"Неизвестный признак глубины: {flag!r}")
+    return holders.node_holder_ids(node, flag, company)
+
+
 def ensure_position_role(company_slug: str, position_id: int, role_code: str,
                          scope_kind: str) -> bool:
     """Выдать должности системную роль по коду — идемпотентно, не трогая

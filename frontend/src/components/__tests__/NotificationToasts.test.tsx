@@ -36,6 +36,22 @@ vi.mock('@/api/tasks', () => ({
 
 vi.mock('sonner', () => ({ toast: toastMock, Toaster: () => null }));
 
+// Сокет мессенджера: сервер шлёт «notification» в персональную комнату, когда
+// центр уведомлений записал новое. Обработчики собираются, чтобы тест мог
+// «прислать» событие сам.
+const socketHandlers = vi.hoisted(() => ({} as Record<string, (payload: unknown) => void>));
+vi.mock('@/features/messenger/api/socket', () => ({
+    getMessengerSocket: () => ({
+        on: (event: string, handler: (payload: unknown) => void) => {
+            socketHandlers[event] = handler;
+        },
+        off: vi.fn(),
+    }),
+}));
+vi.mock('@/hooks/useActiveProfile', () => ({
+    useActiveProfile: () => ({ activeProfile: { id: 1 } }),
+}));
+
 // Настоящий модуль звука, подменён только сам проигрыватель.
 vi.mock('@/lib/sound/soundService', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/sound/soundService')>()),
@@ -169,5 +185,19 @@ describe('NotificationToasts', () => {
         act(() => setToastHostMounted(true));
 
         await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    });
+
+    it('событие сокета о новом уведомлении сразу перечитывает ленту', async () => {
+        // Без этого лента обновлялась только опросом раз в 30 секунд.
+        await mountAndLoad();
+        expect(fetchNotifications).toHaveBeenCalledTimes(1);
+
+        act(() => socketHandlers.notification?.({ type: 'notification', id: 'x' }));
+        await waitFor(() => expect(fetchNotifications).toHaveBeenCalledTimes(2));
+
+        // Чужие события того же канала (старт конференции) ленту не трогают.
+        act(() => socketHandlers.notification?.({ type: 'conference_started' }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(fetchNotifications).toHaveBeenCalledTimes(2);
     });
 });

@@ -19,7 +19,7 @@ from collections import defaultdict
 
 from django.db import transaction
 
-from apps.access.models import PositionRole, RoleAssignment
+from apps.access.models import PositionRole, RoleAssignment, RolePermission
 from apps.core.services import ServiceDisabled
 from htqweb.fallback import fallback
 
@@ -247,3 +247,113 @@ def serving_holder_ids(company: str) -> list[int]:
     независимых определения «кто держит права через обслуживающую должность».
     """
     return sorted({user_id for user_id, _record in _serving_holder_rows(company)})
+
+
+# ── Держатели признака на узле — получатели уведомлений (БЗО, этап 2 A) ──
+
+
+def _granting_role_ids(node: str, flag: str) -> set[int]:
+    """Роли, у которых на ``node`` действует ``flag``.
+
+    Действующая глубина роли на узле — строка ближайшего предка, у которого
+    она задана (``resolve._nearest``, то же правило, что у ``flags_for``);
+    пустая строка — запрет, а не «ищи выше». Роли одного пользователя
+    складываются объединением, поэтому пользователь несёт признак ровно
+    тогда, когда его несёт хоть одна его роль, — и обратный поиск можно
+    вести от ролей, а не перебирать людей.
+    """
+    from apps.access import registry
+    from apps.access.services.resolve import _nearest
+
+    by_role: dict[int, dict[str, frozenset[str]]] = defaultdict(dict)
+    for row in RolePermission.objects.filter(node__in=registry.self_and_ancestors(node)):
+        by_role[row.role_id][row.node] = row.flags
+    return {role_id for role_id, nodes in by_role.items() if flag in _nearest(nodes, node)}
+
+
+def _position_holder_ids(company: str, position_ids: list[int], *,
+                         serving_only: bool) -> set[int]:
+    """Действующие держатели должностей ``company`` с активной учёткой
+    (``hr.resolve_position_users`` — то же определение, по которому маршруты
+    согласования ищут исполнителя должности, включая временных исполнителей
+    D-22). ``serving_only`` — только должности, обслуживающие дочерние
+    компании (наследование блока C).
+
+    Своя точка сохранения и та же развилка отказов, что у
+    ``_serving_holder_rows``: выключенный ``hr`` — штатная деградация,
+    недоступная схема — порча реестра, и она должна быть слышна.
+    """
+    from apps.hr import interface as hr
+    from htqweb.tenancy.db import use_company
+
+    if not position_ids:
+        return set()
+    try:
+        with transaction.atomic():
+            with use_company(company):
+                ids = list(position_ids)
+                if serving_only:
+                    ids = [p["id"] for p in hr.get_positions_brief(ids)
+                           if p["serves_subsidiaries"]]
+                    if not ids:
+                        return set()
+                return {user_id for user_ids in hr.resolve_position_users(ids).values()
+                        for user_id in user_ids}
+    except ServiceDisabled as exc:
+        fallback("access.holders.node_hr_unavailable", None,
+                 reason="кадровый модуль недоступен, держатели должностей не учтены",
+                 exc=exc, expected=True, company=company)
+    except Exception as exc:
+        fallback("access.holders.node_schema_unavailable", None,
+                 reason="схема компании недоступна, держатели должностей не учтены",
+                 exc=exc, expected=False, company=company)
+    return set()
+
+
+def node_holder_ids(node: str, flag: str, company: str) -> list[int]:
+    """Кто в ``company`` несёт ``flag`` на ``node`` — по возрастанию id.
+
+    Обратная сторона ``resolve.flags_for``: роли с действующим признаком
+    (с наследованием глубины от предка узла) → их держатели тремя путями,
+    как их складывает ``resolve._role_scopes``:
+
+    - личные назначения ``RoleAssignment`` в компании;
+    - должности компании (``PositionRole``) → их держатели;
+    - обслуживающие должности действующих компаний-предков
+      (``inheritance.inherit``) → их держатели.
+
+    Итог сужается до участников компании с действующей учёткой
+    (``companies.active_member_ids``): назначения переживают отзыв членства
+    (CLAUDE.md, «Модель прав — одна»), а уведомлять того, кто не может
+    войти в компанию, незачем. Суперпользователь ролей не требует и сюда не
+    попадает, если сам их не держит: список — о ролях, а не о тех, кому
+    открыто всё.
+
+    Отличие от прямого пути: держатель должности ищется так, как его ищут
+    маршруты согласования (действующий сотрудник, привязанный к учётке, и
+    временный исполнитель должности), а не по карточке одного пользователя.
+    """
+    from apps.access.services import inheritance
+    from apps.companies import interface as companies
+
+    roles = _granting_role_ids(node, flag)
+    if not roles:
+        return []
+
+    found = set(RoleAssignment.objects.filter(company_slug=company, role_id__in=roles)
+                .values_list("user_id", flat=True))
+    own_positions = list(PositionRole.objects.filter(company_slug=company, role_id__in=roles)
+                         .values_list("position_id", flat=True).distinct())
+    found |= _position_holder_ids(company, own_positions, serving_only=False)
+
+    for ancestor in inheritance.ancestors_of(company):
+        row = companies.get_company(ancestor)
+        if row is None or not row.get("is_active"):
+            continue  # архивный предок ролей не даёт, но обход идёт выше
+        positions = list(PositionRole.objects.filter(company_slug=ancestor, role_id__in=roles)
+                         .values_list("position_id", flat=True).distinct())
+        found |= _position_holder_ids(ancestor, positions, serving_only=True)
+
+    if not found:
+        return []
+    return sorted(found & set(companies.active_member_ids(company)))

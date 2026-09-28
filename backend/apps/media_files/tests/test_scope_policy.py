@@ -17,12 +17,13 @@ def test_known_scopes_are_the_seven_source_scopes_plus_post_migration_ones():
 
     ``signoff_doc`` has no FastAPI ancestor — ``apps.signoff`` post-dates the
     migration entirely — so it is listed separately from the parity set
-    rather than folded into it. ``bpp_doc`` — файлы документов модуля БЗО
-    (ТЗ §21), тоже без предка.
+    rather than folded into it. ``file_object`` — документы файловой
+    подсистемы ``apps.files`` (ТЗ §21, в том числе модуля БЗО), тоже без
+    предка.
     """
     ported = {"avatar", "news", "chat", "hr_doc", "hr_department",
               "task_attachment", "generic"}
-    added_after_cutover = {"signoff_doc", "file_object", "bpp_doc"}
+    added_after_cutover = {"signoff_doc", "file_object"}
 
     assert KNOWN_SCOPES == ported | added_after_cutover
 

@@ -99,26 +99,38 @@ def _domain_app_configs():
 # ═══════════════════════════════════════════════════════════════════════
 
 
+#: Related-names ``htqweb/celery.py`` autodiscovers tasks under, beyond the
+#: default ``tasks``. ``tasks_export`` — bpp: печать/экспорт (A2.2, задача
+#: 6), отдельный файл от ``apps/bpp/tasks.py`` (ночная сверка «Задействовано»,
+#: зона B), чтобы задачи модуля не конфликтовали правками в одном файле,
+#: пока обе части пишутся параллельно (см. докстринг ``tasks_export.py``).
+#: Список держим в паре с ``htqweb/celery.py``: новый related_name там —
+#: новое имя и здесь, иначе его задачи молча выпадут из обоих сторожей ниже.
+_TASK_MODULE_RELATED_NAMES = ("tasks", "tasks_export")
+
+
 def _iter_domain_tasks():
     """Yield (app_label, service, task) for every ``@shared_task`` DEFINED
-    (not merely imported) in ``apps/<domain>/tasks.py``, for every domain
-    app that has a ``tasks.py`` at all.
+    (not merely imported) in ``apps/<domain>/tasks.py`` or one of
+    ``_TASK_MODULE_RELATED_NAMES``'s other modules, for every domain app
+    that has one at all.
 
     ``importlib.util.find_spec`` (not a bare try/import/except ImportError)
-    tells apart "this app has no tasks.py" (skip — legitimately nothing to
-    check, e.g. apps.users today) from "tasks.py exists but blows up on
+    tells apart "this app has no such module" (skip — legitimately nothing
+    to check, e.g. apps.users today) from "module exists but blows up on
     import" (let it raise — that is a real bug, not something to swallow
     into a silent skip).
     """
     for config in _domain_app_configs():
-        tasks_module_name = f"{config.name}.tasks"
-        if importlib.util.find_spec(tasks_module_name) is None:
-            continue
-        tasks_module = importlib.import_module(tasks_module_name)
         service = service_name_for_app_label(config.label)
-        for _name, obj in inspect.getmembers(tasks_module):
-            if isinstance(obj, CeleryTask) and obj.__module__ == tasks_module_name:
-                yield config.label, service, obj
+        for related_name in _TASK_MODULE_RELATED_NAMES:
+            tasks_module_name = f"{config.name}.{related_name}"
+            if importlib.util.find_spec(tasks_module_name) is None:
+                continue
+            tasks_module = importlib.import_module(tasks_module_name)
+            for _name, obj in inspect.getmembers(tasks_module):
+                if isinstance(obj, CeleryTask) and obj.__module__ == tasks_module_name:
+                    yield config.label, service, obj
 
 
 def _first_executable_stmt(func) -> ast.stmt | None:

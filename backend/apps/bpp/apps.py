@@ -14,6 +14,8 @@ class BppConfig(AppConfig):
 
     def ready(self):
         # Документы модуля в движке согласования и доступ к их журналу (B).
-        from . import approval_hooks
+        from . import approval_hooks, file_owners
 
         approval_hooks.register()
+        # Документы модуля — владельцы файлов платформенной apps.files (A).
+        file_owners.register()

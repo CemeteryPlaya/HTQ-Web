@@ -290,7 +290,7 @@ def add_report(actor: Actor, request_id, *, expense_name: str, amount, upload) -
         created_by=actor.user_id, updated_by=actor.user_id)
     core_files.attach(report, REPORT_FILE, data=upload.read(), filename=upload.name,
                       mime=upload.content_type or "application/octet-stream",
-                      actor_id=actor.user_id)
+                      actor_id=actor.user_id, request=actor.request)
     audit.record(req, "report_added", actor_id=actor.user_id,
                  changes={"report": str(report.pk), "amount": str(amount)})
     return report
@@ -328,7 +328,8 @@ def report_file_link(actor: Actor, report_id) -> dict:
     files = core_files.list_files(report)
     if not files:
         raise DomainError("E-NOT-FOUND", "У отчёта нет файла.", status=404)
-    return {"url": core_files.download_url(files[0]["id"], user_id=actor.user_id)}
+    return {"url": core_files.download_url(files[0]["id"], user_id=actor.user_id,
+                                           request=actor.request)}
 
 
 # ── колбэки согласования ────────────────────────────────────────────────

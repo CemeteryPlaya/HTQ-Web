@@ -12,7 +12,7 @@ from django.forms.models import model_to_dict
 from django.http import Http404
 
 from htqweb.errors import DomainError
-from htqweb.http import api_view, json_error
+from htqweb.http import api_view, json_error, uuid_or_404
 
 from . import models, schemas
 from .services import editing
@@ -56,13 +56,24 @@ def _save(obj) -> dict:
     return _row(obj)
 
 
+def _listing_can_edit(request) -> bool:
+    company = getattr(request, "company", None) or {}
+    return editing.can_edit(request.token, company.get("slug"))
+
+
 def _collection(model, schema_in, order: str):
     @api_view(methods=("GET",), module="refdata", level="read")
     def listing(request):
+        # На КАЖДУЮ строку, а не одним полем на весь ответ: ручка отдаёт
+        # голый список (без обёртки {items,...}), и добавлять обёртку ради
+        # одного булева значения — лишняя переделка фронта; значение у всех
+        # строк одно и то же (одна роль, одна компания на запрос), поэтому
+        # дублирование стоит одного вычисления can_edit() на запрос.
+        can_edit_flag = _listing_can_edit(request)
         rows = model.objects.all().order_by(order)
         if request.GET.get("active") == "1" and hasattr(model, "is_active"):
             rows = rows.filter(is_active=True)
-        return [_row(obj) for obj in rows]
+        return [{**_row(obj), "can_edit": can_edit_flag} for obj in rows]
 
     @api_view(methods=("POST",), module="refdata", level="write", body=schema_in, status=201)
     def create(request, data):
@@ -86,12 +97,14 @@ def _item(model, schema_patch):
     @api_view(methods=("PATCH",), module="refdata", level="write", body=schema_patch)
     def patch(request, obj_id: str, data):
         _deny_unless_editor(request)
-        obj = model.objects.filter(pk=obj_id).first()
+        obj = model.objects.filter(pk=uuid_or_404(obj_id)).first()
         if obj is None:
             raise Http404("Запись справочника не найдена")
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(obj, key, value)
-        return _save(obj)
+        # Досюда дошёл только редактор (_deny_unless_editor выше) — можно
+        # без повторного вычисления.
+        return {**_save(obj), "can_edit": True}
 
     def dispatch(request, obj_id: str):
         if request.method == "PATCH":

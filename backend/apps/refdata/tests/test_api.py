@@ -41,6 +41,18 @@ def test_read_needs_refdata_read(holding):
 
 
 @pytest.mark.django_db
+def test_can_edit_is_true_in_holding_and_false_in_subsidiary(holding, subsidiary):
+    """Ответ ручки несёт ``can_edit`` на каждой строке (задача 9, A2.4):
+    кнопки правки на фронте включаются им, а не отдельным запросом прав."""
+    assign(holding.slug, 7, "refdata", "full")
+    assign(subsidiary.slug, 7, "refdata", "full")
+    in_holding = Client().get(f"{BASE}/currencies", **_auth(holding.slug)).json()
+    assert in_holding and all(row["can_edit"] is True for row in in_holding)
+    in_subsidiary = Client().get(f"{BASE}/currencies", **_auth(subsidiary.slug)).json()
+    assert in_subsidiary and all(row["can_edit"] is False for row in in_subsidiary)
+
+
+@pytest.mark.django_db
 def test_edit_in_holding(holding):
     assign(holding.slug, 7, "refdata", "full")
     response = _post("uoms", {"code": "pack", "short_name": "уп", "name": "Упаковка"},
@@ -81,3 +93,11 @@ def test_article_code_is_unique(holding):
     assert _post("articles", body, holding.slug).status_code == 201
     second = _post("articles", body, holding.slug)
     assert second.status_code == 422 and second.json()["code"] == "E-REF-02"
+
+
+@pytest.mark.django_db
+def test_malformed_id_is_404(holding):
+    assign(holding.slug, 7, "refdata", "full")
+    response = Client().patch(f"{BASE}/uoms/not-a-uuid", data=json.dumps({"name": "x"}),
+                              content_type="application/json", **_auth(holding.slug))
+    assert response.status_code == 404

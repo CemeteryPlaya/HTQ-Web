@@ -36,8 +36,16 @@ def can_view_history(request, object_type: str, object_id: str) -> bool:
 
 def record(obj, action: str, *, actor_id: int | None, changes: dict | None = None,
            comment: str = "") -> None:
+    record_for(obj._meta.label_lower, str(obj.pk), action, actor_id=actor_id,
+               changes=changes, comment=comment)
+
+
+def record_for(object_type: str, object_id: str, action: str, *, actor_id: int | None,
+               changes: dict | None = None, comment: str = "") -> None:
+    """То же, что ``record``, когда под рукой только тип и ключ объекта
+    (замена файла знает владельца по паспорту, а не по экземпляру)."""
     AuditLog.objects.create(
-        object_type=obj._meta.label_lower, object_id=str(obj.pk), action=action,
+        object_type=object_type, object_id=object_id, action=action,
         actor_id=actor_id, changes=changes or {}, comment=comment or "",
     )
 
