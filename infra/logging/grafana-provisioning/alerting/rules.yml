@@ -43,6 +43,15 @@
 #     администратора, которое держится днями; level-алерт ныл бы дважды в
 #     сутки вечно. Если понадобится — алертить на ПЕРЕХОД, а не на уровень:
 #     min by (service) (changes(htqweb_service_enabled[15m])) > 0, for: 0s.
+#
+#   htqweb_bpp_requests_in_approval_stale — заявки БЗО на этапе дольше 5
+#     рабочих дней. Бизнес-очередь людей, а не поломка: каждому согласующему
+#     её и так показывает ежедневная сводка «ждут вашего решения» (центр
+#     уведомлений, 09:00 Пн–Пт) — адресно, а не в общий чат. Панель на
+#     дашборде «БЗО» есть, правила нет.
+#
+#   htqweb_bpp_bank_imports_failed — автор загрузки выписки видит ошибку на
+#     экране в ту же минуту; алерт сообщил бы то, что человек уже знает.
 
 apiVersion: 1
 
@@ -1351,6 +1360,103 @@ groups:
             смотреть логи backend-web за это время.
         labels:
           severity: critical
+          team: platform
+
+      # ── Модуль БЗО: ночная сверка «Задействовано» ────────────────────────
+      # Корректность денег, а не бизнес-событие — поэтому здесь, в
+      # инцидентном канале (без channel=business). Итог сверки пишет ночная
+      # задача (02:30) в настройку модуля, метрики читают его (D-S3-4); серия
+      # на компанию, без агрегации — уведомление называет компанию. Итога
+      # нет (сверка не бежала ни разу, модуль у компании выключен) — метрик
+      # нет, noDataState: OK.
+      - uid: htqweb-bpp-committed-mismatch
+        title: "БЗО: «Задействовано» не сошлось с пересчётом"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_bpp_committed_mismatches'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "4"
+          threshold: "0"
+          summary: "{{ $values.A }} строк(и) бюджета: «Задействовано» не совпало с пересчётом"
+          description: |
+            Ночная сверка (apps/bpp/services/budget/check.py) нашла строки
+            бюджета, где SQL-агрегат «Задействовано» расходится с независимым
+            пересчётом по позициям заявок. Одна из двух реализаций сломана, и
+            остатки, по которым пропускаются заявки и счета, неверны.
+            Какие строки: Explore → Loki → {service="backend-worker"} |=
+            "bpp.committed.mismatch" за ночь (бюджет, статья, обе суммы).
+            Правило гаснет только после следующей ночной сверки без расхождений.
+        labels:
+          severity: warning
+          team: platform
+
+      - uid: htqweb-bpp-committed-check-stale
+        title: "БЗО: ночная сверка «Задействовано» не бежит"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_bpp_committed_check_age_seconds'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [93600], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "5"
+          threshold: "26 ч"
+          summary: "Ночная сверка «Задействовано» не бежала {{ humanizeDuration $values.A.Value }}"
+          description: |
+            Сверка идёт каждую ночь в 02:30 (periodic task bpp.committed_check,
+            диспетчер + веер по компаниям). Больше 26 ч без итога — задача не
+            запускалась или упала до записи результата, и расхождения в
+            «Задействовано» некому заметить.
+            Проверить: Flower (задачи apps.bpp.tasks.committed_check*), логи
+            backend-beat и backend-worker, включён ли периодик в
+            /django-admin/ → Periodic tasks.
+        labels:
+          severity: warning
           team: platform
 
   # ═══════════════════════════════════════════════════════════════════════
