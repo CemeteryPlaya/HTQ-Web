@@ -1583,8 +1583,8 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET` / `POST accountable` | Реестр (свои; ФД и бухгалтер — все) / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
-| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (остаток, отчёты, «Сейчас у») / правка и удаление черновика |
+| `GET` / `POST accountable` (`?status=&project_id=&article_id=&date_from=&date_to=&search=&awaiting_me=1&page=&page_size=`) | Реестр — конверт реестров модуля `{items, total, page, page_size, totals: {amount}}`: свои заявки и ждущие вашего решения; ФД и бухгалтер — все. Строка — подотчётное лицо, проект, статья, цель, сумма, «Подтверждено отчётами», «Сейчас у»; поиск — по номеру и цели; `?format=xlsx` — выгрузка / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
+| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (проект, подотчётное лицо, выдача, остаток, отчёты с файлами и `can_submit`, «Сейчас у», `allowed_actions`: `save`/`submit`/`delete` — автору в черновике, `mark_paid` — бухгалтеру, `add_report` — автору, пока заявка ждёт отчётов) / правка и удаление черновика |
 | `POST accountable/<id>/submit` | Отправить: остаток под блокировкой строки бюджета |
 | `POST accountable/<id>/mark-paid` | Бухгалтер выдал деньги (`bpp.accountable.payment`) — заявка ждёт отчётов |
 | `POST accountable/<id>/reports` (multipart `expense_name`, `amount`, `file`) | Авансовый отчёт; сверх остатка — 422 `E-ACN-01` |

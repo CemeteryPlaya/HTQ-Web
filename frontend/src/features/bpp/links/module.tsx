@@ -1,13 +1,13 @@
 /**
  * Документы модуля по прямой ссылке (`/bpp/requests/:id`, `/bpp/agreements/:id`,
- * `/bpp/invoices/:id`) — без меню и без гейта подмодуля по узлу: туда ведут
+ * `/bpp/invoices/:id`, `/bpp/accountable/:id`) — без меню и без гейта подмодуля по узлу: туда ведут
  * карточка согласования и колокольчик, а согласующий или временный
  * исполнитель его должности может не иметь роли в модуле. Видимость документа
  * проверяет сервер (чужой документ — 404), вход в раздел — гейт `/bpp/*`
  * (`bpp:read`).
  *
  * Договор открывается формой F-04, счёт — формой F-05. Реестры — в
- * подмодулях `requests`, `agreements`, `invoices` с гейтом по узлу.
+ * подмодулях `requests`, `agreements`, `invoices`, `accountable` с гейтом по узлу.
  */
 import { lazy } from 'react';
 
@@ -20,5 +20,6 @@ export const bppModule: BppGatedModule = {
     { path: 'requests/:id', element: lazy(() => import('../requests/RequestFormPage')) },
     { path: 'agreements/:id', element: lazy(() => import('../agreements/AgreementFormPage')) },
     { path: 'invoices/:id', element: lazy(() => import('../invoices/InvoiceFormPage')) },
+    { path: 'accountable/:id', element: lazy(() => import('../accountable/AccountableFormPage')) },
   ],
 };

@@ -30,14 +30,18 @@ import { cn } from '@/lib/utils';
 
 import { formatMoney, parseMoneyInput } from '../format';
 
-export type PromptValues = Record<string, string | boolean>;
+export type PromptValue = string | boolean | File | null;
+export type PromptValues = Record<string, PromptValue>;
 
 export type PromptField =
   | { key: string; kind: 'date'; label: string; required?: boolean; hint?: string }
   | { key: string; kind: 'text'; label: string; required?: boolean; maxLength?: number }
   | { key: string; kind: 'money'; label: string; required?: boolean; hint?: string }
   | { key: string; kind: 'comment'; label: string; min: number }
-  | { key: string; kind: 'check'; label: string };
+  | { key: string; kind: 'check'; label: string }
+  /** Файл: `accept` — подсказка окну выбора, `check` — проверка до запроса
+   * (формат и размер, как у справочника «Типы файлов»; отказ объясняет сам). */
+  | { key: string; kind: 'file'; label: string; accept?: string; check?: (file: File) => boolean };
 
 export interface PromptSpec {
   title: string;
@@ -56,7 +60,10 @@ interface Open {
   resolve: (done: boolean) => void;
 }
 
-const text = (values: PromptValues, key: string) => String(values[key] ?? '');
+const text = (values: PromptValues, key: string) => {
+  const value = values[key];
+  return typeof value === 'string' ? value : '';
+};
 
 /** Ошибка поля или `null`; пустое необязательное поле — не ошибка. */
 function fieldProblem(field: PromptField, values: PromptValues): string | null {
@@ -70,6 +77,8 @@ function fieldProblem(field: PromptField, values: PromptValues): string | null {
     case 'date':
     case 'text':
       return field.required && !value ? 'Обязательное поле' : null;
+    case 'file':
+      return values[field.key] instanceof File ? null : 'Выберите файл';
     default:
       return null;
   }
@@ -83,7 +92,9 @@ export function usePrompt() {
 
   const ask = useCallback((spec: PromptSpec) => new Promise<boolean>((resolve) => {
     const initial: PromptValues = {};
-    for (const field of spec.fields) initial[field.key] = field.kind === 'check' ? false : '';
+    for (const field of spec.fields) {
+      initial[field.key] = field.kind === 'check' ? false : field.kind === 'file' ? null : '';
+    }
     setValues({ ...initial, ...spec.initial });
     setOpen({ spec, resolve });
   }), []);
@@ -118,7 +129,7 @@ export function usePrompt() {
     }
   };
 
-  const set = (key: string, value: string | boolean) =>
+  const set = (key: string, value: PromptValue) =>
     setValues((current) => ({ ...current, [key]: value }));
 
   const dialog = (
@@ -161,6 +172,18 @@ export function usePrompt() {
                       onBlur={() => {
                         const parsed = parseMoneyInput(text(values, field.key));
                         if (parsed !== null) set(field.key, formatMoney(parsed));
+                      }} />
+                  )}
+                  {field.kind === 'file' && (
+                    <Input id={id} type="file" accept={field.accept} disabled={pending}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] ?? null;
+                        if (file && field.check && !field.check(file)) {
+                          event.target.value = '';
+                          set(field.key, null);
+                          return;
+                        }
+                        set(field.key, file);
                       }} />
                   )}
                   {field.kind === 'comment' && (
