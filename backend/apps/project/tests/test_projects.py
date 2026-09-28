@@ -60,3 +60,17 @@ def test_search_hides_archive_and_respects_membership(company_context):
 def test_company_overhead_kind(company_context):
     overhead = _make(code="ОБЩ", name="Общие расходы компании", kind="company_overhead")
     assert Project.objects.get(pk=overhead.pk).kind == "company_overhead"
+
+
+@pytest.mark.django_db
+def test_member_user_ids_are_manager_and_members(company_context):
+    """Получатели уведомлений по проекту (ТЗ §16.2 п.1): руководитель плюс
+    участники, без повторов; чужой или неверный ключ — пусто."""
+    project = _make()
+    projects.add_member(project, 31, actor_id=1)
+    projects.add_member(project, 22, actor_id=1)
+    assert interface.member_user_ids(str(project.id)) == [11, 22, 31]
+    other = _make(code="П-016", manager_user_id=None)
+    assert interface.member_user_ids(str(other.id)) == []
+    assert interface.member_user_ids("00000000-0000-0000-0000-000000000000") == []
+    assert interface.member_user_ids("не-uuid") == []

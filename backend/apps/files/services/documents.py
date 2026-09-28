@@ -418,10 +418,16 @@ def link(owner_type: str, owner_id: Any, document_id, file_id: int, token,
     row = _owner_qs(ref).filter(document_id=document_id, pk=file_id).first()
     if row is None:
         raise not_found()
+    return _issue_link(ref, row, token.user_id, audit)
+
+
+def _issue_link(ref: OwnerRef, row: FileObject, actor_id: int | None,
+                audit: dict | None) -> dict:
+    """Временная ссылка на версию + событие ``file_downloaded`` в журнал."""
     item = media.get_file_links([row.media_file_id]).get(row.media_file_id)
     if item is None:
         raise not_found("Файл не найден в хранилище. Обратитесь к администратору.")
-    _event(ref, EVENT_DOWNLOADED, token.user_id, {
+    _event(ref, EVENT_DOWNLOADED, actor_id, {
         "document_id": str(row.document_id), "file_id": row.pk, "name": row.name,
         "file_type": row.file_type_id, "version_no": row.version_no,
     }, audit)
@@ -639,6 +645,24 @@ def upload(ref: OwnerRef, token, *, upload, file_type: str | None = None,
 
     ``ref`` — уже проверенный ``precheck`` владелец.
     """
+    return _upload(ref, token, token.user_id, upload=upload, file_type=file_type,
+                   document_id=document_id, base_file_id=base_file_id,
+                   idempotency_key=idempotency_key, audit=audit,
+                   uploader=lambda: _uploader(token),
+                   discard=lambda stored: _discard_unless_linked(str(stored["id"])))
+
+
+def _upload(ref: OwnerRef, token, actor_id: int, *, upload, file_type: str | None,
+            document_id, base_file_id, idempotency_key: str, audit: dict | None,
+            uploader, discard) -> FileObject:
+    """Общий путь HTTP-загрузки и загрузки из кода владельца (``upload_bytes``).
+
+    ``token`` — ``None`` у загрузки из кода: права на объект тогда уже
+    проверил сам владелец, и ``can_modify`` не спрашивается. ``uploader`` —
+    снимок «кто загрузил» (зовётся после проверок, чтобы отказ не стоил
+    запросов в users/hr), ``discard`` — как вернуть сохранённые байты, если
+    строка так и не появилась.
+    """
     key = (idempotency_key or "").strip()[:64]
     replay = _replay(ref, key, document_id=document_id, file_type=file_type)
     if replay is not None:
@@ -690,32 +714,32 @@ def upload(ref: OwnerRef, token, *, upload, file_type: str | None = None,
             raise blocked
 
     data = upload.read()
-    uploader = _uploader(token)
+    snapshot = uploader()
     try:
         stored = _store(ref, data=data, name=name, ext=ext,
                         mime=EXT_MIME.get(ext, "application/octet-stream"),
-                        actor_id=token.user_id, file_type=ftype)
+                        actor_id=actor_id, file_type=ftype)
     except FilesError as exc:
         if exc.code == E_INFECTED:
-            _journal_only(ref, EVENT_REJECTED, token.user_id, {
+            _journal_only(ref, EVENT_REJECTED, actor_id, {
                 "name": name, "file_type": spec.code, "reason": "infected",
                 "signature": exc.details.get("signature", ""),
                 "document_id": str(document_id) if document_id else None,
             }, audit)
         raise
     try:
-        return _link(ref, token, stored=stored, name=name, spec=spec, key=key,
-                     document_id=document_id, base_id=base_id, uploader=uploader,
+        return _link(ref, token, actor_id, stored=stored, name=name, spec=spec, key=key,
+                     document_id=document_id, base_id=base_id, uploader=snapshot,
                      audit=audit)
     except Exception:
-        _discard_unless_linked(str(stored["id"]))
+        discard(stored)
         raise
 
 
 @transaction.atomic
-def _link(ref: OwnerRef, token, *, stored: dict, name: str, spec: FileTypeSpec,
-          key: str, document_id, base_id: int | None, uploader: dict,
-          audit: dict | None) -> FileObject:
+def _link(ref: OwnerRef, token, actor_id: int, *, stored: dict, name: str,
+          spec: FileTypeSpec, key: str, document_id, base_id: int | None,
+          uploader: dict, audit: dict | None) -> FileObject:
     ref.entry.lock(ref.owner_id)
     media_file_id = str(stored["id"])
     replay = _replay(ref, key, document_id=document_id, file_type=spec.code)
@@ -724,8 +748,10 @@ def _link(ref: OwnerRef, token, *, stored: dict, name: str, spec: FileTypeSpec,
         # только что сохранённый файл — лишний.
         _discard_after_commit([media_file_id])
         return replay
-    # За время записи в хранилище владельца могли отправить.
-    assert_can_modify(ref, token)
+    # За время записи в хранилище владельца могли отправить. Загрузку из
+    # кода (``token is None``) владелец разрешил сам — под своей блокировкой.
+    if token is not None:
+        assert_can_modify(ref, token)
 
     current = None
     if document_id is None:
@@ -779,7 +805,7 @@ def _link(ref: OwnerRef, token, *, stored: dict, name: str, spec: FileTypeSpec,
     if current is not None:
         payload["replaced_file_id"] = current.pk
     _event(ref, EVENT_VERSION_ATTACHED if current is not None else EVENT_ATTACHED,
-           token.user_id, payload, audit)
+           actor_id, payload, audit)
     return row
 
 
@@ -936,6 +962,152 @@ def adopt(ref: OwnerRef, *, file_type: str, media_file_id: str,
         _discard_unless_linked(stored_id)
         raise
     return row, True
+
+
+# ── загрузка и скачивание из кода владельца ─────────────────────────────
+#
+# Тот же путь, что у HTTP-загрузки (``_upload``): справочник форматов и
+# размеров, квоты владельца под его блокировкой, запись в media со
+# сканированием антивирусом, версии, журнал ``FileEvent`` и лента владельца.
+# Отличий три, и все — от того, что вызывающий сам владелец:
+#
+# * права на объект (``can_view``/``can_modify``) не спрашиваются — владелец
+#   проверил их своими правилами до вызова (у заявки новую версию можно
+#   приложить и после отправки, а новый документ — только в черновике;
+#   одним ``can_modify`` HTTP-ручки это не выразить);
+# * ключа повтора нет — повтор решает сам владелец (``Idempotency-Key`` его
+#   ручки);
+# * откат сохранённых байтов — физический (``_discard_bytes_unless_linked``).
+
+@dataclass(frozen=True)
+class _Bytes:
+    """Байты из кода в форме загруженного файла: ``_upload`` читает у
+    загрузки только ``name``, ``size`` и ``read()``."""
+
+    name: str
+    data: bytes
+
+    @property
+    def size(self) -> int:
+        return len(self.data)
+
+    def read(self) -> bytes:
+        return self.data
+
+
+def _name_with_ext(filename: str, mime: str) -> str:
+    """Имя файла с расширением.
+
+    Тип файла подсистема берёт из РАСШИРЕНИЯ (см. ``EXT_MIME``), заявленный
+    MIME ей не указ. Он нужен только имени без расширения: ``scan`` с
+    ``image/png`` становится ``scan.png``, а не отказом формата.
+    """
+    name = os.path.basename((filename or "").replace("\\", "/")) or "file"
+    if os.path.splitext(name)[1]:
+        return name
+    declared = (mime or "").split(";")[0].strip().lower()
+    for ext, known in EXT_MIME.items():
+        if known == declared:
+            return name + ext
+    return name
+
+
+def _discard_bytes_unless_linked(stored: dict) -> None:
+    """Откат загрузки из кода: байты стираются СРАЗУ, а не через грейс media.
+
+    Загрузка из кода идёт внутри транзакции владельца (авансовый отчёт
+    создаётся и получает файл одной ``transaction.atomic``). Строка media,
+    записанная в этой транзакции, откатится вместе с ней — а с ней и пометка
+    ``delete_file``, по которой грейс стёр бы байты: объект в S3 остался бы
+    «сиротой», на которого не ссылается ничто. Поэтому — ``discard_upload``:
+    удалить объект и пометить строку.
+
+    Проверка «не привязан ли файл» — та же, что у HTTP
+    (``_discard_unless_linked``): не удалось проверить — файл остаётся.
+    """
+    media_file_id = str(stored["id"])
+    try:
+        linked = FileObject.objects.filter(media_file_id=media_file_id).exists()
+    except Exception as exc:
+        fallback("files.documents.link_check_failed", None, exc=exc,
+                 reason="не удалось проверить, привязан ли файл, — он оставлен в media",
+                 media_file_id=media_file_id)
+        return
+    if linked:
+        return
+    try:
+        media.discard_upload(media_file_id, stored["path"])
+    except ServiceDisabled as exc:
+        fallback("files.documents.discard_failed", None, expected=True, exc=exc,
+                 reason="media выключен — файл не вернулся в media и останется без владельца",
+                 media_file_id=media_file_id)
+    except Exception as exc:
+        fallback("files.documents.discard_failed", None, exc=exc,
+                 reason="файл не вернулся в media и останется без владельца",
+                 media_file_id=media_file_id)
+
+
+def upload_bytes(ref: OwnerRef, *, actor_id: int, data: bytes, filename: str,
+                 mime: str = "", file_type: str | None = None, document_id=None,
+                 base_file_id=None, audit: dict | None = None) -> FileObject:
+    """Новый документ (``file_type``) или новая версия (``document_id``)
+    из кода владельца — см. комментарий над разделом.
+
+    Новая версия без ``base_file_id`` ложится поверх действующей на момент
+    вызова; с ним — поверх именно этой версии, и если её уже заменили —
+    409 ``E-CON-01``, как у HTTP.
+    """
+    if isinstance(actor_id, bool) or not isinstance(actor_id, int):
+        # «Кто загрузил» — обязательная часть карточки файла (ТЗ §21).
+        raise ValueError("Загрузка из кода: actor_id — id пользователя, от имени "
+                         "которого прикладывается файл.")
+    if document_id is not None and base_file_id is None:
+        base_file_id = _current_or_404(ref, document_id).pk
+    return _upload(ref, None, actor_id,
+                   upload=_Bytes(_name_with_ext(filename, mime), data),
+                   file_type=file_type, document_id=document_id,
+                   base_file_id=base_file_id, idempotency_key="", audit=audit,
+                   uploader=lambda: _uploader_snapshot(actor_id),
+                   discard=_discard_bytes_unless_linked)
+
+
+def link_for(ref: OwnerRef, document_id, *, actor_id: int | None,
+             file_id=None, audit: dict | None = None) -> dict:
+    """Ссылка на скачивание из кода владельца (права проверил он сам):
+    версия ``file_id`` документа или, без неё, действующая. Журнал — как у
+    ручки ``…/link``."""
+    qs = _owner_qs(ref).filter(document_id=document_id)
+    if file_id is not None:
+        try:
+            qs = qs.filter(pk=int(file_id))
+        except (TypeError, ValueError):
+            raise not_found() from None
+    row = qs.order_by("-version_no").first()
+    if row is None:
+        raise not_found()
+    return _issue_link(ref, row, actor_id, audit)
+
+
+def find_version(file_id) -> dict | None:
+    """Версия по её id — с владельцем (``owner_type``, ``owner_id``):
+    ``version_out`` плюс эти два ключа. ``None`` — версии нет, её владелец не
+    зарегистрирован или она из другой компании (у тенантного владельца id
+    версий сквозные, а компания — часть ключа)."""
+    require_service("files")
+    try:
+        pk = int(file_id)
+    except (TypeError, ValueError):
+        return None
+    row = FileObject.objects.filter(pk=pk).first()
+    if row is None:
+        return None
+    try:
+        entry = registry.get_owner(row.owner_type)
+    except registry.UnknownOwner:
+        return None
+    if entry.tenant and row.company_slug != owner_company(entry):
+        return None
+    return {**version_out(row), "owner_type": row.owner_type, "owner_id": row.owner_id}
 
 
 def owners_with_documents(owner_type: str, owner_ids,

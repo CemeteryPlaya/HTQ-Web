@@ -327,6 +327,16 @@ def upload_file_bytes(
     return UploadResult(meta=meta, enqueue_variants=enqueue)
 
 
+def discard(path: str) -> None:
+    """Удалить объект, только что записанный ``upload_file_bytes``, из хранилища.
+
+    Для отката: вызывающий записал байты, а его собственная запись не
+    удалась — строка ``FileMetadata`` откатится вместе с его транзакцией, а
+    объект в S3 остался бы «сиротой», на которого ничто не ссылается.
+    """
+    get_storage(bucket=settings.MEDIA_S3_BUCKET).delete(path)
+
+
 def read_original(meta: FileMetadata) -> bytes:
     """Байты оригинала из хранилища — тем же ``get_storage``, которым
     ``upload_file_bytes`` их туда положил (и который подменяют тесты)."""

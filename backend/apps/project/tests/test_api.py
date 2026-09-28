@@ -104,3 +104,10 @@ def test_pm_sees_only_projects_he_takes_part_in(company_context):
 
     sn_list = Client().get(f"{BASE}/projects", **_auth(slug, 22)).json()
     assert {row["code"] for row in sn_list} == {"П-1", "П-2"}
+
+
+@pytest.mark.django_db
+def test_malformed_project_id_is_404(company_context):
+    slug = company_context["slug"]
+    assign(slug, 7, "project", "full")
+    assert Client().get(f"{BASE}/projects/not-a-uuid", **_auth(slug)).status_code == 404

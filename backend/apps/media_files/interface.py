@@ -61,6 +61,7 @@ from apps.media_files.services.upload_service import (
     FileInfected,
     ScanUnavailable,
     UploadValidationError,
+    discard,
     read_original,
     upload_file_bytes,
 )
@@ -71,7 +72,7 @@ from apps.media_files.services.upload_service import (
 __all__ = [
     "FileInfected", "ScanUnavailable", "UploadValidationError",
     "store_file", "copy_file", "get_file_url", "get_file_links", "get_file_meta",
-    "delete_file",
+    "delete_file", "discard_upload",
 ]
 from apps.media_files.services.url_service import build_file_url
 
@@ -321,3 +322,16 @@ def delete_file(file_id) -> bool:
         pk=key, deleted_at__isnull=True,
     ).update(deleted_at=timezone.now())
     return bool(updated)
+
+
+def discard_upload(file_id, path: str) -> None:
+    """Откатить ``store_file``: вызывающий записал файл, но его собственная
+    запись не удалась. Удаляет объект из хранилища и помечает строку
+    удалённой, если она ещё жива (в откатившейся транзакции её уже нет).
+
+    ``UploadValidationError`` — исключение ``store_file`` — соседи берут
+    отсюда же: импортировать ``services`` чужой аппки нельзя.
+    """
+    require_service("media")
+    discard(path)
+    delete_file(file_id)

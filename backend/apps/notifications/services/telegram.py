@@ -16,11 +16,26 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.notifications.models import TelegramLink
+from htqweb.errors import DomainError
 
 CODE_TTL = timedelta(minutes=15)
 
 
+def available() -> bool:
+    """Бот настроен целиком: токен (отправка), имя (ссылка на бота) и секрет
+    вебхука (приём ``/start``). Без любого из трёх привязка не сработает."""
+    return all(getattr(settings, name, "") for name in (
+        "NOTIFY_TELEGRAM_BOT_TOKEN", "NOTIFY_TELEGRAM_BOT_NAME",
+        "NOTIFY_TELEGRAM_WEBHOOK_SECRET"))
+
+
 def start_link(user_id: int) -> str:
+    if not available():
+        raise DomainError(
+            "E-NTF-03",
+            "Telegram-бот портала не настроен — подключить Telegram пока нельзя. "
+            "Пользуйтесь колокольчиком и e-mail или обратитесь к администратору.",
+            status=503)
     code = secrets.token_urlsafe(12)
     TelegramLink.objects.update_or_create(
         user_id=user_id, defaults={"link_code": code,

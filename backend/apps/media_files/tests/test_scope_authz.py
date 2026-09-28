@@ -140,8 +140,9 @@ def _png_bytes() -> bytes:
 
 
 def test_restricted_scopes_are_exactly_the_listed_domains():
-    """Три домена переноса плюс ``bpp_doc`` (модуль БЗО пишет только сервером)."""
-    assert RESTRICTED_SCOPES == {"hr_doc", "hr_department", "task_attachment", "bpp_doc"}
+    """Три домена переноса. Документы модуля БЗО — в ``file_object``
+    (``apps.files``), своего scope у модуля больше нет."""
+    assert RESTRICTED_SCOPES == {"hr_doc", "hr_department", "task_attachment"}
 
 
 @pytest.mark.parametrize("scope", sorted(RESTRICTED_SCOPES))

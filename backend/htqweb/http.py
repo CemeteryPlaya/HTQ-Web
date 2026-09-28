@@ -6,6 +6,7 @@
 только этот модуль и объявления в views/urls.
 """
 import logging
+import uuid
 from functools import wraps
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
@@ -21,6 +22,18 @@ from htqweb.authn.rbac import require_admin
 from htqweb import idempotency
 from htqweb.errors import DomainError
 from htqweb.tenancy import archive
+
+
+def uuid_or_404(value) -> uuid.UUID:
+    """UUID из пути запроса, а неверный — 404, как несуществующий объект.
+
+    Без этого фильтр ORM по UUID-полю падает ``ValidationError`` и ручка
+    отвечает 500 на опечатку в адресе.
+    """
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise Http404("Не найдено") from None
 
 
 def json_error(detail, status: int) -> JsonResponse:

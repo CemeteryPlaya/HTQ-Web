@@ -34,6 +34,7 @@
 
   Владельцев в коде нет, тесты идут на пробных (`apps/files/tests/testapp`).
 - **Предложение к сверке.** A1.1 берёт `apps.files` за основу, а не пишет вторую таблицу версий: документы `bpp` регистрируются владельцами через `apps.files.interface.register_owner` (с `model=` для UUID), их типы — миграцией `bpp`. Решение — за Санжаром.
+- **Решение 28.09 (Санжар): apps.files, `DocumentFile` снят.** Одна файловая подсистема на платформу (план этапа 2 A, задача 1) — предложение выше принято как есть: `bpp/models/files.py` (`DocumentFile`, `FileDownload`) и `services/core/scanner.py` удалены миграцией `bpp/0007_drop_document_files`, `services/core/files.py` стал тонкой обёрткой над `apps.files.interface.attach_bytes/replace_bytes/download_link/find_version` с прежними сигнатурами, владельцы — `apps/bpp/file_owners.py` (`bpp.purchase_request`, `bpp.advance_report`), их типы — миграция `files/0003_bpp_file_types`. Заодно закрыто и «чего нет» ниже: загрузка байтов из кода владельца (не только HTTP) и триггер БД «только вставка» у `FileEvent` (`files/0002_fileevent_append_only`, как `bpp_auditlog`) — сделаны той же задачей.
 - **Чего нет относительно A1.1 / §2.6:**
   - внутрипроцессной загрузки байтов `attach(owner, file_type, *, data, filename, actor_id)`. Есть HTTP-загрузка и `adopt_media_file` — перенос уже лежащего в media файла, он пригодится B6.1;
   - триггера БД «только вставка» у `FileEvent` (D-30 — это про `AuditLog` A1.1; журнал файлов защищён только кодом).
@@ -103,7 +104,7 @@
   - `htqweb/http.py`: идемпотентность и `DomainError` из A, после них — `ApiError` из B (через него отказы пайплайна media проходят сквозь чужие вьюхи своим статусом);
   - `media_files/services/scope_policy.py` и его тест: оба scope — `file_object` (B, `apps.files`) и `bpp_doc` (A, `DocumentFile`).
 - **Миграция `access/0013_grant_files_module` (B) перенумерована в `0016_grant_files_module`** и зависит от `0015_project_all_node` (A). Ни одна из них не выкатывалась.
-- **Две подсистемы файлов (к §1.2).** A сделал `DocumentFile` внутри `bpp` (scope `bpp_doc`, `FileDownload`, `scanner.scan` через `BPP_FILE_SCANNER`), у B есть платформенная `apps.files`. Решение — на сверке. Пока документы этапа 2 используют файлы A по контракту §2.6. У `bpp_doc` нет флага `ScopePolicy.antivirus`, и два крючка проверки (`BPP_FILE_SCANNER` и `htqweb.antivirus`) надо свести к одному — A7.4.
+- **Две подсистемы файлов (к §1.2) — решено 28.09.** A сделал `DocumentFile` внутри `bpp` (scope `bpp_doc`, `FileDownload`, `scanner.scan` через `BPP_FILE_SCANNER`), у B — платформенная `apps.files`. Решение (см. §1.2): `apps.files`, `DocumentFile` снят вместе со scope `bpp_doc` и `BPP_FILE_SCANNER` — один антивирус на платформу (флаг `ScopePolicy.antivirus` у scope `file_object`), документы этапа 2 (заявка, подотчёт) прикладываются через обёртку `services/core/files.py` без изменения кода B.
 - **Источник сводки `signoff` включён после слияния.** Регистрирует `holders.digest_items` (в `SignoffConfig.ready()`, только если установлена `apps.notifications`), а не голый `pending_for_user`: у строки сводки нужен заголовок с этапом и ссылка, даже когда предмет не отдаёт своих (тогда — карточка процесса). Выключенный у компании `signoff` отдаёт пустой список, а не ошибку источника.
 
 ### 7.2 Правки в зоне A для этапа 2 (правило 5)

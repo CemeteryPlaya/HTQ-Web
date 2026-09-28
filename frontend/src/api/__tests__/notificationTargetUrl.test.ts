@@ -17,5 +17,7 @@ describe('notificationTargetUrl', () => {
   it('внешний адрес не открывается', () => {
     expect(notificationTargetUrl({ ...base, url: 'https://evil.example' })).toBeNull();
     expect(notificationTargetUrl({ ...base, url: '//evil.example/x' })).toBeNull();
+    // Браузер читает обратную косую как прямую: /\evil.example — тоже чужой хост.
+    expect(notificationTargetUrl({ ...base, url: '/\\evil.example/x' })).toBeNull();
   });
 });

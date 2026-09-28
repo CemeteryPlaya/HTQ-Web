@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from apps.notifications.models import Channel, ChannelPrefs, Delivery, Notification
 from htqweb.fallback import fallback
+from htqweb.http import uuid_or_404
 
 
 def prefs_of(user_id: int) -> ChannelPrefs:
@@ -137,7 +138,8 @@ def history(user_id: int, *, company_slug, page=1, limit=25, status="all",
 
 
 def _own(notification_id: str, user_id: int) -> Notification:
-    row = Notification.objects.filter(pk=notification_id, recipient_id=user_id).first()
+    row = Notification.objects.filter(pk=uuid_or_404(notification_id),
+                                      recipient_id=user_id).first()
     if row is None:
         raise Http404("Notification not found")
     return row

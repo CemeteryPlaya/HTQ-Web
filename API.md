@@ -761,11 +761,15 @@ calls `htqweb.storage` directly (it predates `media_files` as an app). See
 ключ из реестра и ключ его строки — целое или UUID (документы модуля БЗО);
 неподходящий владельцу ключ — 404 `E-FIL-05`, в ответах `owner_id` — строка.
 Права решает владелец своими колбэками («все с правом просмотра объекта»,
-ТЗ §21); типы своих файлов он заводит в справочник своей миграцией.
-**Владельцев в коде пока нет:** по мастер-плану БЗО (D-01) документы договоров
-и заявок живут в `apps.bpp`, и регистрации «заявка»/«договор» сняты;
-подсистема ждёт владельцев модуля (задачи A1.1, B2.2, B3.1). Тесты идут на
-пробных владельцах `apps/files/tests/testapp`.
+ТЗ §21); типы своих файлов он заводит в справочник миграцией.
+**Владельцы — документы модуля БЗО** (`apps/bpp/file_owners.py`):
+`bpp.purchase_request` (документы заявки, тип `request_attachment`) и
+`bpp.advance_report` (подтверждающий документ авансового отчёта, тип
+`advance_report`); договор, счёт и прочие — с этапом 3. Модуль прикладывает
+их и своими ручками (`/api/bpp/v1/requests/{id}/files…`) — через загрузку из
+кода (`apps.files.interface.attach_bytes`/`replace_bytes`/`download_link`),
+тем же путём проверок и журнала, поэтому файл виден и здесь. Тесты
+подсистемы идут на пробных владельцах `apps/files/tests/testapp`.
 
 У тенантного владельца компания — часть ключа файлов (`company_slug`), до
 первой компании — `""`; `tenancy_bootstrap` проставляет её файлам вместе с
@@ -1484,8 +1488,8 @@ schema the platform can run on.
 | `GET notifications/history` (`?page=&limit=&status=all\|unread\|read&target_type=`) | Страница истории + `unread_total` |
 | `POST notifications/<id>/read`, `…/unread`, `POST notifications/read-all` | Прочтение, 204 |
 | `DELETE notifications/<id>/delete` | Удалить своё, 204 |
-| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked`; колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
-| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин) |
+| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked` + `telegram_available` (бот настроен); колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
+| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин); бот не настроен (нет токена, имени или секрета вебхука) — 503 `E-NTF-03` |
 | `POST telegram/webhook` | Вебхук бота, `auth=None`; без верного `X-Telegram-Bot-Api-Secret-Token` — 403 |
 
 ---
@@ -1504,6 +1508,12 @@ schema the platform can run on.
 | `countries`, `currencies`, `uoms`, `article-groups`, `articles` | `GET` (`?active=1` — без архива), `POST` | `PATCH <коллекция>/<id>` |
 | `rates` (курс к KZT на дату) | `GET`, `POST` (ручной ввод ФД, `source=manual`) | — |
 | `vat` (ставка страны на период), `mrp` (МРП с даты) | `GET`, `POST` | — |
+
+Каждая строка списка несёт `can_edit` — вычисляется один раз на запрос
+(`services/editing.can_edit`, поддомен управляющей компании) и проставляется
+всем строкам одним и тем же значением, а не гейтом на каждую (`views.py`,
+`_listing_can_edit`); ответ `PATCH` несёт `can_edit: true` — раз правка
+прошла гейт записи, значит запрос уже с поддомена управляющей компании.
 
 Курсы НБРК грузит Celery-beat `refdata.load_nbrk_rates` (10:30 Asia/Almaty);
 ручной курс на ту же дату загрузка не перезаписывает. Соседи читают значения
@@ -1581,9 +1591,77 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 Одобренные отчёты, покрывшие сумму, закрывают заявку.
 
+**Контрагенты** — ядро модуля, без своего рубильника (ТЗ §18, L-08, D-20,
+задача A2.3). Без согласования; уникальна пара (страна, рег. номер), номер
+хранится без пробелов и дефисов. Казахстан и тип ЮЛ/ИП/ФЛ — БИН/ИИН с
+контрольным разрядом, нерезидент — свободный номер до 30 символов. Узлы:
+чтение — `bpp.counterparties` view; создание — `create` (ФД, БУХ, СН, ПМ);
+правка карточки и счетов — `edit` (ФД, БУХ); блокировка, разблокировка, архив
+и метка — `bpp.counterparties.block` edit (ФД). Записывающие ручки
+идемпотентны, правка сверяет `version` (409 `E-CON-01`); неверный UUID в
+адресе — 404. Карточка несёт `is_verified`, `verified_threshold`,
+`bank_accounts` и `allowed_actions`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET counterparties` (`?q=&country=&status=&sort=&page=&page_size=`) | Реестр L-08 `{items, total, page, page_size}`: поиск по наименованию и номеру, фильтры (повторяемые), `page_size` 25/50/100, по умолчанию 50; тот же адрес с `?format=xlsx` (без пагинации) — выгрузка реестра в xlsx, см. «Экспорт реестров в xlsx» ниже |
+| `POST counterparties` | Создать; неверный номер — 422 `E-CTR-03`, дубль — 422 `E-CTR-02` с `fields[0].existing_id` (и при одновременной вставке), страны нет в справочнике — 422 `E-REF-04` |
+| `GET` / `PATCH counterparties/<id>` | Карточка / правка (`{version, …поля}`); архивного — 409 `E-STATE-01` |
+| `POST counterparties/<id>/block` (`{version, reason}`) | Заблокировать; причина короче 10 — 422 `BR-060` |
+| `POST counterparties/<id>/unblock`, `…/archive` (`{version}`) | Разблокировать / в архив (soft delete) |
+| `POST counterparties/<id>/verified` (`{version, verified: true\|false\|null}`) | Метка «Проверенный» вручную; `null` — вернуть решение порогу (`ModuleSetting` `counterparty_verified_threshold`, по умолчанию 3 удачных документа) |
+| `GET` / `POST counterparties/<id>/accounts` | Банковские счета / добавить (`{iban, bic, bank_name, currency, is_primary}`); IBAN — KZ + 18 знаков, mod 97, БИК — 8 или 11 знаков, иначе 422 `E-CTR-04`; первый счёт — основной |
+| `PATCH counterparties/accounts/<account_id>` | Правка счёта; `is_active: false` — архив |
+
+Договорам и счетам (B, этап 3) — `services/counterparties/lookup.py`:
+`brief(ids)`, `assert_usable(id)` (заблокированный — `E-CTR-01` дословно
+ТЗ §26.1, архивный — свой текст), `needs_confirmation(id)` (окно
+подтверждения у непроверенного), `record_success(id)` (+1 удачный документ).
+
 `GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
-`bpp.purchaserequest`, `bpp.accountablefundsrequest`), читает тот, кто видит
-документ.
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`),
+читает тот, кто видит документ.
+
+`GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
+["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в
+которых он может подать заявку на закупку (группа `supply` → `sn`, `pm` →
+`pm`); правило одно с сервисом заявки (`services/actor.py::Actor`).
+
+**Экспорт реестров в xlsx и печать в PDF** (ТЗ §19, D-32, A2.2, задача 6) —
+`services/core/export.py`/`printing.py`. Экспорт — не отдельная ручка на
+каждый реестр, а общий ответ его ручки реестра: любая `GET`-ручка реестра
+модуля принимает `?format=xlsx` (вместе со своими фильтрами, без пагинации)
+и вместо страницы `{items, …}` отвечает
+`export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
+колонки — `export.Column(key, title, kind)`, `kind` —
+`text|money|decimal|date|datetime`. Подключено у **контрагентов**
+(`GET counterparties?format=xlsx`, задача 6) — бюджет, заявка и план
+закупок ждут своего подключения (задачи B):
+
+- до 10 000 строк — xlsx сразу тем же запросом (`Content-Disposition:
+  attachment`, имя — `filename*`); суммы — числа с форматом `#,##0.00`
+  (в русской локали Excel — «1 250 000,00»), даты — датой, время — в поясе
+  платформы; пустая выборка — только заголовки;
+- больше и до 50 000 — фоном: ручка реестра отвечает
+  `{"id", "status": "queued", "detail"}`, Celery-задача
+  `apps.bpp.tasks_export.build_export` пересобирает выборку функцией
+  `rebuild`, кладёт файл в `apps.media_files` (scope `generic`, приватный) и
+  шлёт заказчику уведомление центра (`target_type="bpp.export"`, ссылка —
+  экран фронта `/bpp/exports/<id>`); отказ сборки — уведомление с причиной;
+- больше 50 000 — 422 `E-EXP-01`, до всякой работы.
+
+| Путь | Метод | Заметки |
+|---|---|---|
+| `GET exports/<id>` | GET | `bpp:read`. Фоновая выгрузка `{id, name, status: queued\|done\|error, row_count, error, created_at, finished_at}`; у готовой — ещё `url` (временная подписанная ссылка на файл) и `expires_at`, и каждая выдача ссылки пишется в журнал модуля (`AuditLog`, `bpp.exportjob`, `file_downloaded` с IP и user-agent — ТЗ §25.2). Только заказчику: чужая, несуществующая и неверный UUID — 404 `E-NOT-FOUND` (не 403: существование чужой выгрузки не подтверждаем); файл пропал из хранилища — тоже 404 |
+
+Печать — `printing.render_html/render_pdf/pdf_response(template, context,
+filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
+наследуется документами модуля (задачи этапа 3): номер, статус, автор,
+дата, таблица (блок `body`, по умолчанию — из контекста `table`), «Лист
+согласования»; место под фирменный бланк — колонтитулы (блоки
+`letterhead_header`/`letterhead_footer`, Q-B31, ожидаются отдельно).
+`Content-Disposition: inline` — PDF открывается в браузере, а не
+скачивается.
 
 ---
 

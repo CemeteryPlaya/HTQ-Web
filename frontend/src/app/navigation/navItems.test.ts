@@ -15,11 +15,11 @@ import {
 
 const FULL: NavAbilities = {
   isEditor: true, isHr: true, hasTasks: true, hasDepartment: true,
-  hasMessenger: true, hasMail: true,
+  hasMessenger: true, hasMail: true, hasBpp: true,
 };
 const PLAIN: NavAbilities = {
   isEditor: false, isHr: false, hasTasks: false, hasDepartment: false,
-  hasMessenger: true, hasMail: true,
+  hasMessenger: true, hasMail: true, hasBpp: false,
 };
 const NO_COMMS: NavAbilities = { ...PLAIN, hasMessenger: false, hasMail: false };
 
@@ -45,6 +45,15 @@ describe('navItems', () => {
     expect(ids).not.toContain('manage-news');  // требует editor
     expect(ids).not.toContain('tasks');        // требует tasks
     expect(ids).not.toContain('files');        // требует отдела
+    expect(ids).not.toContain('bpp');          // требует bpp:read
+  });
+
+  it('«Закупки и оплаты» видны при bpp:read и ведут в раздел /bpp', () => {
+    const bpp = visibleNavItems({ ...PLAIN, hasBpp: true }).find((i) => i.id === 'bpp');
+    expect(bpp?.href).toBe('/bpp');
+    expect(bpp?.labelFallback).toBe('Закупки и оплаты');
+    // Раздел со своим левым меню — в мобильную нижнюю панель не просится.
+    expect(bottomNavItems({ ...PLAIN, hasBpp: true }).map((i) => i.id)).not.toContain('bpp');
   });
 
   it('без доступа к мессенджеру и почте их пунктов нет (иначе клик — 403)', () => {

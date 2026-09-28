@@ -30,6 +30,8 @@ import {
     notificationTargetUrl,
 } from '@/api/tasks';
 import { MessengerToast } from '@/components/MessengerToast';
+import { getMessengerSocket } from '@/features/messenger/api/socket';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { playNotificationSound } from '@/lib/sound/soundService';
 import { useToastHostMounted } from '@/lib/notifications/toastHost';
 import {
@@ -79,6 +81,8 @@ export const NotificationToasts: React.FC = () => {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toastHostMounted = useToastHostMounted();
+    const { activeProfile } = useActiveProfile();
+    const isAuth = Boolean(activeProfile);
 
     // Опрос раз в 30 секунд: именно он приносит уведомления, созданные, пока
     // страница открыта.
@@ -92,6 +96,21 @@ export const NotificationToasts: React.FC = () => {
         mutationFn: markNotificationRead,
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
     });
+
+    // Мгновенный показ: центр уведомлений, записав новое, шлёт «notification»
+    // с `type: 'notification'` в персональную комнату сокета мессенджера — лента
+    // перечитывается сразу, а не при следующем опросе через 30 секунд. Другие
+    // события того же канала (старт конференции) слушает ConferenceNotifier.
+    useEffect(() => {
+        if (!isAuth) return;
+        const socket = getMessengerSocket();
+        const onNotification = (raw: unknown) => {
+            if ((raw as { type?: string })?.type !== 'notification') return;
+            queryClient.invalidateQueries({ queryKey: ['notifications'] });
+        };
+        socket.on('notification', onNotification);
+        return () => { socket.off('notification', onNotification); };
+    }, [isAuth, queryClient]);
 
     useEffect(() => {
         if (notifications.length === 0) return;

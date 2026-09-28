@@ -9,7 +9,7 @@ OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.agreements.terminate", "bpp.invoices.decision", "bpp.invoices.payment",
               "bpp.counterparties.block", "bpp.alternatives.select",
               "bpp.accountable.payment", "bpp.invoices.closing_docs",
-              "project.all")
+              "project.all", "bpp.requests.all", "bpp.plan.reassign")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -58,3 +58,16 @@ def test_article_groups_split_supply_and_pm():
     assert _flags("bpp-sn", "bpp.articles.pm") == set()
     assert "view" in _flags("bpp-pm", "bpp.articles.pm")
     assert _flags("bpp-pm", "bpp.articles.supply") == set()
+
+
+@pytest.mark.django_db
+def test_who_sees_all_requests_and_who_reassigns_plan_items():
+    """Сверка B §7.3 (access/0017): те же роли, что до узлов — «просмотр
+    заявок без создания» и ``edit`` на ``bpp.settings``."""
+    assert [c for c in ROLES if "view" in _flags(c, "bpp.requests.all")] == [
+        "bpp-fd", "bpp-td", "bpp-od", "bpp-gd", "bpp-adm"]
+    assert [c for c in ROLES if "edit" in _flags(c, "bpp.plan.reassign")] == ["bpp-adm"]
+    # Узлы несут ровно свой признак — ничего сверх.
+    for code in ROLES:
+        assert _flags(code, "bpp.requests.all") <= {"view"}, code
+        assert _flags(code, "bpp.plan.reassign") <= {"edit"}, code

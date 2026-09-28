@@ -64,9 +64,8 @@ export const lazyPages = {
   SignoffRouteList: React.lazy(() => import('@/pages/signoff/RouteList')),
   SignoffRouteEditor: React.lazy(() => import('@/pages/signoff/RouteEditor')),
 
-  // Модуль БЗО: документ по прямой ссылке (до каркаса раздела /bpp, A2.1).
-  BppRequest: React.lazy(() => import('@/features/bpp/DocumentPage').then(m => ({ default: m.BppRequestPage }))),
-  BppAccountable: React.lazy(() => import('@/features/bpp/DocumentPage').then(m => ({ default: m.BppAccountablePage }))),
+  // Модуль БЗО: раздел «Закупки и оплаты» (`/bpp/*`) с меню подмодулей.
+  BppLayout: React.lazy(() => import('@/features/bpp/BppLayout')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   ManageHomeSections: React.lazy(() => import('@/pages/ManageHomeSections')),
