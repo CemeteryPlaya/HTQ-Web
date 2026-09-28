@@ -9,8 +9,10 @@
 - закрытая или аннулированная позиция — ``Σ строк счетов``.
 
 К позициям прибавляется подотчёт (B4.1) — суммы заявок на подотчётные
-средства от «На согласовании» и дальше. Договоров и счетов ещё нет: их
-слагаемые позиции приходят в B3.3. Поэтому формула собрана из списков слагаемых
+средства от «На согласовании» и дальше, — и прирост допсоглашений (D-18): у
+них нет своих позиций, поэтому они тоже считаются на уровне статьи.
+Договоры — слагаемое открытой позиции (B3.1), строки счетов — открытой и
+закрытой (B3.2). Формула собрана из списков слагаемых
 (``_OPEN_ITEM_TERMS``, ``_CLOSED_ITEM_TERMS``): добавить слагаемое — одна
 строка в списке, сам агрегат и эталон не меняются.
 
@@ -26,12 +28,17 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.db.models import Case, DecimalField, F, Sum, Value, When
+from django.db.models import Case, DecimalField, F, OuterRef, Subquery, Sum, Value, When
 from django.db.models.functions import Coalesce, Greatest
 
 from apps.bpp.models import (
     AccountableFundsRequest,
     AccountableStatus,
+    Agreement,
+    AgreementItem,
+    AgreementStatus,
+    InvoiceLine,
+    InvoiceStatus,
     ItemStatus,
     PurchaseRequestItem,
     RequestStatus,
@@ -52,11 +59,45 @@ COMMITTING_ACCOUNTABLE_STATUSES = (AccountableStatus.ON_REVIEW,
 
 _MONEY = DecimalField(max_digits=18, decimal_places=2)
 
-#: Слагаемые открытой позиции сверх плана: Σ договоров, Σ счетов (B3.3).
+#: Договоры, позиции которых занимают бюджет: «На согласовании» и «Действует»,
+#: только закрытые — открытый договор бюджет не занимает, его занимают счета
+#: (D-09). Расторгнутый и исполненный отпускают неосвоенное (Q-D02).
+COMMITTING_AGREEMENT_STATUSES = (AgreementStatus.ON_REVIEW, AgreementStatus.ACTIVE)
+
+
+def _agreements_term():
+    """Σ сумм позиций закрытых договоров «На согласовании»/«Действует» по
+    позиции заявки (с допсоглашениями — их позиции тоже здесь)."""
+    rows = (AgreementItem.objects
+            .filter(request_item=OuterRef("pk"), agreement__is_open=False,
+                    agreement__status__in=COMMITTING_AGREEMENT_STATUSES,
+                    amount__isnull=False)
+            .values("request_item").annotate(total=Sum("amount")).values("total"))
+    return Coalesce(Subquery(rows, output_field=_MONEY), Value(ZERO, output_field=_MONEY))
+
+
+#: Счета, строки которых занимают бюджет: от «На рассмотрении ФД», кроме
+#: «Отменён», «Не к оплате» и «Заменён» (CALC-002). Возвращённый на доработку
+#: резерв отпускает, как заявка на доработке (ТЗ §7.7 [Л]).
+COMMITTING_INVOICE_STATUSES = (InvoiceStatus.UNDER_REVIEW, InvoiceStatus.TO_PAY,
+                               InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID,
+                               InvoiceStatus.AWAITING_DOCS, InvoiceStatus.DOCS_PROVIDED,
+                               InvoiceStatus.CLOSED)
+
+
+def _invoices_term():
+    """Σ строк счетов по позиции заявки (B3.2)."""
+    rows = (InvoiceLine.objects
+            .filter(request_item=OuterRef("pk"), invoice__status__in=COMMITTING_INVOICE_STATUSES)
+            .values("request_item").annotate(total=Sum("amount")).values("total"))
+    return Coalesce(Subquery(rows, output_field=_MONEY), Value(ZERO, output_field=_MONEY))
+
+
+#: Слагаемые открытой позиции сверх плана: Σ договоров (B3.1), Σ счетов (B3.2).
 #: Каждое — выражение над строкой ``PurchaseRequestItem``.
-_OPEN_ITEM_TERMS: list = []
-#: Слагаемые закрытой или аннулированной позиции: Σ строк счетов (B3.3).
-_CLOSED_ITEM_TERMS: list = []
+_OPEN_ITEM_TERMS: list = [_agreements_term(), _invoices_term()]
+#: Слагаемые закрытой или аннулированной позиции: Σ строк счетов (B3.2).
+_CLOSED_ITEM_TERMS: list = [_invoices_term()]
 
 
 def _open_expr():
@@ -94,6 +135,18 @@ def _accountable(project_id, article_ids=None, *, exclude_accountable_id=None):
     return rows
 
 
+def _supplements(project_id, article_ids=None):
+    """Допсоглашения закрытых договоров «На согласовании»/«Действует» — их
+    сумма есть прирост к родителю без своих позиций (D-18), поэтому считается
+    на уровне статьи, как подотчёт: лимиты идут на общие суммы договоров."""
+    rows = Agreement.objects.filter(
+        project_id=project_id, parent_agreement__isnull=False, is_open=False,
+        amount__isnull=False, status__in=COMMITTING_AGREEMENT_STATUSES)
+    if article_ids is not None:
+        rows = rows.filter(article_id__in=list(article_ids))
+    return rows
+
+
 def committed_by_article(project_id, article_ids=None, *, exclude_request_id=None,
                          exclude_accountable_id=None) -> dict[str, Decimal]:
     """``{article_id: задействовано}`` по проекту; статьи без позиций — не в ответе.
@@ -114,6 +167,10 @@ def committed_by_article(project_id, article_ids=None, *, exclude_request_id=Non
     for row in accountable:
         key = str(row["article_id"])
         totals[key] = totals.get(key, ZERO) + row["total"]
+    for row in (_supplements(project_id, article_ids)
+                .values("article_id").annotate(total=Sum("amount"))):
+        key = str(row["article_id"])
+        totals[key] = totals.get(key, ZERO) + row["total"]
     return totals
 
 
@@ -126,11 +183,41 @@ def committed_for(project_id, article_id, *, exclude_request_id=None,
 
 # ── эталон для сверки ───────────────────────────────────────────────────
 
+def _agreements_reference(item) -> Decimal:
+    total = ZERO
+    for row in AgreementItem.objects.filter(request_item=item).select_related("agreement"):
+        agreement = row.agreement
+        if (not agreement.is_open and row.amount is not None
+                and agreement.status in COMMITTING_AGREEMENT_STATUSES):
+            total += row.amount
+    return total
+
+
+def _invoices_reference(item, exclude_invoice_id=None) -> Decimal:
+    total = ZERO
+    for row in InvoiceLine.objects.filter(request_item=item).select_related("invoice"):
+        if row.invoice_id == exclude_invoice_id:
+            continue
+        if row.invoice.status in COMMITTING_INVOICE_STATUSES:
+            total += row.amount
+    return total
+
+
+def invoiced_for_item(item, *, exclude_invoice_id=None) -> Decimal:
+    """Σ строк счетов, занимающих бюджет, по позиции — для BR-043 счёта."""
+    return _invoices_reference(item, exclude_invoice_id)
+
+
+def agreements_for_item(item) -> Decimal:
+    """Σ позиций закрытых договоров по позиции — для BR-043 счёта."""
+    return _agreements_reference(item)
+
+
 def _item_reference(item) -> Decimal:
     """Задействовано одной позицией — по тексту CALC-002, без SQL."""
     if item.status in OPEN_ITEM_STATUSES:
-        return max([item.amount])  # + Σ договоров, Σ счетов (B3.3)
-    return ZERO  # Σ счетов (B3.3)
+        return max([item.amount, _agreements_reference(item), _invoices_reference(item)])
+    return _invoices_reference(item)
 
 
 def committed_reference(project_id, article_id) -> Decimal:
@@ -139,4 +226,6 @@ def committed_reference(project_id, article_id) -> Decimal:
         total += _item_reference(item)
     for accountable in _accountable(project_id, [article_id]):
         total += accountable.amount
+    for supplement in _supplements(project_id, [article_id]):
+        total += supplement.amount
     return total

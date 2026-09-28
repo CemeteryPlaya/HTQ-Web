@@ -30,6 +30,7 @@ from apps.bpp.models import (
     RequestStatus,
 )
 from apps.bpp.services.actor import ROLE_GROUP, Actor
+from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
 from apps.bpp.services.core import files as core_files
@@ -461,8 +462,11 @@ def _comment(comment: str, action: str) -> str:
 
 
 def _in_documents(req: PurchaseRequest) -> bool:
-    """Есть ли позиции заявки в договорах или счетах (этап 3, B3.1/B3.2)."""
-    return False
+    """Есть ли позиции заявки в договорах (B3.1) или счетах (B3.2)."""
+    items = list(req.items.all())
+    used = positions.remaining(items)
+    return any(row["qty_in_agreements"] > 0 or row["qty_in_invoices"] > 0
+               for row in used.values())
 
 
 @transaction.atomic

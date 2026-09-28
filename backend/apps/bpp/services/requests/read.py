@@ -13,6 +13,7 @@ from django.db.models import Q
 
 from apps.bpp.models import PurchaseRequest, RequestStatus
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import files as core_files
 from apps.project import interface as projects
@@ -54,13 +55,17 @@ def _budget_figures(req: PurchaseRequest) -> dict | None:
 
 def execution(req: PurchaseRequest) -> list[dict]:
     """Блок 6 «Исполнение» (ТЗ §7.5): по позиции план / в договорах / в счетах /
-    оплачено / остаток. Договоры и счета приходят с этапа 3 (B3.3)."""
+    оплачено / остаток к закупке (CALC-005, CALC-006). Оплаты — со счетами (B3.2)."""
+    items = list(req.items.all())
+    left = positions.remaining(items)
     return [{
         "id": str(item.id), "sys_number": item.sys_number, "name": item.name,
-        "status": item.status, "qty": item.qty, "qty_in_agreements": Decimal("0"),
-        "qty_in_invoices": Decimal("0"), "amount": item.amount,
-        "amount_in_invoices": ZERO, "amount_paid": ZERO, "amount_left": item.amount,
-    } for item in req.items.all()]
+        "status": item.status, "qty": item.qty,
+        "qty_in_agreements": left[str(item.pk)]["qty_in_agreements"],
+        "qty_in_invoices": left[str(item.pk)]["qty_in_invoices"], "amount": item.amount,
+        "amount_in_invoices": left[str(item.pk)]["amount_in_invoices"], "amount_paid": ZERO,
+        "amount_left": left[str(item.pk)]["amount_left"],
+    } for item in items]
 
 
 def card(actor: Actor, req: PurchaseRequest) -> dict:

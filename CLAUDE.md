@@ -121,7 +121,7 @@ cd backend
 ../.venv/Scripts/python.exe manage.py hr_participant --company SLUG   # системная должность «Участник (ОСУ)» в схеме компании; идемпотентно
 ../.venv/Scripts/python.exe manage.py seed_purchase_request_template [--buyer <position_id> --cfo <position_id>]  # шаблон «Заявка на закуп»
 ../.venv/Scripts/python.exe manage.py migrate_workflows_to_signoff [--dry-run]  # старые графы approvals → маршруты signoff
-../.venv/Scripts/python.exe manage.py bpp_configure_routes --company SLUG [--td ID --od ID --gd ID --fd ID] [--dry-run]  # маршрут заявки БЗО «ТД → ОД» с флагами; должности по названию
+../.venv/Scripts/python.exe manage.py bpp_configure_routes --company SLUG [--td ID --od ID --gd ID --fd ID] [--dry-run]  # маршруты БЗО с флагами: заявка «ТД → ОД», договор «ФД → ТД → ОД → ГД», допсоглашение «ФД при росте суммы»; должности по названию
 ../.venv/Scripts/python.exe manage.py retire_purchase_request_template [--slug zayavka-na-zakup] [--dry-run]  # БЗО B6.3: шаблон закупа — «удалён», его заявки удалены (согласования отозваны), справочники целы
 ../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ../.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
