@@ -1539,10 +1539,10 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам |
+| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам; `?format=xlsx` — выгрузка |
 | `POST budgets` | Создать черновик (версия 1); второй бюджет проекта — 422 `E-BUD-03` со ссылкой в `fields[0].existing_id`, дубль статьи — `E-BUD-04` с номером строки |
 | `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`) |
-| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08` |
+| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08`. СН компании и ПМ проекта получают уведомление «Бюджет проекта … утверждён» (ТЗ §16.2 п.1; получатели — `access.holders_of` + участники проекта, только члены компании); утверждённая корректировка — «…лимиты статей обновлены» |
 | `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку с «Задействовано» > 0 удалить нельзя — 422 `E-BUD-09` |
 | `POST budgets/<id>/correction/approve` (`comment` ≥ 10, иначе `BR-060`) | Утвердить: лимит ниже задействованного — 422 `E-BUD-05` с суммой; проверка под блокировкой строк |
 | `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
@@ -1558,7 +1558,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; ТД, ОД, ФД, ГД — все. Колонка `current_holders` («Сейчас у») |
+| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; держатели `bpp.requests.all` (ТД, ОД, ФД, ГД, АДМ) — все. Колонка `current_holders` («Сейчас у»); `?format=xlsx` — выгрузка |
 | `POST requests` | Черновик: номер `ЗЗ-ГГГГ-NNNNNN` сразу; обязателен только проект. Нет утверждённого бюджета — 422 `E-BUD-02`, статья чужой группы — 403 `E-REQ-04` (AC-002), проект не из участий ПМ — 403 `E-REQ-05`, > 200 позиций — 422 `E-REQ-06`, статьи нет в бюджете — 422 `E-BUD-07` |
 | `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
 | `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
@@ -1566,12 +1566,13 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10, иначе `BR-060`) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
 | `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
 | `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET requests/<id>/print` | Печатная форма заявки в PDF (`inline`): реквизиты, позиции, итог и «Лист согласования» — решения последнего процесса, ждущие задачи не печатаются. Чужая заявка — 404 |
 | `GET` / `POST requests/<id>/files` (multipart `file`) | Документы заявки (КП, ТЗ, спецификация — тип `request_attachment`, ТЗ §21): добавляет автор в черновике и на доработке |
 | `POST requests/<id>/files/<file_id>/version` | Новая версия документа — автор, кроме финальных статусов |
 | `GET requests/<id>/files/<file_id>/link` | Ссылка на скачивание; каждая выдача пишется в журнал скачиваний |
-| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only` |
+| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only`; `?format=xlsx` — выгрузка |
 | `POST plan/validate` (`{item_ids, target: contract\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `E-PLN-01`, остаток 0 — `E-PLN-02`, позиции не в плане — 409 `E-PLN-03`; ответ — заготовка мастера F-03 |
-| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.settings` edit) |
+| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.plan.reassign` edit) |
 
 **Подотчётные средства** — подмодуль `bpp_accountable` (задача B4.1, логика
 `contracts`). Источник — статья бюджета проекта; сумма занимает бюджет с
@@ -1635,8 +1636,11 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 `export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
 колонки — `export.Column(key, title, kind)`, `kind` —
 `text|money|decimal|date|datetime`. Подключено у **контрагентов**
-(`GET counterparties?format=xlsx`, задача 6) — бюджет, заявка и план
-закупок ждут своего подключения (задачи B):
+(`GET counterparties?format=xlsx`, задача 6), **бюджетов**, **заявок** и
+**плана закупок** (остаток B, B-3). У реестров с видимостью «свои» права
+заказчика едут в пересборку фоновой выгрузки: `Actor.export_identity()` →
+`{user_id, company, is_superuser}` в `rebuild`, `Actor.for_user(...)` в
+задаче:
 
 - до 10 000 строк — xlsx сразу тем же запросом (`Content-Disposition:
   attachment`, имя — `filename*`); суммы — числа с форматом `#,##0.00`
@@ -1656,7 +1660,8 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 Печать — `printing.render_html/render_pdf/pdf_response(template, context,
 filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
-наследуется документами модуля (задачи этапа 3): номер, статус, автор,
+наследуется документами модуля (заявка — `print/purchase_request.html`,
+остальные — задачи этапа 3): номер, статус, автор,
 дата, таблица (блок `body`, по умолчанию — из контекста `table`), «Лист
 согласования»; место под фирменный бланк — колонтитулы (блоки
 `letterhead_header`/`letterhead_footer`, Q-B31, ожидаются отдельно).

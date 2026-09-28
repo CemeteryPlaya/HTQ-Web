@@ -65,13 +65,13 @@ def _deny(text: str) -> DomainError:
 
 
 def sees_all(actor: Actor) -> bool:
-    """ТД, ОД, ФД, ГД видят все заявки; СН и ПМ — только свои (ТЗ §7.1).
+    """ТД, ОД, ФД, ГД и АДМ видят все заявки; СН и ПМ — только свои (ТЗ §7.1).
 
-    Отличает их право создавать заявки: у ролей директоров на ``bpp.requests``
-    только просмотр (миграция ``access/0014``). Отдельного узла «все заявки»,
-    как ``bpp.plan.all``, в реестре нет — предложение в файле сверки.
+    Узел ``bpp.requests.all`` (``access/0017``) — тот же круг ролей, что
+    раньше выводился из «просмотр без права создавать»; теперь совмещающий
+    СН с ролью директора видит все заявки, а не только свои.
     """
-    return actor.can("bpp.requests", "view") and not actor.can("bpp.requests", "create")
+    return actor.can("bpp.requests.all", "view")
 
 
 def can_view(actor: Actor, req: PurchaseRequest) -> bool:

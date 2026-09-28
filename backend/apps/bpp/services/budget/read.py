@@ -114,9 +114,8 @@ def card(actor: Actor, budget: Budget) -> dict:
     }
 
 
-def registry(actor: Actor, *, status: str | None = None, project_id: str | None = None,
-             page: int = 1, page_size: int = 50) -> dict:
-    """Реестр L-01: бюджеты видимых проектов со своими итогами."""
+def _visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
+    """Выборка реестра L-01 — одна на страницу и выгрузку."""
     rows = Budget.objects.all().order_by("-created_at")
     if status:
         rows = rows.filter(status=status)
@@ -124,9 +123,10 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
         rows = rows.filter(project_id=project_id)
     if not actor.sees_all_projects:
         rows = rows.filter(project_id__in=list(actor.member_project_ids))
-    total = rows.count()
-    page_size = max(1, min(int(page_size or 50), 100))
-    chunk = list(rows.select_related("active_version")[(page - 1) * page_size: page * page_size])
+    return rows
+
+
+def _registry_rows(actor: Actor, chunk: list[Budget]) -> list[dict]:
     briefs = projects.project_brief([str(b.project_id) for b in chunk])
     names = _names([b.active_version.approved_by for b in chunk if b.active_version])
     items = []
@@ -148,7 +148,59 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
             "approved_by_name": names.get(budget.active_version.approved_by)
             if budget.active_version else None,
         })
+    return items
+
+
+def registry(actor: Actor, *, status: str | None = None, project_id: str | None = None,
+             page: int = 1, page_size: int = 50) -> dict:
+    """Реестр L-01: бюджеты видимых проектов со своими итогами."""
+    rows = _visible(actor, status=status, project_id=project_id)
+    total = rows.count()
+    page_size = max(1, min(int(page_size or 50), 100))
+    chunk = list(rows.select_related("active_version")[(page - 1) * page_size: page * page_size])
+    items = _registry_rows(actor, chunk)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+# ── выгрузка реестра в xlsx (ТЗ §19, контракт A: ``export.respond``) ────
+
+#: Путь пересборки для фоновой выгрузки (строка — её везёт брокер Celery).
+EXPORT_REBUILD_PATH = "apps.bpp.services.budget.read.export_rows"
+_EXPORT_CHUNK = 200
+
+
+def export_count(*, user_id: int, company: str | None, is_superuser: bool = False,
+                 filters: dict) -> int:
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    return _visible(actor, **filters).count()
+
+
+def export_rows(*, user_id: int, company: str | None, is_superuser: bool = False,
+                filters: dict):
+    """Строки выгрузки — те же итоги, что на странице реестра: лимит,
+    «Задействовано» и остаток по видимым пользователю строкам (BR-010)."""
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    rows = _visible(actor, **filters).select_related("active_version")
+    chunk: list[Budget] = []
+    for budget in rows.iterator(chunk_size=_EXPORT_CHUNK):
+        chunk.append(budget)
+        if len(chunk) == _EXPORT_CHUNK:
+            yield from _export_chunk(actor, chunk)
+            chunk = []
+    if chunk:
+        yield from _export_chunk(actor, chunk)
+
+
+def _export_chunk(actor: Actor, chunk: list[Budget]):
+    for row in _registry_rows(actor, chunk):
+        yield {
+            "number": row["number"], "project": row["project"]["code"],
+            "project_name": row["project"]["name"],
+            "status": BudgetStatus(row["status"]).label, "version_no": row["version_no"],
+            "currency_code": row["currency_code"], "limit_amount": row["limit_amount"],
+            "committed": row["committed"], "available": row["available"],
+            "approved_at": row["approved_at"], "approved_by": row["approved_by_name"] or "",
+        }
 
 
 def versions(actor: Actor, budget: Budget) -> list[dict]:
