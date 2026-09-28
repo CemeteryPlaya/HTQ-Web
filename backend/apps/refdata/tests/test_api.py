@@ -41,6 +41,18 @@ def test_read_needs_refdata_read(holding):
 
 
 @pytest.mark.django_db
+def test_can_edit_is_true_in_holding_and_false_in_subsidiary(holding, subsidiary):
+    """Ответ ручки несёт ``can_edit`` на каждой строке (задача 9, A2.4):
+    кнопки правки на фронте включаются им, а не отдельным запросом прав."""
+    assign(holding.slug, 7, "refdata", "full")
+    assign(subsidiary.slug, 7, "refdata", "full")
+    in_holding = Client().get(f"{BASE}/currencies", **_auth(holding.slug)).json()
+    assert in_holding and all(row["can_edit"] is True for row in in_holding)
+    in_subsidiary = Client().get(f"{BASE}/currencies", **_auth(subsidiary.slug)).json()
+    assert in_subsidiary and all(row["can_edit"] is False for row in in_subsidiary)
+
+
+@pytest.mark.django_db
 def test_edit_in_holding(holding):
     assign(holding.slug, 7, "refdata", "full")
     response = _post("uoms", {"code": "pack", "short_name": "уп", "name": "Упаковка"},

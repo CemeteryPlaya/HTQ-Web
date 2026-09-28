@@ -223,11 +223,10 @@ def serialize(cp: Counterparty, *, threshold: int | None = None,
     return data
 
 
-def registry(*, q: str | None = None, countries=(), statuses=(), page: int = 1,
-             page_size: int | None = None, sort: str | None = None) -> dict:
-    """Реестр L-08: поиск по наименованию и номеру, фильтры «страна» и
-    «статус», пагинация 25/50/100 (по умолчанию 50), серверная сортировка.
-    Колонки «договоров» и «счетов» появятся с договором и счётом (этап 3)."""
+def _filtered(*, q: str | None = None, countries=(), statuses=()):
+    """Фильтр реестра — общий код страницы экрана (``registry``) и выгрузки
+    (``export_rows``/``export_count``), чтобы файл xlsx не мог разойтись со
+    списком на экране: правило фильтра живёт ровно в одном месте."""
     rows = Counterparty.objects.all()
     if q:
         text = q.strip()
@@ -242,10 +241,22 @@ def registry(*, q: str | None = None, countries=(), statuses=(), page: int = 1,
     statuses = [s for s in statuses if s]
     if statuses:
         rows = rows.filter(status__in=statuses)
+    return rows
+
+
+def _ordered(rows, sort: str | None):
     sort = sort or "name"
     field = sort[1:] if sort.startswith("-") else sort
     order = sort if field in SORTS else "name"
-    rows = rows.order_by(order, "pk")
+    return rows.order_by(order, "pk")
+
+
+def registry(*, q: str | None = None, countries=(), statuses=(), page: int = 1,
+             page_size: int | None = None, sort: str | None = None) -> dict:
+    """Реестр L-08: поиск по наименованию и номеру, фильтры «страна» и
+    «статус», пагинация 25/50/100 (по умолчанию 50), серверная сортировка.
+    Колонки «договоров» и «счетов» появятся с договором и счётом (этап 3)."""
+    rows = _ordered(_filtered(q=q, countries=countries, statuses=statuses), sort)
     page_size = page_size if page_size in PAGE_SIZES else DEFAULT_PAGE_SIZE
     page = max(1, page or 1)
     total = rows.count()
@@ -253,6 +264,38 @@ def registry(*, q: str | None = None, countries=(), statuses=(), page: int = 1,
     chunk = rows[(page - 1) * page_size: page * page_size]
     return {"items": [serialize(cp, threshold=threshold, with_accounts=False) for cp in chunk],
             "total": total, "page": page, "page_size": page_size}
+
+
+# ── экспорт в xlsx (ТЗ §19, D-32) ──────────────────────────────────────
+
+def export_count(*, q: str | None = None, countries=(), statuses=(), sort: str | None = None
+                 ) -> int:
+    """``count`` для ``export.respond`` — ровно та же выборка, что уйдёт в
+    файл (``sort`` в счёт не входит, оставлен для единой сигнатуры с
+    ``export_rows``: обе зовутся одними и теми же ``**filters``)."""
+    return _filtered(q=q, countries=countries, statuses=statuses).count()
+
+
+def export_rows(*, q: str | None = None, countries=(), statuses=(), sort: str | None = None):
+    """Строки выгрузки — полная (без пагинации) выборка реестра. Это и есть
+    функция пересборки ``rebuild`` для фоновой ветки ``export.respond``:
+    путь до неё передаёт ручка реестра, а параметры — ровно фильтры формы.
+
+    Видимость контрагентов одна на всех держателей ``bpp.counterparties:view``
+    — реестр никого не сужает по пользователю (в отличие, например, от
+    «Моих заявок»), поэтому ``user_id`` заказчика в фильтрах не нужен."""
+    rows = _ordered(_filtered(q=q, countries=countries, statuses=statuses), sort)
+    threshold = lookup.verified_threshold()
+    for cp in rows.iterator():
+        yield {
+            "name": cp.name,
+            "reg_number": cp.reg_number,
+            "country_code": cp.country_code,
+            "status": cp.get_status_display(),
+            "is_verified": "Да" if lookup.is_verified(cp, threshold) else "Нет",
+            "successful_documents": cp.successful_documents,
+            "created_at": cp.created_at,
+        }
 
 
 # ── создание и правка ──────────────────────────────────────────────────

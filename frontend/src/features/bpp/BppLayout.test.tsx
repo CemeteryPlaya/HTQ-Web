@@ -150,8 +150,13 @@ describe('BppLayout — подмодули пакета', () => {
   });
 
   it('у переходников заявки и подотчёта нет пунктов меню (реестры — B2.5)', () => {
+    // Не точный список пунктов: он растёт с каждым подмодулем (справочники,
+    // проекты, контрагенты), а проверяется здесь только отсутствие пунктов
+    // у двух переходников.
     const keys = bppModules.filter((m) => m.menu).map((m) => m.key);
-    expect(keys).toEqual(['approvals']);
+    expect(keys).toContain('approvals');
+    expect(keys).not.toContain('requests');
+    expect(keys).not.toContain('accountable');
     expect(bppModules.map((m) => m.key)).toEqual(
       expect.arrayContaining(['approvals', 'requests', 'accountable']),
     );

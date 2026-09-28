@@ -20,13 +20,27 @@ from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error, uuid_or_404
 
 from .schemas import counterparties as schemas
-from .services.core import audit, permissions
+from .services.core import audit, export, permissions
 from .services.counterparties import lookup, service
 from .services.params import int_param
 
 NODE = "bpp.counterparties"
 BLOCK_NODE = "bpp.counterparties.block"
 AUDIT_TYPE = "bpp.counterparty"
+
+#: Путь пересборки для фоновой выгрузки — строка, а не ссылка на функцию:
+#: её везёт брокер Celery (``export.respond``, ``rebuild``).
+EXPORT_REBUILD_PATH = "apps.bpp.services.counterparties.service.export_rows"
+
+EXPORT_COLUMNS = (
+    export.Column("name", "Наименование"),
+    export.Column("reg_number", "БИН/ИИН"),
+    export.Column("country_code", "Страна"),
+    export.Column("status", "Статус"),
+    export.Column("is_verified", "Проверенный"),
+    export.Column("successful_documents", "Удачных документов"),
+    export.Column("created_at", "Дата создания", kind="date"),
+)
 
 
 def _need(request, node: str, flag: str, action: str) -> None:
@@ -80,12 +94,24 @@ audit.register_history_access(
 def counterparty_list(request):
     _need(request, NODE, "view", "просмотр контрагентов")
     params = request.GET
+    q = params.get("q") or params.get("search") or None
+    countries = params.getlist("country")
+    statuses = params.getlist("status")
+    sort = params.get("sort") or None
+    if params.get("format") == "xlsx":
+        # Выгрузка — та же фильтрованная выборка, что и страница реестра,
+        # только без пагинации (``services/counterparties/service.py``);
+        # ``filters`` уходит и на сборку строк сразу, и как ``rebuild_kwargs``
+        # фоновой задачи, если выборка больше SYNC_LIMIT.
+        filters = {"q": q, "countries": countries, "statuses": statuses, "sort": sort}
+        return export.respond(
+            request, name="Контрагенты", columns=EXPORT_COLUMNS,
+            rows=service.export_rows(**filters), count=service.export_count(**filters),
+            rebuild=(EXPORT_REBUILD_PATH, filters))
     return service.registry(
-        q=params.get("q") or params.get("search") or None,
-        countries=params.getlist("country"), statuses=params.getlist("status"),
+        q=q, countries=countries, statuses=statuses,
         page=int_param(params, "page", 1, minimum=1),
-        page_size=int_param(params, "page_size", service.DEFAULT_PAGE_SIZE),
-        sort=params.get("sort") or None)
+        page_size=int_param(params, "page_size", service.DEFAULT_PAGE_SIZE), sort=sort)
 
 
 @api_view(methods=("POST",), module="bpp", level="write", body=schemas.CounterpartyCreate,

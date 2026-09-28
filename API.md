@@ -1509,6 +1509,12 @@ schema the platform can run on.
 | `rates` (курс к KZT на дату) | `GET`, `POST` (ручной ввод ФД, `source=manual`) | — |
 | `vat` (ставка страны на период), `mrp` (МРП с даты) | `GET`, `POST` | — |
 
+Каждая строка списка несёт `can_edit` — вычисляется один раз на запрос
+(`services/editing.can_edit`, поддомен управляющей компании) и проставляется
+всем строкам одним и тем же значением, а не гейтом на каждую (`views.py`,
+`_listing_can_edit`); ответ `PATCH` несёт `can_edit: true` — раз правка
+прошла гейт записи, значит запрос уже с поддомена управляющей компании.
+
 Курсы НБРК грузит Celery-beat `refdata.load_nbrk_rates` (10:30 Asia/Almaty);
 ручной курс на ту же дату загрузка не перезаписывает. Соседи читают значения
 только через `apps.refdata.interface`: `vat_rate`, `mrp`, `contract_threshold`
@@ -1598,7 +1604,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET counterparties` (`?q=&country=&status=&sort=&page=&page_size=`) | Реестр L-08 `{items, total, page, page_size}`: поиск по наименованию и номеру, фильтры (повторяемые), `page_size` 25/50/100, по умолчанию 50 |
+| `GET counterparties` (`?q=&country=&status=&sort=&page=&page_size=`) | Реестр L-08 `{items, total, page, page_size}`: поиск по наименованию и номеру, фильтры (повторяемые), `page_size` 25/50/100, по умолчанию 50; тот же адрес с `?format=xlsx` (без пагинации) — выгрузка реестра в xlsx, см. «Экспорт реестров в xlsx» ниже |
 | `POST counterparties` | Создать; неверный номер — 422 `E-CTR-03`, дубль — 422 `E-CTR-02` с `fields[0].existing_id` (и при одновременной вставке), страны нет в справочнике — 422 `E-REF-04` |
 | `GET` / `PATCH counterparties/<id>` | Карточка / правка (`{version, …поля}`); архивного — 409 `E-STATE-01` |
 | `POST counterparties/<id>/block` (`{version, reason}`) | Заблокировать; причина короче 10 — 422 `BR-060` |
@@ -1623,10 +1629,14 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 **Экспорт реестров в xlsx и печать в PDF** (ТЗ §19, D-32, A2.2, задача 6) —
 `services/core/export.py`/`printing.py`. Экспорт — не отдельная ручка на
-каждый реестр, а общий ответ его ручки реестра
-(`export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
+каждый реестр, а общий ответ его ручки реестра: любая `GET`-ручка реестра
+модуля принимает `?format=xlsx` (вместе со своими фильтрами, без пагинации)
+и вместо страницы `{items, …}` отвечает
+`export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
 колонки — `export.Column(key, title, kind)`, `kind` —
-`text|money|decimal|date|datetime`):
+`text|money|decimal|date|datetime`. Подключено у **контрагентов**
+(`GET counterparties?format=xlsx`, задача 6) — бюджет, заявка и план
+закупок ждут своего подключения (задачи B):
 
 - до 10 000 строк — xlsx сразу тем же запросом (`Content-Disposition:
   attachment`, имя — `filename*`); суммы — числа с форматом `#,##0.00`
