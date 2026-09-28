@@ -6,10 +6,11 @@
 ``/api/files/v1/<владелец>/<id>/files/`` и журналируются там же. Сервисы
 модуля прикладывают их через обёртку ``services/core/files.py``.
 
-Правила ТЗ §21 — здесь (``FileTypeSpec``: сколько документов, «1 действующий
-+ версии», обязательность); форматы и размеры — в справочнике «Типы
-файлов» (миграция ``files/0003_bpp_file_types``). Типы договора, счёта и
-прочих документов §21 регистрируются вместе с их документами (этап 3):
+Правила ТЗ §21 — у владельца (``FileTypeSpec``: сколько документов, «1
+действующий + версии», обязательность); форматы и размеры — в справочнике
+«Типы файлов» (миграции ``files/0003_bpp_file_types`` — заявка и подотчёт,
+``files/0004_bpp_stage3_file_types`` — договор, счёт и выписка). Все типы
+§21, кроме КП альтернативы (придёт с A5.1), в справочнике уже есть:
 
     ============================  ====================  ======  =====
     тип                            форматы               МБ      шт.
@@ -24,6 +25,20 @@
     alternative_offer — КП         PDF DOCX XLSX JPG PNG 20      5
     ============================  ====================  ======  =====
 
+**Владельцы подмодулей подключаются сами** (план этапа 3 A, решение
+D-S3-1). Документ подмодуля объявляет себя владельцем в
+``services/<подмодуль>/file_owner.py`` функцией ``register() -> None``,
+которая зовёт ``apps.files.interface.register_owner(...)`` и
+``services.core.files.register_owner_type(<Модель>, <владелец>)`` (иначе
+обёртка ``services/core/files.py`` не найдёт папку документа). ``register()``
+ниже находит такие модули сам — по алфавиту подмодуля, так же как
+``models/*.py`` и ``urls_*.py``, — и строку сюда под новый документ не
+пишут: у двух исполнителей нет общей строки конфликта. Модуль без
+``register()`` роняет запуск ``ImproperlyConfigured``. Образец владельца —
+заявка ниже; ``actor_from_token`` и ``history_on_event`` — общие куски для
+колбэков подмодулей. Договор (``bpp.agreement``) и счёт (``bpp.invoice``)
+пишет B, загрузку выписки (``bpp.bank_import``) — A.
+
 Колбэки владельца — поверх правил самих документов (``services/requests``,
 ``services/accountable``), без второй копии: кто видит документ — тот видит
 и его файлы (ТЗ §21). Менять файлы через панель может автор и только пока
@@ -37,7 +52,11 @@
 
 from __future__ import annotations
 
+import importlib
+import os
 from types import SimpleNamespace
+
+from django.core.exceptions import ImproperlyConfigured
 
 from apps.bpp.models import (
     AccountableStatus,
@@ -58,6 +77,11 @@ from htqweb.tenancy import current_company_or_none
 REQUEST_OWNER = "bpp.purchase_request"
 REPORT_OWNER = "bpp.advance_report"
 
+#: Пакет подмодулей, чьи ``file_owner.py`` подключаются сами (D-S3-1).
+#: Читается при каждом вызове: тесты подставляют пробный пакет.
+SERVICES_PACKAGE = "apps.bpp.services"
+_FILE_OWNER = "file_owner"
+
 #: Событие файловой подсистемы → запись в «Историю изменений» документа.
 #: Скачивания туда не пишутся: их журнал — ``FileEvent`` подсистемы, а в
 #: истории документа они утопили бы правки.
@@ -68,7 +92,7 @@ _AUDIT_ACTIONS = {
 }
 
 
-def _actor(token) -> Actor:
+def actor_from_token(token) -> Actor:
     """``Actor`` из токена колбэка: права модуля считаются по компании
     текущего контекста, как у ручки модуля."""
     company = current_company_or_none()
@@ -76,7 +100,9 @@ def _actor(token) -> Actor:
                                  company={"slug": company} if company else None))
 
 
-def _on_event(model):
+def history_on_event(model):
+    """Колбэк ``on_event`` владельца: файловые события документа ``model``
+    — в его «Историю изменений» (``services/core/audit.py``)."""
     def record(owner_id, event: str, actor_id: int | None, payload: dict) -> None:
         action = _AUDIT_ACTIONS.get(event)
         if action is None:
@@ -103,7 +129,7 @@ def _request(owner_id) -> PurchaseRequest | None:
 
 def _request_can_view(owner_id, token) -> bool:
     req = _request(owner_id)
-    return req is not None and request_service.can_view(_actor(token), req)
+    return req is not None and request_service.can_view(actor_from_token(token), req)
 
 
 def _request_can_modify(owner_id, token) -> None:
@@ -142,7 +168,7 @@ def _report(owner_id) -> AdvanceReport | None:
 
 def _report_can_view(owner_id, token) -> bool:
     try:
-        accountable_service.get_visible_report(_actor(token), owner_id)
+        accountable_service.get_visible_report(actor_from_token(token), owner_id)
     except DomainError:
         return False
     return True
@@ -184,7 +210,7 @@ def register() -> None:
         quotas={"documents": 20},
         can_view=_request_can_view, can_modify=_request_can_modify,
         was_sent=_request_was_sent, lock=_request_lock,
-        on_event=_on_event(PurchaseRequest),
+        on_event=history_on_event(PurchaseRequest),
     )
     files.register_owner(
         REPORT_OWNER, label="Авансовый отчёт", service="bpp_accountable", tenant=True,
@@ -194,7 +220,53 @@ def register() -> None:
                                        required=True),),
         can_view=_report_can_view, can_modify=_report_can_modify,
         was_sent=_report_was_sent, lock=_report_lock,
-        on_event=_on_event(AdvanceReport),
+        on_event=history_on_event(AdvanceReport),
     )
     core_files.register_owner_type(PurchaseRequest, REQUEST_OWNER)
     core_files.register_owner_type(AdvanceReport, REPORT_OWNER)
+    # Документы подмодулей (договор, счёт, выписка) — их ``file_owner.py``.
+    _register_discovered()
+
+
+# ── автоподключение ``services/<подмодуль>/file_owner.py`` ──────────────
+
+def _file_owner_modules() -> list[str]:
+    """Полные имена модулей ``<пакет>.<подмодуль>.file_owner`` — по алфавиту
+    подмодуля.
+
+    Подмодуль — неприватная папка ``services/`` с файлом ``file_owner.py``.
+    Ищется по файлам, а не импортом: подмодуль без владельца файлов при
+    запуске не импортируется вовсе. Папка с ``file_owner.py``, но без
+    ``__init__.py`` — ошибка конфигурации, а не пропуск: ``pkgutil`` такую
+    папку пакетом не считает, и владелец молча не подключился бы (файлы
+    документа — 404 на бою), а подключать её как namespace-пакет — неявная
+    магия, которую легко потерять следующей правкой.
+    """
+    package = importlib.import_module(SERVICES_PACKAGE)
+    folders: dict[str, str] = {}
+    for root in package.__path__:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if entry.is_dir() and not entry.name.startswith("_"):
+                    folders.setdefault(entry.name, entry.path)
+    found: list[str] = []
+    for sub in sorted(folders):
+        folder = folders[sub]
+        if not os.path.isfile(os.path.join(folder, f"{_FILE_OWNER}.py")):
+            continue
+        if not os.path.isfile(os.path.join(folder, "__init__.py")):
+            raise ImproperlyConfigured(
+                f"{package.__name__}.{sub}: нет __init__.py — владелец файлов "
+                f"{_FILE_OWNER}.py не подключится (apps/bpp/file_owners.py)")
+        found.append(f"{package.__name__}.{sub}.{_FILE_OWNER}")
+    return found
+
+
+def _register_discovered() -> None:
+    for name in _file_owner_modules():
+        hook = getattr(importlib.import_module(name), "register", None)
+        if not callable(hook):
+            raise ImproperlyConfigured(
+                f"{name}: модуль владельца файлов подмодуля БЗО должен объявить "
+                f"функцию register() -> None (apps/bpp/file_owners.py)")
+        hook()

@@ -120,7 +120,7 @@ def probe(monkeypatch, db):
         can_view=lambda *a: True, can_modify=lambda *a: None,
         was_sent=lambda *a: False, lock=_probe_lock,
         # «История изменений» — тем же колбэком, что у настоящих документов.
-        on_event=file_owners._on_event(_Owner))
+        on_event=file_owners.history_on_event(_Owner))
     monkeypatch.setitem(files._OWNER_TYPES, PROBE, PROBE)
     _seed_probe_types()
     yield

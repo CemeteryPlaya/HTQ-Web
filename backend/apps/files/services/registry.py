@@ -12,9 +12,34 @@
 ``ready()`` выполняется до того, как БД доступна, а выключенная подсистема
 не должна ронять запуск платформы.
 
+**Права по типу файла** (ТЗ §21: счёт на оплату видят автор, ФД, БУХ, ТД,
+ОД, ГД, а АВР и накладную — только автор, ФД и БУХ; закрывающие документы
+прикладываются и после оплаты, когда файл счёта уже закрыт). Колбэки
+``can_view``/``can_modify`` отвечают про объект целиком и тип файла не
+различают, поэтому у владельца есть два необязательных уточнения:
+
+* ``can_view_type(owner_id, token, file_type) -> bool`` — видит ли человек
+  документы этого типа. ``False``: документов типа нет в папке и в списке
+  типов, ссылка на их версию, новая версия и удаление — 404, как у
+  несуществующего документа (существование не раскрываем);
+* ``can_modify_type(owner_id, token, file_type) -> bool`` — может ли он
+  добавлять, заменять и удалять документы этого типа. Проверяется ПОСЛЕ
+  ``can_modify`` (тот остаётся ответом «может ли человек менять в папке хоть
+  что-то сейчас» — по нему идёт ранний отказ до разбора multipart), поэтому
+  владелец с правом на поздние типы делает ``can_modify`` разрешающим, а
+  узкое правило — здесь. ``False`` — 403 ``E-ACC-01`` с общим текстом;
+  своё объяснение — поднять ``FilesForbidden`` (403) или ``FilesLocked``
+  (409), как в ``can_modify``. Любое ложное значение, включая ``None``, —
+  отказ: колбэк обязан вернуть ``True``.
+
+Без них (``None``, умолчание) — как раньше: тип файла на доступ не влияет.
+Загрузка из кода (``attach_bytes``/``replace_bytes``) их не спрашивает —
+права проверил сам владелец.
+
 **Политика ошибок колбэков.** ``can_view``/``can_modify``/``was_sent``/
-``lock`` решают доступ и судьбу байтов, поэтому их исключения НЕ глушатся:
-упавший колбэк — это 500, а не молча открытый или молча закрытый доступ.
+``lock`` (и уточнения по типу) решают доступ и судьбу байтов, поэтому их
+исключения НЕ глушатся: упавший колбэк — это 500, а не молча открытый или
+молча закрытый доступ.
 """
 
 from __future__ import annotations
@@ -104,6 +129,10 @@ class OwnerEntry:
     # Модель владельца — только ради типа её ключа (``native_id``). Без неё
     # ключ целый: так устроены все владельцы, заведённые до модуля БЗО.
     model: type | None = None
+    # (owner_id, token, file_type) -> bool. Уточнения по типу файла — см.
+    # докстринг модуля; None — тип на доступ не влияет.
+    can_view_type: Callable | None = None
+    can_modify_type: Callable | None = None
     _by_code: dict = field(default_factory=dict, compare=False, repr=False)
 
     def spec(self, code: str) -> FileTypeSpec | None:
@@ -137,12 +166,16 @@ def register_owner(owner_type: str, *, label: str, service: str, tenant: bool,
                    can_view: Callable, can_modify: Callable,
                    was_sent: Callable, lock: Callable,
                    on_event: Callable | None = None,
-                   model: type | None = None) -> OwnerEntry:
+                   model: type | None = None,
+                   can_view_type: Callable | None = None,
+                   can_modify_type: Callable | None = None) -> OwnerEntry:
     """Зарегистрировать тип владельца. Повторная регистрация перезаписывает:
     ``ready()`` может выполниться дважды.
 
     ``model`` нужна владельцу с НЕцелым ключом (UUID у документов модуля
     БЗО): по ней подсистема приводит ключ к типу модели. Без неё ключ целый.
+    ``can_view_type``/``can_modify_type`` — права по типу файла (см.
+    докстринг модуля), необязательны.
     """
     if not _OWNER_TYPE_RE.fullmatch(owner_type):
         raise ValueError(f"owner_type должен иметь вид '<аппка>.<модель>': {owner_type!r}")
@@ -168,7 +201,8 @@ def register_owner(owner_type: str, *, label: str, service: str, tenant: bool,
         owner_type=owner_type, label=label, service=service, tenant=tenant,
         folder=folder, file_types=tuple(file_types), quotas=quotas,
         can_view=can_view, can_modify=can_modify, was_sent=was_sent,
-        lock=lock, on_event=on_event, model=model, _by_code=by_code,
+        lock=lock, on_event=on_event, model=model,
+        can_view_type=can_view_type, can_modify_type=can_modify_type, _by_code=by_code,
     )
     _OWNERS[owner_type] = entry
     return entry

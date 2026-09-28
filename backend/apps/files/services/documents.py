@@ -91,6 +91,12 @@ EXT_MIME = {
     # Счёт-фактура (мастер-план БЗО, D-31 / ответ Q-C28): xml принимается, а
     # отдаётся только вложением — в список inline media он не входит.
     ".xml": "application/xml",
+    # Выписка банка (ТЗ §21; план этапа 3 БЗО A, задача 1): 1С —
+    # текстовый 1CClientBankExchange, остальные банки — CSV. Браузер на
+    # Windows шлёт CSV как ``application/vnd.ms-excel`` — тип по-прежнему
+    # из расширения. Отдаются вложением, как xml.
+    ".txt": "text/plain",
+    ".csv": "text/csv",
 }
 _EXT_LABEL = {".jpeg": "JPG"}
 
@@ -222,6 +228,50 @@ def _modify_block(ref: OwnerRef, token) -> FilesError | None:
     return None
 
 
+# ── права по типу файла (``can_view_type``/``can_modify_type``) ─────────
+#
+# Необязательные уточнения владельца (см. докстринг ``registry``). Без них
+# тип файла на доступ не влияет. Документ невидимого типа для вызывающего не
+# существует: его нет в папке, а ссылка, новая версия и удаление отвечают
+# 404 — тем же текстом, что у удалённого документа.
+
+DOCUMENT_NOT_FOUND = "Документ не найден — возможно, его удалили. Обновите страницу."
+
+
+def type_visible(ref: OwnerRef, token, file_type: str) -> bool:
+    """Видит ли вызывающий документы типа ``file_type``."""
+    hook = ref.entry.can_view_type
+    return hook is None or bool(hook(ref.owner_id, token, file_type))
+
+
+def assert_can_modify_type(ref: OwnerRef, token, file_type: str) -> None:
+    """Может ли вызывающий добавлять, заменять и удалять документы типа
+    ``file_type`` — поверх ``assert_can_modify`` (объект целиком)."""
+    hook = ref.entry.can_modify_type
+    if hook is None:
+        return
+    try:
+        allowed = hook(ref.owner_id, token, file_type)
+    except FilesForbidden as exc:
+        raise FilesError(E_ACCESS, 403, str(exc)) from exc
+    except FilesLocked as exc:
+        raise FilesError(E_LOCKED, 409, str(exc)) from exc
+    if not allowed:
+        name = FileType.objects.filter(pk=file_type).values_list("name", flat=True).first()
+        raise FilesError(
+            E_ACCESS, 403,
+            f"Документы «{name or file_type}» вы менять не можете. Если это ошибка, "
+            f"обратитесь к администратору.")
+
+
+def _type_modify_block(ref: OwnerRef, token, file_type: str) -> FilesError | None:
+    try:
+        assert_can_modify_type(ref, token, file_type)
+    except FilesError as exc:
+        return exc
+    return None
+
+
 def _file_types(entry: OwnerEntry) -> dict[str, FileType]:
     codes = [spec.code for spec in entry.file_types]
     rows = {row.code: row for row in FileType.objects.filter(code__in=codes)}
@@ -345,9 +395,19 @@ def folder(owner_type: str, owner_id: Any, token) -> dict:
     for row in rows:
         grouped.setdefault(row.document_id, []).append(row)
 
+    codes = {row.file_type_id for row in rows} | {spec.code for spec in entry.file_types}
+    visible = {code: type_visible(ref, token, code) for code in codes}
+    # Квоты — по ВСЕМ действующим документам, включая невидимые вызывающему:
+    # предел сервер считает по ним же, и подсказка «можно добавить» не
+    # должна обещать то, что загрузка отвергнет.
+    live = {document_id: versions[-1].file_type_id for document_id, versions in grouped.items()
+            if versions[-1].deleted_at is None}
+
     documents = []
     for document_id, versions in grouped.items():
         current = versions[-1]
+        if not visible[current.file_type_id]:
+            continue
         file_type = types.get(current.file_type_id)
         documents.append({
             "document_id": str(document_id),
@@ -368,12 +428,23 @@ def folder(owner_type: str, owner_id: Any, token) -> dict:
     # только в черновике…»): это подсказка автору. Отказ по правам читателю
     # (согласующему, наблюдателю) объяснять незачем — он ничего не пытался.
     reason = block.message if block is not None and block.code == E_LOCKED else None
-    live = {uuid.UUID(d["document_id"]): d["file_type"]
-            for d in documents if d["deleted_at"] is None}
     types_out = []
     for spec in entry.file_types:
+        if not visible[spec.code]:
+            continue
         row = types[spec.code]
-        blocked = None if not can_modify else _quota_error(ref, spec, live, types)
+        if not can_modify:
+            blocked, why = None, reason
+        else:
+            # Сначала — право на тип (своё объяснение — только если дело в
+            # состоянии, как и для объекта целиком), затем — квота.
+            type_block = _type_modify_block(ref, token, spec.code)
+            if type_block is not None:
+                blocked = type_block
+                why = type_block.message if type_block.code == E_LOCKED else None
+            else:
+                blocked = _quota_error(ref, spec, live, types)
+                why = blocked.message if blocked else None
         types_out.append({
             "code": spec.code,
             "name": row.name,
@@ -383,7 +454,7 @@ def folder(owner_type: str, owner_id: Any, token) -> dict:
             "required": spec.required,
             "quota_group": spec.quota_group,
             "can_add": can_modify and blocked is None,
-            "reason": reason if not can_modify else (blocked.message if blocked else None),
+            "reason": why,
         })
     quotas = []
     for group, limit in entry.quotas.items():
@@ -416,7 +487,7 @@ def link(owner_type: str, owner_id: Any, document_id, file_id: int, token,
     """
     ref = resolve(owner_type, owner_id, token)
     row = _owner_qs(ref).filter(document_id=document_id, pk=file_id).first()
-    if row is None:
+    if row is None or not type_visible(ref, token, row.file_type_id):
         raise not_found()
     return _issue_link(ref, row, token.user_id, audit)
 
@@ -437,10 +508,14 @@ def _issue_link(ref: OwnerRef, row: FileObject, actor_id: int | None,
 
 # ── запись ──────────────────────────────────────────────────────────────
 
-def _current_or_404(ref: OwnerRef, document_id) -> FileObject:
+def _current_or_404(ref: OwnerRef, document_id, token=None) -> FileObject:
+    """Действующая версия документа. С ``token`` — ещё и видимая ему
+    (``can_view_type``); без него — загрузка из кода, права проверил владелец."""
     current = _owner_qs(ref).filter(document_id=document_id).order_by("-version_no").first()
     if current is None or current.deleted_at is not None:
-        raise not_found("Документ не найден — возможно, его удалили. Обновите страницу.")
+        raise not_found(DOCUMENT_NOT_FOUND)
+    if token is not None and not type_visible(ref, token, current.file_type_id):
+        raise not_found(DOCUMENT_NOT_FOUND)
     return current
 
 
@@ -496,7 +571,8 @@ def precheck(owner_type: str, owner_id: Any, token, *, document_id=None) -> Owne
     ref = resolve(owner_type, owner_id, token)
     assert_can_modify(ref, token)
     if document_id is not None:
-        _current_or_404(ref, document_id)
+        current = _current_or_404(ref, document_id, token)
+        assert_can_modify_type(ref, token, current.file_type_id)
     return ref
 
 
@@ -681,13 +757,17 @@ def _upload(ref: OwnerRef, token, actor_id: int, *, upload, file_type: str | Non
                 f"повторите загрузку.", field="file_type")
     else:
         base_id = _base_id(base_file_id)
-        current = _current_or_404(ref, document_id)
+        current = _current_or_404(ref, document_id, token)
         _assert_base_is_current(current, base_id)
         spec = ref.entry.spec(current.file_type_id)
         if spec is None:
             raise ImproperlyConfigured(
                 f"Тип {current.file_type_id!r} больше не объявлен владельцем "
                 f"{ref.entry.owner_type!r}")
+    if token is not None:
+        # Тип нового документа известен только после разбора тела запроса —
+        # ранний ``precheck`` его не видел.
+        assert_can_modify_type(ref, token, spec.code)
     ftype = types[spec.code]
 
     name = os.path.basename((upload.name or "").replace("\\", "/")) or "file"
@@ -752,6 +832,7 @@ def _link(ref: OwnerRef, token, actor_id: int, *, stored: dict, name: str,
     # кода (``token is None``) владелец разрешил сам — под своей блокировкой.
     if token is not None:
         assert_can_modify(ref, token)
+        assert_can_modify_type(ref, token, spec.code)
 
     current = None
     if document_id is None:
@@ -818,8 +899,9 @@ def delete(owner_type: str, owner_id: Any, document_id, token,
         ref.entry.lock(ref.owner_id)
         assert_can_modify(ref, token)
         rows = list(_owner_qs(ref).filter(document_id=document_id).order_by("version_no"))
-        if not rows:
+        if not rows or not type_visible(ref, token, rows[-1].file_type_id):
             raise not_found()
+        assert_can_modify_type(ref, token, rows[-1].file_type_id)
         live = [row for row in rows if row.deleted_at is None]
         if not live:
             return  # уже удалён после отправки — повтор ничего не меняет

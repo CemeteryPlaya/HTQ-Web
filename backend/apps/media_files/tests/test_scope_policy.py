@@ -41,10 +41,11 @@ def test_signoff_doc_policy():
 
 def test_file_object_policy():
     """Документы объектов ТЗ §21 (``apps.files``): потолок форматов и размера
-    — PDF/DOCX/XLSX/JPG/PNG и xml счёт-фактуры (мастер-план БЗО, D-31) до
-    20 МБ, приватные, ключ по папке владельца, картинки без перекодирования
-    (SHA-256 должен описывать хранимые байты), отдаются только по ссылке
-    владельца (``owner_gated``)."""
+    — PDF/DOCX/XLSX/JPG/PNG, xml счёт-фактуры (мастер-план БЗО, D-31) и
+    TXT/CSV выписки банка (план этапа 3 A, задача 1) до 20 МБ, приватные,
+    ключ по папке владельца, картинки без перекодирования (SHA-256 должен
+    описывать хранимые байты), отдаются только по ссылке владельца
+    (``owner_gated``)."""
     p = get_policy("file_object")
     assert p.public is False
     assert p.max_mb == 20
@@ -55,6 +56,8 @@ def test_file_object_policy():
         "image/jpeg",
         "image/png",
         "application/xml",
+        "text/plain",
+        "text/csv",
     }
     assert p.variants == ()
     assert p.folder_layout is True

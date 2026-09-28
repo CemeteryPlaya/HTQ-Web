@@ -147,6 +147,12 @@ _POLICIES: dict[str, ScopePolicy] = {
             # Счёт-фактура (D-31, Q-C28). Отдаётся attachment: xml нет в
             # списке inline (views._disposition_for).
             "application/xml",
+            # Выписка банка (ТЗ §21: TXT 1С, XLSX, CSV; план этапа 3 БЗО A,
+            # задача 1). Сигнатуры у текста нет (content_signature: UNKNOWN,
+            # не блокирует) — формат проверяет разбор выписки (E-IMP-01).
+            # Отдаются тоже attachment: text/* нет в списке inline.
+            "text/plain",
+            "text/csv",
         ),
         variants=(),
         folder_layout=True,

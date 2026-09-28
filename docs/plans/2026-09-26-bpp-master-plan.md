@@ -339,6 +339,26 @@ def pending_for_user(user_id: int) -> list[dict]: ...        # [{task_id, subjec
 # services/core/numbering.py (A1.1): next_number(prefix: str, *, width: int = 6, year: int | None = None) -> str
 # services/core/audit.py     (A1.1): record(obj, action: str, *, actor_id: int | None, changes: dict | None = None, comment: str = "") -> None
 # services/core/files.py     (A1.1): attach(owner, file_type: str, *, data: bytes, filename: str, actor_id: int) -> dict; list_files(owner) -> list[dict]
+# services/<подмодуль>/file_owner.py (контракт этапа 3 A, задача 1, D-S3-1): register() -> None — подключается сам
+#     (file_owners.register() из BppConfig.ready(), по алфавиту подмодуля); нет register() или у папки нет __init__.py → ImproperlyConfigured.
+#     register() зовёт:
+#       apps.files.interface.register_owner(
+#           "bpp.agreement" | "bpp.invoice" | "bpp.bank_import", label=..., tenant=True,
+#           service="bpp_agreements" | "bpp_invoices" | "bpp_bank",
+#           folder="agreement" | "invoice" | "bank-import",          # сегмент ключа в хранилище: [a-z0-9][a-z0-9_-]*
+#           model=<Модель>,          # ОБЯЗАТЕЛЬНО: ключ UUID (D-05); без model ключ идёт через int() и все ручки файлов — 404
+#           file_types=(FileTypeSpec("agreement", cardinality=SINGLE, required=True), FileTypeSpec("agreement_annex", max_documents=30)) и т.п.,
+#           can_view=fn(owner_id, token) -> bool, can_modify=fn(owner_id, token) -> None (FilesForbidden 403 / FilesLocked 409),
+#           was_sent=fn(owner_id) -> bool, lock=fn(owner_id) -> None (select_for_update строки),
+#           on_event=file_owners.history_on_event(<Модель>),
+#           can_view_type=fn(owner_id, token, file_type) -> bool,     # необязательно: ТЗ §21 — АВР/накладную видят только автор, ФД, БУХ
+#           can_modify_type=fn(owner_id, token, file_type) -> bool)   # необязательно: закрывающие — и после оплаты; False → 403, свой текст —
+#                                                                     # FilesForbidden/FilesLocked; проверяется ПОСЛЕ can_modify (тот — «хоть что-то»)
+#       services.core.files.register_owner_type(<Модель>, "<владелец>")   # без него обёртка services/core/files.py не найдёт папку
+#     Рядом с моделью документа — audit.register_history_access("bpp.<модель>", can_view) (журнал без неё — 404).
+#     Общие куски колбэков: file_owners.actor_from_token(token) -> Actor, file_owners.history_on_event(Model).
+#     Типы справочника — files/0004_bpp_stage3_file_types: bpp.agreement — agreement, agreement_annex; bpp.invoice — invoice, act, waybill,
+#     vat_invoice; bpp.bank_import — bank_statement. Количество («до 30», «1 + версии») — FileTypeSpec владельца, формат и размер — справочник.
 # services/core/errors.py    (A1.1): DomainError(code: str, message: str, *, fields: list[dict] | None = None, status: int = 422)
 # services/core/permissions.py(A1.4): allowed_actions(request, obj) -> list[str]; article_groups_for(request) -> list[str]
 # services/budget/balance.py (B2.1): balance(project_id: str, article_id: str, *, exclude_request_id: str | None = None) -> dict  # {limit, committed, available, as_of}
