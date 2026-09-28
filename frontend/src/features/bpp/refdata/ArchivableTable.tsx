@@ -40,7 +40,9 @@ import { reportApiError } from '@/lib/apiError';
 
 import { useIdempotentAction } from '../core/useIdempotentAction';
 
-import { NONE_OPTION, type RefField, type RefRowBase } from './refFields';
+import {
+  NONE_OPTION, fieldOptions, type RefField, type RefRowBase,
+} from './refFields';
 
 type Values = Record<string, string>;
 
@@ -67,10 +69,22 @@ const filled = (value: string | undefined) =>
 const cellText = (value: unknown) =>
   value === null || value === undefined || value === '' ? '—' : String(value);
 
+/** Новое значение поля формы и сброс полей, зависящих от него (`resetOn`). */
+const withChange = <R,>(fields: RefField<R>[], values: Values, key: string, value: string) => {
+  const next = { ...values, [key]: value };
+  for (const f of fields) {
+    if (f.resetOn === key && values[key] !== value) next[f.key] = f.optional ? NONE_OPTION : '';
+  }
+  return next;
+};
+
 /** Поле диалога — текстовое или выпадающий список. */
 function FieldInput<R>({
-  field, id, value, onChange,
-}: { field: RefField<R>; id: string; value: string; onChange: (value: string) => void }) {
+  field, id, value, values, onChange,
+}: {
+  field: RefField<R>; id: string; value: string; values: Values;
+  onChange: (value: string) => void;
+}) {
   const { t } = useTranslation();
   if (field.options) {
     return (
@@ -82,7 +96,7 @@ function FieldInput<R>({
           {field.optional && (
             <SelectItem value={NONE_OPTION}>{t('bpp.refdata.none', '— нет —')}</SelectItem>
           )}
-          {field.options.map((option) => (
+          {fieldOptions(field, values).map((option) => (
             <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
           ))}
         </SelectContent>
@@ -286,7 +300,8 @@ export function ArchivableTable<R extends RefRowBase>({
                   field={f}
                   id={`ref-create-${f.key}`}
                   value={createValues[f.key] ?? ''}
-                  onChange={(value) => setCreateValues((v) => ({ ...v, [f.key]: value }))}
+                  values={createValues}
+                  onChange={(value) => setCreateValues((v) => withChange(fields, v, f.key, value))}
                 />
               </div>
             ))}
@@ -319,7 +334,10 @@ export function ArchivableTable<R extends RefRowBase>({
                   field={f}
                   id={`ref-edit-${f.key}`}
                   value={editValues[f.key] ?? ''}
-                  onChange={(value) => setEditValues((v) => ({ ...v, [f.key]: value }))}
+                  values={editValues}
+                  onChange={(value) => setEditValues(
+                    (v) => withChange(editableFields, v, f.key, value),
+                  )}
                 />
               </div>
             ))}

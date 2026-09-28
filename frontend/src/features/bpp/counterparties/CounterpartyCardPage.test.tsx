@@ -4,7 +4,9 @@
  *   и `Idempotency-Key`;
  * - у роли без права блокировки (СН, ПМ) кнопок блокировки, архива и метки
  *   нет — даже если сервер ошибочно назвал их в `allowed_actions`;
- * - заблокированный — плашка с причиной.
+ * - заблокированный — плашка с причиной;
+ * - «К списку» — на то место реестра, откуда открыли карточку;
+ * - «История изменений» получает подписи полей карточки.
  */
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -23,7 +25,13 @@ const post = vi.hoisted(() => vi.fn());
 vi.mock('@/api/client', () => ({ default: { get, post, patch: vi.fn() } }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
-vi.mock('../core/HistoryTab', () => ({ HistoryTab: () => <div>История</div> }));
+vi.mock('../core/HistoryTab', () => ({
+  HistoryTab: ({ fieldLabels }: { fieldLabels?: Record<string, string> }) => (
+    <div>
+      История: {fieldLabels?.reg_number} / {fieldLabels?.short_name} / {fieldLabels?.iban}
+    </div>
+  ),
+}));
 
 function permissionsWith(depth: Record<string, DepthFlag[]>): Permissions {
   return {
@@ -62,10 +70,10 @@ const card = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function renderCard() {
+function renderCard(state?: unknown) {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
-      <MemoryRouter initialEntries={[`/bpp/counterparties/${ID}`]}>
+      <MemoryRouter initialEntries={[{ pathname: `/bpp/counterparties/${ID}`, state }]}>
         <Routes>
           <Route path="/bpp/counterparties/:id" element={<CounterpartyCardPage />} />
         </Routes>
@@ -140,5 +148,29 @@ describe('CounterpartyCardPage', () => {
     get.mockRejectedValue({ response: { status: 404, data: { detail: 'Контрагент не найден.' } } });
     renderCard();
     expect(await screen.findByText('Контрагент не найден')).toBeInTheDocument();
+  });
+
+  it('«К списку» возвращает на страницу и поиск реестра, откуда открыли', async () => {
+    get.mockResolvedValue({ data: card() });
+    renderCard({ registrySearch: '?page=3&q=%D0%B0%D0%BB%D1%8C%D1%84%D0%B0' });
+    expect(await screen.findByRole('link', { name: 'К списку контрагентов' }))
+      .toHaveAttribute('href', '/bpp/counterparties?page=3&q=%D0%B0%D0%BB%D1%8C%D1%84%D0%B0');
+  });
+
+  it('открыт не из реестра — «К списку» на голый адрес', async () => {
+    get.mockResolvedValue({ data: card() });
+    renderCard();
+    expect(await screen.findByRole('link', { name: 'К списку контрагентов' }))
+      .toHaveAttribute('href', '/bpp/counterparties');
+  });
+
+  it('история изменений получает подписи полей карточки и счетов', async () => {
+    const user = userEvent.setup();
+    get.mockResolvedValue({ data: card() });
+    renderCard();
+
+    await user.click(await screen.findByRole('tab', { name: 'История изменений' }));
+    expect(await screen.findByText('История: БИН/ИИН / Краткое наименование / IBAN'))
+      .toBeInTheDocument();
   });
 });

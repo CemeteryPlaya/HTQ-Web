@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from apps.access import depth
 from apps.access.services import assignment, hierarchy, holders, resolve
 from apps.access.services.errors import UnknownRole
 from apps.access.services.identity import identity
@@ -137,8 +138,6 @@ def holders_of(node: str, flag: str, company: str) -> list[int]:
     утверждении бюджета (ТЗ БЗО §16.2 п.1).
     """
     require_service("access")
-    from apps.access import depth
-
     if flag not in depth.FLAGS:
         raise ValueError(f"Неизвестный признак глубины: {flag!r}")
     return holders.node_holder_ids(node, flag, company)

@@ -28,6 +28,7 @@ import {
 import { reportApiError } from '@/lib/apiError';
 
 import { COUNTRIES_KEY, counterpartyApi } from '../counterparties/api';
+import { CounterpartyPicker } from '../counterparties/CounterpartyPicker';
 
 import {
   projectApi, type Project, type ProjectCreate, type ProjectKind, type ProjectStatus,
@@ -49,6 +50,7 @@ const EMPTY: ProjectCreate = {
   country_code: 'KZ',
   manager_user_id: null,
   customer_name: '',
+  customer_counterparty_id: '',
   date_start: null,
   date_end: null,
 };
@@ -80,6 +82,7 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
       country_code: project.country_code,
       manager_user_id: project.manager_user_id,
       customer_name: project.customer_name,
+      customer_counterparty_id: project.customer_counterparty_id ?? '',
     } : EMPTY);
     setStatus(project?.status ?? 'active');
   }, [open, project]);
@@ -111,6 +114,7 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
           status,
           manager_user_id: values.manager_user_id,
           customer_name: values.customer_name.trim(),
+          customer_counterparty_id: values.customer_counterparty_id,
         })
         : await projectApi.create({
           ...values,
@@ -227,6 +231,17 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
               id="prj-customer"
               value={values.customer_name}
               onChange={(event) => set('customer_name', event.target.value)}
+              disabled={saving}
+            />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="prj-customer-counterparty">
+              {t('bpp.projects.customerCounterparty', 'Заказчик — контрагент')}
+            </Label>
+            <CounterpartyPicker
+              id="prj-customer-counterparty"
+              value={values.customer_counterparty_id || null}
+              onChange={(id) => set('customer_counterparty_id', id ?? '')}
               disabled={saving}
             />
           </div>

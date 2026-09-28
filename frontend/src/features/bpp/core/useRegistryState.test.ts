@@ -1,9 +1,12 @@
 /**
  * Состояние реестра модуля (ТЗ §19; задача 8): пагинация 25/50/100 (по
  * умолчанию 50), сортировка, фильтры и скрытые колонки помнятся в
- * `localStorage` под ключом реестра; страница и быстрый поиск — нет.
+ * `localStorage` под ключом реестра; страница и быстрый поиск — нет, они в
+ * адресе страницы (опция `url`).
  */
+import { createElement, type ReactNode } from 'react';
 import { act, renderHook } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -180,6 +183,79 @@ describe('useRegistryState', () => {
       expect(() => act(() => result.current.toggleColumn('x'))).not.toThrow();
     } finally {
       Storage.prototype.getItem = original;
+    }
+  });
+});
+
+describe('useRegistryState — страница и поиск в адресе', () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  function renderWithUrl(entry: string) {
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(MemoryRouter, { initialEntries: [entry] }, children);
+    return renderHook(() => {
+      const [params, setParams] = useSearchParams();
+      const location = useLocation();
+      const navigate = useNavigate();
+      const state = useRegistryState(KEY, { url: { params, setParams } });
+      return { state, location, navigate };
+    }, { wrapper });
+  }
+
+  it('страница и поиск читаются из адреса', () => {
+    const { result } = renderWithUrl('/bpp/requests?page=3&q=бетон');
+    expect(result.current.state.page).toBe(3);
+    expect(result.current.state.search).toBe('бетон');
+    expect(result.current.state.params).toMatchObject({ page: 3, search: 'бетон' });
+  });
+
+  it('мусор в ?page= — первая страница', () => {
+    const { result } = renderWithUrl('/bpp/requests?page=abc');
+    expect(result.current.state.page).toBe(1);
+  });
+
+  it('страница и применённый поиск пишутся в адрес, чужие параметры не трогаются', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderWithUrl('/bpp/requests?tab=mine');
+      act(() => result.current.state.setPage(2));
+      expect(result.current.location.search).toBe('?tab=mine&page=2');
+
+      act(() => result.current.state.setSearch('дого'));
+      // До паузы адрес не меняется: не на каждую букву.
+      expect(result.current.location.search).toBe('?tab=mine&page=2');
+      act(() => { vi.advanceTimersByTime(INPUT_DEBOUNCE_MS); });
+      // Поиск вернул на первую страницу — `page` из адреса ушёл.
+      expect(new URLSearchParams(result.current.location.search).get('q')).toBe('дого');
+      expect(new URLSearchParams(result.current.location.search).get('page')).toBeNull();
+      expect(new URLSearchParams(result.current.location.search).get('tab')).toBe('mine');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('переход на реестр без параметров (из меню) начинает его сначала', () => {
+    const { result } = renderWithUrl('/bpp/requests?page=4&q=бетон');
+    act(() => result.current.navigate('/bpp/requests'));
+    expect(result.current.state.page).toBe(1);
+    expect(result.current.state.search).toBe('');
+    expect(result.current.state.params).toEqual({ page: 1, page_size: DEFAULT_PAGE_SIZE });
+  });
+
+  it('набранное после применения поиска не затирается эхом адреса', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderWithUrl('/bpp/requests');
+      act(() => result.current.state.setSearch('бет'));
+      act(() => { vi.advanceTimersByTime(INPUT_DEBOUNCE_MS); });
+      act(() => result.current.state.setSearch('бетон'));
+      expect(result.current.state.search).toBe('бетон');
+      act(() => { vi.advanceTimersByTime(INPUT_DEBOUNCE_MS); });
+      expect(result.current.state.params.search).toBe('бетон');
+      expect(new URLSearchParams(result.current.location.search).get('q')).toBe('бетон');
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

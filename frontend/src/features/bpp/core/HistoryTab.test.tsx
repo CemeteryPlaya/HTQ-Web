@@ -73,6 +73,48 @@ describe('HistoryTab', () => {
     expect(screen.queryByText('История недоступна')).not.toBeInTheDocument();
   });
 
+  it('подписи полей и денежные поля — от экрана; прочее — как пришло', async () => {
+    get.mockResolvedValue({
+      data: [entry({
+        changes: {
+          before: { total_amount: '1250000.5', vat_rate: '12.00', note: 'а' },
+          after: { total_amount: '99999999999999.99', vat_rate: '16.00', note: 'б' },
+        },
+      })],
+    });
+
+    renderWithProviders(
+      <HistoryTab
+        objectType="bpp.purchaserequest"
+        objectId="1"
+        fieldLabels={{ total_amount: 'Сумма', vat_rate: 'Ставка НДС' }}
+        moneyFields={['total_amount']}
+      />,
+    );
+
+    expect(await screen.findByText('Сумма')).toBeInTheDocument();
+    expect(screen.getByText('1 250 000,50')).toBeInTheDocument();
+    expect(screen.getByText('99 999 999 999 999,99')).toBeInTheDocument();
+    // Не названное денежным не форматируется, даже если похоже на сумму.
+    expect(screen.getByText('Ставка НДС')).toBeInTheDocument();
+    expect(screen.getByText('16.00')).toBeInTheDocument();
+    // Без подписи — имя поля.
+    expect(screen.getByText('note')).toBeInTheDocument();
+  });
+
+  it('денежное поле в формате «[было, стало]» и пустое значение', async () => {
+    get.mockResolvedValue({
+      data: [entry({ changes: { amount: [null, '1000'] } })],
+    });
+
+    renderWithProviders(
+      <HistoryTab objectType="bpp.purchaserequest" objectId="1" moneyFields={['amount']} />,
+    );
+
+    expect(await screen.findByText('1 000,00')).toBeInTheDocument();
+    expect(screen.getByRole('listitem')).toHaveTextContent('amount: — → 1 000,00');
+  });
+
   it('пустой журнал — «Изменений пока нет»', async () => {
     get.mockResolvedValue({ data: [] });
     renderWithProviders(<HistoryTab objectType="bpp.purchaserequest" objectId="1" />);

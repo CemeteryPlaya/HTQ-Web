@@ -308,10 +308,11 @@ def run_background(*, job_id: str, columns: list[dict], rebuild_path: str,
         from apps.media_files import interface as media
 
         # scope generic приватный: байты — только по подписанной ссылке,
-        # которую выдаёт ручка выгрузки заказчику (``download``).
+        # которую выдаёт ручка выгрузки заказчику (``download``). Scope
+        # открытый (не в ``RESTRICTED_SCOPES``), поручительство
+        # ``internal_authorized`` ему ничего не добавляет.
         stored = media.store_file(data=data, filename=_filename(job.name), mime=XLSX_MIME,
-                                  scope="generic", owner_id=job.requested_by,
-                                  internal_authorized=True)
+                                  scope="generic", owner_id=job.requested_by)
     except DomainError as exc:
         _fail(job, exc.message)
         return

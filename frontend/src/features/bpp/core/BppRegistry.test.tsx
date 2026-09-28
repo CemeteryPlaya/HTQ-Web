@@ -7,7 +7,7 @@ import type { ComponentProps } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestQueryClient } from '@/test/renderWithProviders';
@@ -238,5 +238,76 @@ describe('BppRegistry', () => {
     await waitFor(() => expect(get.mock.calls.at(-1)?.[1].params.name).toBe('бетон'));
     // Один новый запрос на всё слово, а не пять.
     expect(get.mock.calls.length - calls).toBe(1);
+  });
+});
+
+describe('BppRegistry — место в реестре в адресе', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    get.mockReset();
+  });
+  afterEach(() => window.localStorage.clear());
+
+  function DocumentStub() {
+    const navigate = useNavigate();
+    return <button type="button" onClick={() => navigate(-1)}>Назад</button>;
+  }
+
+  it('«Назад» со строки документа возвращает на ту же страницу и поиск', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((_url: string, config: { params: Record<string, unknown> }) => {
+      const n = String(config.params.page);
+      return Promise.resolve({ data: page([row(`r${n}`, `ЗЗ-${n}`)], 120) });
+    });
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={['/bpp/requests']}>
+          <Routes>
+            <Route
+              path="/bpp/requests"
+              element={(
+                <BppRegistry<Row>
+                  registryKey="test-registry"
+                  endpoint="/bpp/v1/requests"
+                  columns={COLUMNS}
+                  rowHref={(r) => `/bpp/requests/${r.id}`}
+                />
+              )}
+            />
+            <Route path="/bpp/requests/:id" element={<DocumentStub />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('ЗЗ-1');
+    await user.type(screen.getByRole('textbox'), 'бетон');
+    await waitFor(() => expect(get.mock.calls.at(-1)?.[1].params.search).toBe('бетон'));
+    await user.click(screen.getByRole('button', { name: 'Следующая страница' }));
+    await user.click(await screen.findByRole('link', { name: 'ЗЗ-2' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Назад' }));
+
+    expect(await screen.findByRole('link', { name: 'ЗЗ-2' })).toBeInTheDocument();
+    expect(get.mock.calls.at(-1)?.[1].params).toMatchObject({ page: 2, search: 'бетон' });
+    expect(screen.getByRole('textbox')).toHaveValue('бетон');
+  });
+
+  it('syncUrl={false} — адрес не читается', async () => {
+    get.mockResolvedValue({ data: page([row('1', 'ЗЗ-01')], 1) });
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={['/x?page=3&q=бетон']}>
+          <BppRegistry<Row>
+            registryKey="test-registry"
+            endpoint="/bpp/v1/requests"
+            columns={COLUMNS}
+            syncUrl={false}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(get.mock.calls[0][1].params).toEqual({ page: 1, page_size: 50 });
   });
 });

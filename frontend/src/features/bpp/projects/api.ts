@@ -33,6 +33,9 @@ export interface ProjectCreate {
   country_code: string;
   manager_user_id: number | null;
   customer_name: string;
+  /** Заказчик — контрагент из реестра; пустая строка — не выбран (так его
+   * принимает сервер: `ProjectIn.customer_counterparty_id: str = ""`). */
+  customer_counterparty_id: string;
   date_start: string | null;
   date_end: string | null;
 }
@@ -42,6 +45,8 @@ export interface ProjectPatch {
   status?: ProjectStatus;
   manager_user_id?: number | null;
   customer_name?: string;
+  /** Пустая строка снимает выбор. */
+  customer_counterparty_id?: string;
 }
 
 const path = (suffix = '') => apiPath('project', suffix ? `projects/${suffix}` : 'projects');

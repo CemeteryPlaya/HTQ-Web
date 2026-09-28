@@ -8,8 +8,14 @@
  *   строки бюджета); показываются только поля, что изменились;
  * - `{поле: значение}` — факт события (создание, сумма при отправке): только
  *   «стало».
+ *
+ * Денежные поля экран называет сам (`moneyFields`) — они показываются в
+ * формате модуля (`1 250 000,00`). По имени или виду значения деньги не
+ * угадываются: «100.00» бывает и количеством, и процентом.
  */
 import i18next from '@/i18n';
+
+import { formatMoney } from '../format';
 
 export interface ChangeRow {
   field: string;
@@ -30,10 +36,26 @@ export const showValue = (value: unknown): string => {
   return String(value);
 };
 
+/** Денежное значение — формат модуля; не сумма (пусто, объект) — как обычно. */
+const showMoney = (value: unknown): string =>
+  (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')
+    ? formatMoney(value)
+    : showValue(value));
+
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-export function changeRows(changes: Record<string, unknown> | null | undefined): ChangeRow[] {
+export interface ChangeRowsOptions {
+  /** Поля верхнего уровня `changes`, значения которых — суммы. */
+  moneyFields?: readonly string[];
+}
+
+export function changeRows(
+  changes: Record<string, unknown> | null | undefined,
+  { moneyFields = [] }: ChangeRowsOptions = {},
+): ChangeRow[] {
   if (!isPlainObject(changes)) return [];
+  const show = (field: string, value: unknown) =>
+    (moneyFields.includes(field) ? showMoney(value) : showValue(value));
   const keys = Object.keys(changes);
   if (keys.length === 2 && isPlainObject(changes.before) && isPlainObject(changes.after)) {
     const before = changes.before;
@@ -42,17 +64,17 @@ export function changeRows(changes: Record<string, unknown> | null | undefined):
     return fields
       .filter((field) => !same(before[field], after[field]))
       .map((field) => ({
-        field, before: showValue(before[field]), after: showValue(after[field]),
+        field, before: show(field, before[field]), after: show(field, after[field]),
       }));
   }
   return keys.map((field) => {
     const value = changes[field];
     if (Array.isArray(value) && value.length === 2) {
-      return { field, before: showValue(value[0]), after: showValue(value[1]) };
+      return { field, before: show(field, value[0]), after: show(field, value[1]) };
     }
     if (isPlainObject(value) && 'before' in value && 'after' in value) {
-      return { field, before: showValue(value.before), after: showValue(value.after) };
+      return { field, before: show(field, value.before), after: show(field, value.after) };
     }
-    return { field, after: showValue(value) };
+    return { field, after: show(field, value) };
   });
 }

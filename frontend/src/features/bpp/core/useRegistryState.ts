@@ -6,8 +6,12 @@
  * Сохраняется в `localStorage` под ключом `bpp:registry:<ключ реестра>`:
  * фильтры, скрытые колонки, размер страницы и сортировка — то, что человек
  * настраивает под себя. Номер страницы и быстрый поиск — нет: вернувшись в
- * реестр, человек ждёт его начало, а не третью страницу позавчерашнего
- * поиска.
+ * реестр из меню, человек ждёт его начало, а не третью страницу позавчерашнего
+ * поиска. Их место — адрес страницы (`?page=`, `?q=`, опция `url`): «Назад»
+ * со строки документа возвращает туда же, откуда ушли, ссылкой на выборку
+ * можно поделиться, а переход из меню (адрес без параметров) начинает
+ * реестр сначала. Адрес правится с `replace` — листание страниц не
+ * засоряет историю браузера.
  *
  * Быстрый поиск и текстовые фильтры уходят в запрос с задержкой
  * `INPUT_DEBOUNCE_MS` после последнего нажатия: поле показывает набранное
@@ -48,6 +52,26 @@ interface Persisted {
 }
 
 export const storageKeyFor = (registryKey: string) => `bpp:registry:${registryKey}`;
+
+/** Параметры адреса страницы, в которых живут номер страницы и поиск. */
+export const URL_PAGE = 'page';
+export const URL_SEARCH = 'q';
+
+/** Адрес страницы — то, что отдаёт `useSearchParams` роутера. Хук от
+ * роутера не зависит: реестр передаёт пару сам (и без неё хук работает). */
+export interface RegistryUrl {
+  params: URLSearchParams;
+  setParams: (
+    next: (current: URLSearchParams) => URLSearchParams,
+    options?: { replace?: boolean },
+  ) => void;
+}
+
+const pageFromUrl = (params: URLSearchParams): number => {
+  const value = Number(params.get(URL_PAGE));
+  return Number.isInteger(value) && value > 1 ? value : 1;
+};
+const searchFromUrl = (params: URLSearchParams): string => params.get(URL_SEARCH) ?? '';
 
 const isPageSize = (value: unknown): value is PageSize =>
   PAGE_SIZES.includes(value as PageSize);
@@ -97,6 +121,8 @@ export interface RegistryStateOptions {
   /** Ключи фильтров, объявленных реестром; остальные из `localStorage` и
    * из состояния в запрос не идут. `undefined` — без ограничения. */
   filterKeys?: readonly string[];
+  /** Держать номер страницы и поиск в адресе страницы (`?page=`, `?q=`). */
+  url?: RegistryUrl;
 }
 
 export interface SetFilterOptions {
@@ -134,17 +160,17 @@ export const sortParam = (sort: RegistrySort | null): string | undefined =>
 export function useRegistryState(
   registryKey: string,
   {
-    defaultSort = null, defaultHidden = [], searchParam = 'search', filterKeys,
+    defaultSort = null, defaultHidden = [], searchParam = 'search', filterKeys, url,
   }: RegistryStateOptions = {},
 ): RegistryState {
   // Стабильный ключ набора фильтров: массив из пропсов новый на каждом рендере.
   const filterKeysKey = filterKeys ? filterKeys.join('|') : null;
   const [persisted] = useState(() => readPersisted(registryKey, filterKeys));
-  const [page, setPageRaw] = useState(1);
+  const [page, setPageRaw] = useState(() => (url ? pageFromUrl(url.params) : 1));
   const [pageSize, setPageSizeRaw] = useState<PageSize>(persisted.pageSize ?? DEFAULT_PAGE_SIZE);
   const [sort, setSort] = useState<RegistrySort | null>(persisted.sort ?? defaultSort);
-  const [search, setSearchRaw] = useState('');
-  const [appliedSearch, setAppliedSearch] = useState('');
+  const [search, setSearchRaw] = useState(() => (url ? searchFromUrl(url.params) : ''));
+  const [appliedSearch, setAppliedSearch] = useState(search);
   const [filters, setFiltersRaw] = useState<Record<string, string>>(persisted.filters ?? {});
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>(filters);
   const [hidden, setHidden] = useState<string[]>(persisted.hidden ?? defaultHidden);
@@ -166,6 +192,45 @@ export function useRegistryState(
   useEffect(() => {
     writePersisted(registryKey, { pageSize, sort, filters, hidden });
   }, [registryKey, pageSize, sort, filters, hidden]);
+
+  // Страница и поиск ⇄ адрес. `written` — что адрес несёт с нашей же записи:
+  // своё эхо из адреса обратно в состояние не принимается, иначе поиск,
+  // применённый через паузу, затёр бы буквы, набранные после неё.
+  const urlPage = url ? pageFromUrl(url.params) : null;
+  const urlSearch = url ? searchFromUrl(url.params) : null;
+  const written = useRef({ page: urlPage, search: urlSearch });
+  const setUrlRef = useRef(url?.setParams);
+  setUrlRef.current = url?.setParams;
+
+  // Адрес → состояние: «Назад»/«Вперёд» браузера, переход из меню на тот же
+  // реестр без параметров.
+  useEffect(() => {
+    if (urlPage === null || urlPage === written.current.page) return;
+    written.current.page = urlPage;
+    setPageRaw(urlPage);
+  }, [urlPage]);
+  useEffect(() => {
+    if (urlSearch === null || urlSearch === written.current.search) return;
+    written.current.search = urlSearch;
+    cancel(searchTimer);
+    setSearchRaw(urlSearch);
+    setAppliedSearch(urlSearch);
+  }, [urlSearch]);
+
+  // Состояние → адрес: применённый поиск (не каждая буква) и страница.
+  useEffect(() => {
+    const setParams = setUrlRef.current;
+    if (!setParams) return;
+    const text = appliedSearch.trim();
+    if (written.current.page === page && written.current.search === text) return;
+    written.current = { page, search: text };
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (page > 1) next.set(URL_PAGE, String(page)); else next.delete(URL_PAGE);
+      if (text) next.set(URL_SEARCH, text); else next.delete(URL_SEARCH);
+      return next;
+    }, { replace: true });
+  }, [page, appliedSearch]);
 
   // Любая смена выборки начинает её с первой страницы: седьмой страницы
   // новой выборки может не быть вовсе.

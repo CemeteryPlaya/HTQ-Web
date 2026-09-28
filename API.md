@@ -1508,7 +1508,10 @@ schema the platform can run on.
 поддомен управляющей компании (компания вида «холдинг»), иначе 403
 `{"code": "E-REF-01"}`. Удаления нет: `DELETE` → 405, запись уходит в архив
 `PATCH {"is_active": false}` и остаётся в старых документах. Повтор кода —
-422 `E-REF-02`.
+422 `E-REF-02`. Родительская статья (`parent_id` в `POST articles`) — только
+из той же группы, что и новая статья; чужая группа или несуществующий
+родитель — 422 `E-REF-05` с `fields[0].field = "parent_id"` (группу и
+родителя после создания `PATCH` не меняет).
 
 | Коллекция | Методы | Запись |
 |---|---|---|
@@ -1625,10 +1628,6 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 ТЗ §26.1, архивный — свой текст), `needs_confirmation(id)` (окно
 подтверждения у непроверенного), `record_success(id)` (+1 удачный документ).
 
-`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
-`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
-`bpp.orgbankaccount`, `bpp.statementtemplate`), читает тот, кто видит
-документ.
 **Счета организации и шаблоны выписок** — подмодуль `bpp_bank` (ТЗ §11.1,
 §18, задача A3.1). Справочник АДМ: чтение — `bpp.bank` view (ФД, БУХ) или
 `bpp.settings` view (ФД, АДМ), создание и правка — `bpp.settings` edit
@@ -1652,6 +1651,10 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `GET` / `PATCH bank/templates/<id>` | Карточка / правка; архив шаблона действующего счёта — 409 `E-STATE-01` |
 | `POST bank/templates/<id>/preview` (multipart `file`, до 20 МБ) | Предпросмотр образца по шаблону, ничего не сохраняет: `{header_row, columns: [{field, label, header, index}], rows: [первые 20 строк: row_no, date, doc_number, amount (строка Decimal, по модулю), direction: debit\|credit, …], errors: ["Строка N: не распознана дата „31.02.2026“", …]}`. Колонки ищутся по заголовку (регистр и пробелы не важны, лишние колонки не мешают) в первых 30 строках; нет обязательной — 422 `E-IMP-02` с её названием; расширение не того формата или файл не читается — 422 `E-IMP-01`; шаблон 1С — 422 `E-VAL-01` (предпросмотр только для Excel и CSV). Чтение — как у справочника |
 
+`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
+`bpp.orgbankaccount`, `bpp.statementtemplate`), читает тот, кто видит
+документ.
 
 `GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
 ["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в

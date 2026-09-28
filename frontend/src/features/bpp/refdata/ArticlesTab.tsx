@@ -6,7 +6,9 @@
  * бюджете и заявке, поэтому после создания он не правится (PATCH-схема
  * группы его не принимает), как и код. У статьи то же с группой и
  * родителем: перенос статьи между группами поменял бы круг ролей у уже
- * утверждённых бюджетов.
+ * утверждённых бюджетов. Родитель — только статья той же группы (сервер
+ * отвечает на чужую 422 `E-REF-05`): список родителей строится по
+ * выбранной группе и сбрасывается при её смене.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -48,8 +50,10 @@ export default function ArticlesTab() {
     },
     {
       key: 'parent_id', label: t('bpp.refdata.articles.parent', 'Родительская статья'),
-      editable: false, optional: true,
-      options: (activeArticles ?? []).map((a) => ({ value: a.id, label: `${a.code} ${a.name}` })),
+      editable: false, optional: true, resetOn: 'group_id',
+      options: (values) => (activeArticles ?? [])
+        .filter((a) => a.group_id === values.group_id)
+        .map((a) => ({ value: a.id, label: `${a.code} ${a.name}` })),
       render: (row) => (row.parent_id ? articleLabel.get(row.parent_id) ?? '—' : '—'),
     },
     {

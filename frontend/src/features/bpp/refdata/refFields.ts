@@ -28,11 +28,23 @@ export interface RefField<R> {
   /** По умолчанию поле обязательно при создании. */
   optional?: boolean;
   maxLength?: number;
-  /** Выпадающий список вместо текстового поля. */
-  options?: RefFieldOption[];
+  /** Выпадающий список вместо текстового поля. Функция — если список
+   * зависит от уже выбранных полей формы (родительская статья — только из
+   * группы новой статьи). */
+  options?: RefFieldOption[] | ((values: Record<string, string>) => RefFieldOption[]);
+  /** Ключ поля, при смене которого значение этого поля сбрасывается: выбор
+   * из зависимого списка (`options`-функции) иначе остался бы от прежнего
+   * значения того поля. */
+  resetOn?: string;
   /** Своя отрисовка ячейки (например, имя группы вместо её id). */
   render?: (row: R) => ReactNode;
 }
+
+/** Пункты выпадающего списка поля при текущих значениях формы. */
+export const fieldOptions = <R,>(
+  field: RefField<R>, values: Record<string, string>,
+): RefFieldOption[] =>
+  (typeof field.options === 'function' ? field.options(values) : field.options ?? []);
 
 export interface RefRowBase {
   id: string;

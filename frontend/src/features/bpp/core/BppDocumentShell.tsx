@@ -32,6 +32,11 @@
  *   черновик от …» с «Восстановить»/«Удалить», диалог несохранённых
  *   изменений (`useUnsavedChangesGuard`). Успешное действие стирает
  *   черновик: состояние документа теперь на сервере.
+ * - **Ссылка «К списку»** (её рисует экран документа над оболочкой) —
+ *   `useRegistryBackHref(BASE)` из `registryBack.ts`, а не голый
+ *   `<Link to={BASE}>`: реестр передаёт при открытии строки свою страницу и
+ *   поиск, и ссылка возвращает на то же место (голый адрес реестр читает
+ *   как «открыли из меню» и сбрасывает его).
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -45,7 +50,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime } from '../format';
 import { ApprovalTab } from './ApprovalTab';
 import { DocumentActionButton, type BppDocumentAction } from './DocumentActionButton';
-import { HistoryTab } from './HistoryTab';
+import { HistoryTab, type HistoryFieldOptions } from './HistoryTab';
 import { StatusBadge } from './StatusBadge';
 import type { StatusKind } from './statusDictionaries';
 import { useDraftAutosave } from './useDraftAutosave';
@@ -85,12 +90,13 @@ export interface BppDocumentShellBaseProps<T> {
  * Источник вкладки «История изменений» — ровно один из двух:
  * - `historyType` — тип объекта журнала (`_meta.label_lower` модели:
  *   `bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.budget`),
- *   вкладка — `HistoryTab` по нему и `documentId`;
+ *   вкладка — `HistoryTab` по нему и `documentId`; `historyFields` —
+ *   подписи и денежные поля журнала (`HistoryTab.fieldLabels/moneyFields`);
  * - `history` — своё содержимое вкладки; `null` — вкладки нет.
  */
 export type BppDocumentHistorySource =
-  | { historyType: string; history?: undefined }
-  | { history: ReactNode; historyType?: undefined };
+  | { historyType: string; historyFields?: HistoryFieldOptions; history?: undefined }
+  | { history: ReactNode; historyType?: undefined; historyFields?: undefined };
 
 export type BppDocumentShellProps<T> = BppDocumentShellBaseProps<T> & BppDocumentHistorySource;
 
@@ -112,6 +118,7 @@ export function BppDocumentShell<T>({
   withApproval = true,
   history,
   historyType,
+  historyFields,
   draft,
   children,
 }: BppDocumentShellProps<T>) {
@@ -141,7 +148,7 @@ export function BppDocumentShell<T>({
   const historyContent = documentId === null
     ? null
     : historyType !== undefined
-      ? <HistoryTab objectType={historyType} objectId={documentId} />
+      ? <HistoryTab objectType={historyType} objectId={documentId} {...historyFields} />
       : (history ?? null);
 
   return (
