@@ -112,6 +112,18 @@ describe('AgreementFormPage', () => {
     expect(body).toEqual({ version: 2, counterparty_confirmed: true });
   });
 
+  it('«Открытый договор» скрывает сумму договора и суммы позиций', { timeout: 15000 }, async () => {
+    serve(card());
+    renderForm();
+
+    expect(await screen.findByLabelText('Сумма договора', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByLabelText('Сумма по договору ЗЗ-2026-000001-01')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Открытый договор' }));
+
+    expect(screen.queryByLabelText('Сумма договора')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Сумма по договору ЗЗ-2026-000001-01')).not.toBeInTheDocument();
+  });
+
   it('действующий договор у ФД — только чтение и действия ФД', { timeout: 15000 }, async () => {
     serve(card({ status: 'active', allowed_actions: ['fulfil', 'terminate', 'print'] }));
     renderForm();

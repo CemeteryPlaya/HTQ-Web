@@ -128,6 +128,52 @@ describe('InvoiceFormPage', () => {
     expect(body).toEqual({ decision: 'pay', comment: '', planned_pay_date: '2099-01-15' });
   });
 
+  it('смена основания снимает договор со счёта', { timeout: 15000 }, async () => {
+    serve(card({
+      basis: 'contract', amount: '1000.00', amount_kzt: '1000.00', over_threshold: false,
+      threshold: null,
+      agreement: {
+        id: 'agr1', number: 'ДГ-2026-000001', ext_number: '145', ext_date: '2026-09-20',
+        is_open: false, status: 'active', effective_amount: '5000.00', remaining: '4000.00',
+      },
+      lines: [{
+        id: 'l1', request_item_id: 'r1', sys_number: 'ЗЗ-2026-000001-01', name: 'Швеллер',
+        request_id: 'q1', request_number: 'ЗЗ-2026-000001', qty: '10.000', amount: '1000.00',
+        plan_amount: '1000.00', qty_available: '10.000', amount_available: '1000.00',
+      }],
+    }));
+    patch.mockResolvedValue({ data: card({ basis: 'no_contract', agreement: null, amount: '1000.00' }) });
+    renderForm();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Сделать «Без договора»' }, { timeout: 4000 }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Без договора' }));
+
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    const [url, body] = patch.mock.calls[0];
+    expect(url).toContain(`invoices/${ID}`);
+    expect(body).toMatchObject({ basis: 'no_contract', version: 3 });
+    expect(body).not.toHaveProperty('counterparty_id');
+  });
+
+  it('отметка оплаты больше неоплаченного остатка — кнопка закрыта', { timeout: 15000 }, async () => {
+    serve(card({
+      status: 'partially_paid', amount: '1000.00', amount_kzt: '1000.00', over_threshold: false,
+      paid_amount: '400.00', unpaid_amount: '600.00', allowed_actions: ['mark_paid'],
+    }));
+    renderForm();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Оплачено' }, { timeout: 4000 }));
+    const dialog = await screen.findByRole('dialog');
+    const amount = within(dialog).getByLabelText('Сумма, KZT');
+    await userEvent.clear(amount);
+    await userEvent.type(amount, '600,01');
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Сумма больше неоплаченного остатка');
+    expect(within(dialog).getByRole('button', { name: 'Оплачено' })).toBeDisabled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('«Оплачено» БУХ — неоплаченный остаток и номер п/п', { timeout: 15000 }, async () => {
     serve(card({
       status: 'partially_paid', amount: '1000.00', amount_kzt: '1000.00', over_threshold: false,

@@ -7,7 +7,9 @@
  * - Режим и кнопки — из `allowed_actions`; поля правит автор в «Черновике»
  *   и «Возвращён на доработку».
  * - По договору контрагент, валюта, НДС и тип — из договора и не правятся
- *   (§10.3 п.2); виден остаток по договору.
+ *   (§10.3 п.2); виден остаток по договору. «Сделать „Без договора“» снимает
+ *   договор со счёта (`PATCH basis: "no_contract"`).
+ * - «Копировать номер» — номер счёта в буфер (назначение платежа, переписка).
  * - Без договора сумма выше 1000 МРП на дату счёта закрывает «Отправить ФД»
  *   (BR-040) и предлагает «Оформить договор по этим позициям»: черновик счёта
  *   удаляется — он держит количество позиций, — и из тех же позиций
@@ -21,7 +23,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Copy } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { newIdempotencyKey } from '@/api/files';
 import { Badge } from '@/components/ui/badge';
@@ -377,6 +380,30 @@ export function InvoiceFormPage() {
     },
   };
 
+  const copyNumber = async () => {
+    try {
+      await navigator.clipboard.writeText(card.number);
+      toast.success(t('bpp.invoices.numberCopied', 'Номер {{n}} скопирован', { n: card.number }));
+    } catch {
+      toast.error(t('bpp.invoices.copyFailed', 'Не удалось скопировать номер'));
+    }
+  };
+
+  const dropAgreement = () => {
+    const key = newIdempotencyKey();
+    void prompt.ask({
+      title: t('bpp.invoices.dropAgreementTitle', 'Сделать счёт «Без договора»?'),
+      description: t('bpp.invoices.dropAgreementHint',
+        'Договор снимется со счёта, контрагент, валюта и НДС станут редактируемыми. '
+        + 'Позиции, которые держит договор, без договора не оплачиваются — строки, возможно, придётся поправить.'),
+      submitLabel: t('bpp.invoices.dropAgreement', 'Без договора'),
+      fields: [],
+      submit: async () => apply(await invoiceApi.save(card.id, key, {
+        ...patchOf(form, card), basis: 'no_contract', version: card.version,
+      })),
+    });
+  };
+
   const unmark = (markId: string) => {
     const key = newIdempotencyKey();
     void prompt.ask({
@@ -469,6 +496,13 @@ export function InvoiceFormPage() {
             </div>
           )}
 
+          <div className="-mt-2 flex justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={() => void copyNumber()}>
+              <Copy className="mr-1.5 h-4 w-4" />
+              {t('bpp.invoices.copyNumber', 'Копировать номер')}
+            </Button>
+          </div>
+
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label={t('bpp.invoices.basis', 'Основание')}>
               {agreement ? (
@@ -486,6 +520,11 @@ export function InvoiceFormPage() {
                   )}
                 </p>
               ) : <p className="text-sm">{t('bpp.invoices.noAgreement', 'Без договора')}</p>}
+              {agreement && editable && (
+                <Button type="button" variant="link" size="sm" className="h-auto px-0" onClick={dropAgreement}>
+                  {t('bpp.invoices.toNoAgreement', 'Сделать «Без договора»')}
+                </Button>
+              )}
             </Field>
             <Field label={t('bpp.invoices.project', 'Проект / статья')}>
               <p className="text-sm">{card.project.code} — {card.project.name} / {card.article.name}</p>
