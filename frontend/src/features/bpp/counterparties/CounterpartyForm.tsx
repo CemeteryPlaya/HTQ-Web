@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
+import { PrerequisiteNotice } from '@/components/common/PrerequisiteNotice';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -213,20 +214,34 @@ export function CounterpartyForm({ card, onSaved, onCancel }: Props) {
           </Select>
         ))}
         {field('country_code', t('bpp.counterparties.country', 'Страна'), (
-          <Select
-            value={values.country_code}
-            onValueChange={(value) => set('country_code', value)}
-            disabled={action.pending}
-          >
-            <SelectTrigger id="cp-country_code"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {countryOptions.map((country) => (
-                <SelectItem key={country.code} value={country.code}>
-                  {country.code} — {country.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <>
+            <Select
+              value={values.country_code}
+              onValueChange={(value) => set('country_code', value)}
+              disabled={action.pending}
+            >
+              <SelectTrigger id="cp-country_code"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {countryOptions.map((country) => (
+                  <SelectItem key={country.code} value={country.code}>
+                    {country.code} — {country.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Страны ведёт управляющая компания (D-03): ссылка ведёт на
+                вкладку справочника, где их заводят. */}
+            <PrerequisiteNotice
+              variant="inline"
+              items={[{
+                when: countries.isSuccess && countryOptions.length === 0,
+                text: t('bpp.counterparties.noCountries',
+                  'Справочник стран пуст — его ведёт управляющая компания'),
+                to: '/bpp/refdata?tab=countries',
+                linkText: t('bpp.refdata.title', 'Справочники'),
+              }]}
+            />
+          </>
         ))}
         {field('reg_number', regNumberLabel(t, values.country_code), text('reg_number', {
           className: 'font-mono',
