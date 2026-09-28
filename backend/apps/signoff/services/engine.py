@@ -1329,7 +1329,8 @@ def _notify_center(user_ids: list[int], payload: dict) -> bool:
     from htqweb.tenancy import current_company_or_none
 
     kind = payload.get("type") or "signoff.event"
-    title = payload.get("title") or f"{payload.get('subject_type')} №{payload.get('subject_id')}"
+    subject_type = str(payload.get("subject_type") or "")
+    title = payload.get("title") or f"{subject_type} №{payload.get('subject_id')}"
     template = _CENTER_TITLES.get(kind, "{title}")
     try:
         with transaction.atomic():
@@ -1338,8 +1339,13 @@ def _notify_center(user_ids: list[int], payload: dict) -> bool:
                 title=template.format(title=title, stage=payload.get("stage", "")),
                 url=payload.get("url") or f"/signoff/processes/{payload.get('process_id')}",
                 company_slug=current_company_or_none(),
-                target_type=str(payload.get("subject_type") or ""),
-                target_id=str(payload.get("subject_id") or ""))
+                target_type=subject_type,
+                target_id=str(payload.get("subject_id") or ""),
+                # Документы модуля БЗО — колокольчик и выбранные каналы (e-mail,
+                # Telegram; ТЗ §22). Остальные предметы (кадры, заявки
+                # конструктора, договоры) — только колокольчик, как было до
+                # центра (план этапа 2, задача 1; решение 27.09).
+                deliver=subject_type.startswith("bpp."))
     except ServiceDisabled:
         return False
     except Exception:

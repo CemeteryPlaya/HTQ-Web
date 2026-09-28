@@ -37,16 +37,16 @@ export const STATUS_DICTIONARIES = {
     approved: s('budget.approved', 'Утверждён', 'success'),
     closed: s('budget.closed', 'Закрыт', 'muted'),
   },
-  // `BudgetVersionStatus`.
+  // `VersionState`.
   budget_version: {
     draft: s('budgetVersion.draft', 'Черновик', 'draft'),
     active: s('budgetVersion.active', 'Действующая', 'success'),
-    archived: s('budgetVersion.archived', 'Архивная', 'muted'),
+    archived: s('budgetVersion.archived', 'Архив', 'muted'),
   },
   // ТЗ §15.2; `RequestStatus`.
   request: {
     draft: s('request.draft', 'Черновик', 'draft'),
-    on_review: s('request.on_review', 'На согласовании', 'progress'),
+    in_approval: s('request.in_approval', 'На согласовании', 'progress'),
     rework: s('request.rework', 'На доработке', 'attention'),
     rejected: s('request.rejected', 'Отклонена', 'danger'),
     approved: s('request.approved', 'Утверждена', 'success'),

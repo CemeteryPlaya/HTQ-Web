@@ -40,6 +40,8 @@ def test_approver_gets_a_bell_notification_with_a_link():
     assert row.url == f"/probe/{doc.pk}"
     assert (row.target_type, row.target_id) == (SUBJECT, str(doc.pk))
     assert process.pk
+    # Не документ БЗО — только колокольчик, без писем (план этапа 2, задача 1).
+    assert not row.deliveries.exists()
 
 
 def test_initiator_hears_the_outcome():

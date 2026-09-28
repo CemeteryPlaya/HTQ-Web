@@ -4,7 +4,7 @@
 документа он меняет только через эти колбэки, а ключ документа передаёт в
 типе ключа модели — ``uuid.UUID`` (B0.1, ``registry.native_id``).
 
-Маршрут не зашит в код: его заводит команда ``bpp_setup_routes`` (по
+Маршрут не зашит в код: его заводит команда ``bpp_configure_routes`` (по
 должностям), флаги маршрутов БЗО — самосогласование, комментарий ≥ 10,
 ленивое разрешение исполнителей (D-21).
 
@@ -40,7 +40,7 @@ def _describe_request(subject_id) -> dict | None:
     code = (projects.project_brief([str(req.project_id)]).get(str(req.project_id))
             or {}).get("code", "")
     return {
-        "title": f"Заявка {req.number} на {fmt(req.total_amount, req.currency)}"
+        "title": f"Заявка {req.number} на {fmt(req.total_amount, req.currency_code)}"
                  + (f" по проекту {code}" if code else ""),
         "url": f"/bpp/requests/{req.pk}",
     }
@@ -55,7 +55,7 @@ def _request_facts(subject_id) -> dict:
         brief = refdata.article_brief([str(req.article_id)]).get(str(req.article_id))
         groups = {g["id"]: g["code"] for g in refdata.article_groups()}
         group = groups.get(brief["group_id"], "") if brief else ""
-    return {"amount": req.total_amount, "currency": req.currency,
+    return {"amount": req.total_amount, "currency": req.currency_code,
             "purchase_type": req.purchase_type, "article_group": group,
             "initiator_role": req.initiator_role}
 

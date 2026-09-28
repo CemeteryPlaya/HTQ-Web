@@ -70,7 +70,7 @@ function renderShell(props: Partial<BppDocumentShellProps<unknown>> = {}) {
     historyType: 'bpp.purchaserequest',
     documentId: DOC_ID,
     number: 'ЗЗ-2026-000045',
-    status: { kind: 'request', code: 'on_review' },
+    status: { kind: 'request', code: 'in_approval' },
     authorName: 'Иванов А.',
     createdAt: '2026-09-27T20:30:00Z',
     allowedActions: [],

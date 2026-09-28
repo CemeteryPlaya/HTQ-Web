@@ -38,7 +38,7 @@ def test_author_attaches_in_draft_and_replaces_after_submit(company_context):
     service.submit(sn, req.id, expected_version=None)
     with pytest.raises(DomainError) as exc:
         files.attach(sn, req.id, _pdf("tz.pdf"))
-    assert exc.value.code == "E-STATE-01"
+    assert exc.value.code == "E-STS-01"
     newer = files.replace(sn, req.id, first["id"], _pdf("kp-v2.pdf"))
     assert newer["version"] == 2
     assert [f["filename"] for f in files.list_files(sn, req.id)] == ["kp-v2.pdf"]

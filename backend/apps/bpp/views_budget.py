@@ -30,7 +30,7 @@ def budget_list(request):
     return read.registry(Actor(request), status=params.get("status") or None,
                          project_id=params.get("project_id") or None,
                          page=int_param(params, "page", 1, minimum=1),
-                         page_size=int_param(params, "page_size", 25))
+                         page_size=int_param(params, "page_size", 50))
 
 
 @api_view(methods=("POST",), module="bpp", level="write", body=schemas.BudgetCreate,

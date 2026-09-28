@@ -35,7 +35,7 @@ def test_formula_by_request_and_item_status(company_context):
     on_review = _request(sn, proj, art, 200, 300)
     approved = _request(sn, proj, art, 400)
     rejected = _request(sn, proj, art, 800)
-    PurchaseRequest.objects.filter(pk=on_review.pk).update(status=RequestStatus.ON_REVIEW)
+    PurchaseRequest.objects.filter(pk=on_review.pk).update(status=RequestStatus.IN_APPROVAL)
     PurchaseRequest.objects.filter(pk=approved.pk).update(status=RequestStatus.APPROVED)
     PurchaseRequest.objects.filter(pk=rejected.pk).update(status=RequestStatus.REJECTED)
     assert calc.committed_for(proj.id, art.id) == Decimal("900.00")

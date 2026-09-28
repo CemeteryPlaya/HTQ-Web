@@ -38,7 +38,7 @@ export interface PurchaseRequestCard {
   purchase_type: 'goods' | 'works' | '';
   need_date: string | null;
   justification: string;
-  currency: string;
+  currency_code: string;
   total_amount: Money;
   rework_comment: string;
   budget: {

@@ -1,4 +1,4 @@
-"""Маршруты заявок и плана закупок ``/api/bpp/v1/requests…``, ``…/plan…`` —
+"""Маршруты заявок ``/api/bpp/v1/requests…`` —
 подмодуль ``bpp_requests``.
 
 ``APPEND_SLASH = False``: каждый путь — в обоих написаниях. Строки явные:
@@ -34,10 +34,4 @@ urlpatterns = [
     path(f"{R}/files/<uuid:file_id>/version/", views.request_file_version),
     path(f"{R}/files/<uuid:file_id>/link", views.request_file_link),
     path(f"{R}/files/<uuid:file_id>/link/", views.request_file_link),
-    path("plan", views.plan_list),
-    path("plan/", views.plan_list),
-    path("plan/validate", views.plan_validate),
-    path("plan/validate/", views.plan_validate),
-    path("plan/reassign", views.plan_reassign),
-    path("plan/reassign/", views.plan_reassign),
 ]

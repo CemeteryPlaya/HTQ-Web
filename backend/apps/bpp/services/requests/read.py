@@ -32,18 +32,6 @@ def _names(ids) -> dict[int, str]:
     return {row["id"]: row["full_name"] for row in users.get_users_brief(ids)} if ids else {}
 
 
-def _rework_comment(req: PurchaseRequest) -> str:
-    """Комментарий последнего возврата — жёлтая плашка формы (ТЗ §7.6 п.6)."""
-    if req.status != RequestStatus.REWORK:
-        return ""
-    process = signoff.get_process_for(SUBJECT, str(req.pk))
-    if process is None:
-        return ""
-    comments = [task.get("comment") or "" for stage in process["stages"]
-                for task in stage["tasks"] if task["state"] == "rework"]
-    return comments[-1] if comments else ""
-
-
 def _budget_figures(req: PurchaseRequest) -> dict | None:
     """Блок 2 «Бюджет»: лимит, остаток и «Остаток после заявки». Пока заявка
     не в резерве, её сумма вычитается из остатка (ТЗ §7.3)."""
@@ -53,7 +41,7 @@ def _budget_figures(req: PurchaseRequest) -> dict | None:
         now = budget_balance.balance(req.project_id, req.article_id)
     except DomainError:
         return None
-    reserved = req.status in (RequestStatus.ON_REVIEW, RequestStatus.APPROVED,
+    reserved = req.status in (RequestStatus.IN_APPROVAL, RequestStatus.APPROVED,
                               RequestStatus.CLOSED)
     # «Задействовано» и «Доступно» — как есть сейчас. Заявка в резерве уже
     # внутри них, и остаток после неё — это и есть «Доступно»; черновик ещё
@@ -94,9 +82,9 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
             "id": str(req.article_id), "code": article.get("code"),
             "name": article.get("name"), "archived": not article.get("is_active", True)},
         "purchase_type": req.purchase_type, "need_date": req.need_date,
-        "justification": req.justification, "currency": req.currency,
+        "justification": req.justification, "currency_code": req.currency_code,
         "total_amount": req.total_amount, "status_comment": req.status_comment,
-        "rework_comment": _rework_comment(req),
+        "rework_comment": req.rework_comment if req.status == RequestStatus.REWORK else "",
         "budget": _budget_figures(req),
         "items": [{
             "id": str(item.id), "line_no": item.line_no, "sys_number": item.sys_number,
@@ -112,7 +100,7 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
 
 
 def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
-             page_size: int = 25) -> dict:
+             page_size: int = 50) -> dict:
     filters = filters or {}
     rows = PurchaseRequest.objects.filter(is_migrated=False)
     if not service.sees_all(actor):
@@ -138,7 +126,7 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
     rows = rows.order_by("-created_at")
     total = rows.count()
     totals_amount = sum((row for row in rows.values_list("total_amount", flat=True)), ZERO)
-    page_size = page_size if page_size in (25, 50, 100) else 25
+    page_size = page_size if page_size in (25, 50, 100) else 50
     chunk = list(rows[(page - 1) * page_size: page * page_size])
     project_map = projects.project_brief(list({str(r.project_id) for r in chunk}))
     article_map = refdata.article_brief(list({str(r.article_id) for r in chunk if r.article_id}))
@@ -152,7 +140,7 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
         "article_id": str(r.article_id) if r.article_id else None,
         "article_name": article_map.get(str(r.article_id), {}).get("name"),
         "purchase_type": r.purchase_type, "need_date": r.need_date,
-        "total_amount": r.total_amount, "currency": r.currency,
+        "total_amount": r.total_amount, "currency_code": r.currency_code,
         "current_holders": holders.get(str(r.pk)),
     } for r in chunk]
     return {"items": items, "total": total, "page": page, "page_size": page_size,

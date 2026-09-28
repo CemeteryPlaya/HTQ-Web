@@ -8,7 +8,7 @@ import pytest
 from django.utils import timezone
 
 from apps.bpp.models import AuditLog, PurchaseRequestItem
-from apps.bpp.services.requests import plan
+from apps.bpp.services.plan import service as plan
 from apps.bpp.services.requests import requests as service
 from apps.bpp.tests import stage2 as s
 from htqweb.errors import DomainError
@@ -40,10 +40,10 @@ def test_positions_of_different_articles_are_br021(company_context):
     second = _approved(slug, sn, proj, s.article("T-PIPE", "Трубы", "supply"), 200)
     ids = [str(first.items.get().id), str(second.items.get().id)]
     with pytest.raises(DomainError) as exc:
-        plan.validate_selection(sn, ids, target="agreement")
-    assert exc.value.code == "BR-021"
+        plan.validate_selection(sn, ids, target="contract")
+    assert exc.value.code == "E-PLN-01"
     assert exc.value.message == ("Для одного документа выберите позиции одного проекта и "
-                                 "одной статьи.")
+                                 "одной статьи")
 
 
 def test_valid_selection_prepares_the_wizard(company_context):
@@ -107,3 +107,16 @@ def test_reassign_moves_positions_and_is_audited(company_context):
     with pytest.raises(DomainError) as exc:
         plan.reassign(sn, [str(req.items.get().id)], to_user_id=s.SN)
     assert exc.value.status == 403
+
+
+def test_rejected_and_cancelled_requests_are_not_in_the_plan(company_context):
+    slug = company_context["slug"]
+    proj = _setup(slug)
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    rejected = service.submit(sn, service.create_draft(sn, {
+        **s.header(proj, s.metal()), "items": s.items((1, 100))}).id, expected_version=None)
+    s.decide(rejected, s.TD, "reject", "Закупка не требуется в этом году")
+    cancelled = _approved(slug, sn, proj, s.metal(), 200)
+    service.cancel(s.actor(slug, s.FD, "bpp-fd"), cancelled.id, expected_version=None,
+                   comment="Проект заморожен заказчиком")
+    assert plan.plan_items(sn)["items"] == []

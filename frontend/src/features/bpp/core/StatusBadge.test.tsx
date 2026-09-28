@@ -9,7 +9,7 @@ import { StatusBadge } from './StatusBadge';
 
 describe('StatusBadge', () => {
   it('известный статус — переведённая подпись и тон', () => {
-    render(<StatusBadge kind="request" status="on_review" />);
+    render(<StatusBadge kind="request" status="in_approval" />);
     const badge = screen.getByText('На согласовании');
     expect(badge).toHaveAttribute('data-tone', 'progress');
   });

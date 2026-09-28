@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from apps.bpp.models import Budget, BudgetStatus, BudgetVersion, BudgetVersionStatus
+from apps.bpp.models import Budget, BudgetStatus, BudgetVersion, VersionState
 from apps.bpp.services.actor import ROLE_GROUP, Actor
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
@@ -69,7 +69,7 @@ def _totals(rows: list[dict]) -> dict:
 def _version_out(version: BudgetVersion | None, names: dict[int, str]) -> dict | None:
     if version is None:
         return None
-    return {"id": str(version.id), "version_no": version.version_no, "status": version.status,
+    return {"id": str(version.id), "version_no": version.version_no, "state": version.state,
             "comment": version.comment, "approved_at": version.approved_at,
             "approved_by": version.approved_by,
             "approved_by_name": names.get(version.approved_by)}
@@ -83,7 +83,7 @@ def _names(user_ids) -> dict[int, str]:
 def card(actor: Actor, budget: Budget) -> dict:
     project = projects.project_brief([str(budget.project_id)]).get(str(budget.project_id)) or {}
     active = budget.active_version
-    draft = budget.versions.filter(status=BudgetVersionStatus.DRAFT).first()
+    draft = budget.versions.filter(state=VersionState.DRAFT).first()
     committed = calc.committed_by_article(budget.project_id)
     # Черновик бюджета — единственная версия и она же в форме; задействовано
     # по нему ещё не показывается (ТЗ §6.4: «после первого утверждения»).
@@ -95,7 +95,7 @@ def card(actor: Actor, budget: Budget) -> dict:
                     active.approved_by if active else None])
     return {
         "id": str(budget.id), "number": budget.number, "status": budget.status,
-        "version": budget.version, "currency": budget.currency,
+        "version": budget.version, "currency_code": budget.currency_code,
         "project": {"id": str(budget.project_id), "code": project.get("code"),
                     "name": project.get("name"),
                     "customer_name": project.get("customer_name"),
@@ -115,7 +115,7 @@ def card(actor: Actor, budget: Budget) -> dict:
 
 
 def registry(actor: Actor, *, status: str | None = None, project_id: str | None = None,
-             page: int = 1, page_size: int = 25) -> dict:
+             page: int = 1, page_size: int = 50) -> dict:
     """Реестр L-01: бюджеты видимых проектов со своими итогами."""
     rows = Budget.objects.all().order_by("-created_at")
     if status:
@@ -125,7 +125,7 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
     if not actor.sees_all_projects:
         rows = rows.filter(project_id__in=list(actor.member_project_ids))
     total = rows.count()
-    page_size = max(1, min(int(page_size or 25), 100))
+    page_size = max(1, min(int(page_size or 50), 100))
     chunk = list(rows.select_related("active_version")[(page - 1) * page_size: page * page_size])
     briefs = projects.project_brief([str(b.project_id) for b in chunk])
     names = _names([b.active_version.approved_by for b in chunk if b.active_version])
@@ -138,7 +138,7 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
         project = briefs.get(str(budget.project_id), {})
         items.append({
             "id": str(budget.id), "number": budget.number, "status": budget.status,
-            "currency": budget.currency,
+            "currency_code": budget.currency_code,
             "project": {"id": str(budget.project_id), "code": project.get("code"),
                         "name": project.get("name")},
             "version_no": budget.active_version.version_no if budget.active_version else 1,
@@ -152,14 +152,14 @@ def registry(actor: Actor, *, status: str | None = None, project_id: str | None 
 
 
 def versions(actor: Actor, budget: Budget) -> list[dict]:
-    rows = list(budget.versions.exclude(status=BudgetVersionStatus.DRAFT))
+    rows = list(budget.versions.exclude(state=VersionState.DRAFT))
     names = _names([v.approved_by for v in rows])
     return [_version_out(version, names) for version in rows]
 
 
 def version_snapshot(actor: Actor, budget: Budget, version_no: int) -> dict:
     version = budget.versions.filter(version_no=version_no).exclude(
-        status=BudgetVersionStatus.DRAFT).first()
+        state=VersionState.DRAFT).first()
     if version is None:
         from htqweb.errors import DomainError
         raise DomainError("E-NOT-FOUND", "Версия бюджета не найдена.", status=404)

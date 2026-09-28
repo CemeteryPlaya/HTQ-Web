@@ -15,7 +15,7 @@ const t = i18n.t.bind(i18n);
 describe('statusColumn', () => {
   it('рисует StatusBadge по коду строки', () => {
     const column = statusColumn<{ status: string }>(t, 'request');
-    render(<>{column.render!({ status: 'on_review' })}</>);
+    render(<>{column.render!({ status: 'in_approval' })}</>);
     expect(screen.getByText('На согласовании')).toBeInTheDocument();
   });
 });

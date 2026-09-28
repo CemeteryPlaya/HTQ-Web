@@ -21,7 +21,7 @@ from apps.bpp.models import (
     BudgetLine,
     BudgetStatus,
     BudgetVersion,
-    BudgetVersionStatus,
+    VersionState,
     PurchaseRequest,
     RequestStatus,
 )
@@ -122,12 +122,12 @@ def _clean_lines(lines: list[dict], *, keep_articles: set[str] = frozenset()) ->
                                        "message": "Статья не найдена"}])
         if not brief["is_active"] and article_id not in keep_articles:
             raise DomainError(
-                "E-REF-03", f"Статья «{brief['name']}» в архиве — в бюджет её не добавить.",
+                "E-REF-03", f"Статья „{brief['name']}“ в архиве — в бюджет её не добавить.",
                 fields=[{"field": f"lines[{index - 1}].article_id",
                          "message": "Статья в архиве"}])
         if article_id in seen:
             raise DomainError(
-                "BR-002", f"Статья «{brief['name']}» уже есть в бюджете, строка {seen[article_id]}.",
+                "E-BUD-04", f"Статья „{brief['name']}“ уже есть в бюджете, строка {seen[article_id]}.",
                 fields=[{"field": f"lines[{index - 1}].article_id",
                          "message": "Статья уже есть в бюджете"}])
         seen[article_id] = index
@@ -164,7 +164,7 @@ def _touch(budget: Budget, actor_id: int, *fields: str) -> None:
 
 
 def _draft_version(budget: Budget) -> BudgetVersion | None:
-    return budget.versions.filter(status=BudgetVersionStatus.DRAFT).first()
+    return budget.versions.filter(state=VersionState.DRAFT).first()
 
 
 def _lock(budget_id) -> Budget:
@@ -174,13 +174,17 @@ def _lock(budget_id) -> Budget:
     return budget
 
 
+def _state_error(action: str, budget: Budget, status_label: str) -> DomainError:
+    """E-STS-01 — переход не из таблицы ТЗ §15.1."""
+    return DomainError(
+        "E-STS-01", f"Нельзя {action} бюджет {budget.number} в статусе „{status_label}“.",
+        status=409)
+
+
 def _require_status(budget: Budget, *statuses: str, action: str) -> None:
+    """``action`` — глагол: «утвердить», «закрыть»…"""
     if budget.status not in statuses:
-        raise DomainError(
-            "E-STATE-01",
-            f"Бюджет {budget.number} в статусе «{budget.get_status_display()}» — "
-            f"{action} сейчас недоступно.",
-            status=409)
+        raise _state_error(action, budget, budget.get_status_display())
 
 
 # ── операции ────────────────────────────────────────────────────────────
@@ -193,14 +197,14 @@ def create(actor: Actor, *, project_id, currency: str = "KZT", date_from=None, d
     existing = Budget.objects.filter(project_id=project_id).first()
     if existing is not None:
         raise DomainError(
-            "BR-001",
+            "E-BUD-03",
             f"У проекта {project['code']} уже есть бюджет {existing.number}. Откройте его и "
             f"выполните корректировку.",
             fields=[{"field": "project_id", "message": "У проекта уже есть бюджет",
-                     "budget_id": str(existing.pk)}])
+                     "existing_id": str(existing.pk)}])
     cleaned = _clean_lines(lines)
     budget = Budget.objects.create(
-        project_id=project_id, number=f"БДЖ-{project['code']}", currency=currency or "KZT",
+        project_id=project_id, number=f"БДЖ-{project['code']}", currency_code=currency or "KZT",
         date_from=date_from, date_to=date_to, created_by=actor.user_id,
         updated_by=actor.user_id)
     version = BudgetVersion.objects.create(budget=budget, version_no=1,
@@ -217,15 +221,15 @@ def update_draft(actor: Actor, budget_id, *, expected_version: int | None, curre
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets", "edit", "на правку", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.DRAFT, action="правка черновика")
+    _require_status(budget, BudgetStatus.DRAFT, action="править")
     version = budget.versions.get(version_no=1)
     before = _snapshot(version)
     if lines is not None:
         _write_lines(version, _clean_lines(lines), actor.user_id)
     if currency:
-        budget.currency = currency
+        budget.currency_code = currency
     budget.date_from, budget.date_to = date_from, date_to
-    _touch(budget, actor.user_id, "currency", "date_from", "date_to")
+    _touch(budget, actor.user_id, "currency_code", "date_from", "date_to")
     audit.record(budget, "updated", actor_id=actor.user_id,
                  changes={"lines": {"before": before, "after": _snapshot(version)}})
     return budget
@@ -236,18 +240,18 @@ def approve(actor: Actor, budget_id, *, expected_version: int | None) -> Budget:
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets.approve", "edit", "на утверждение", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.DRAFT, action="утверждение")
+    _require_status(budget, BudgetStatus.DRAFT, action="утвердить")
     version = budget.versions.get(version_no=1)
     total = sum((line.limit_amount for line in version.lines.all()), Decimal("0"))
     if not version.lines.exists() or total <= 0:
         raise DomainError(
-            "E-BUD-04", "Утвердить можно бюджет хотя бы с одной строкой и суммой лимитов "
+            "E-BUD-08", "Утвердить можно бюджет хотя бы с одной строкой и суммой лимитов "
                         "больше нуля.",
             fields=[{"field": "lines", "message": "Σ лимитов должна быть > 0"}])
     now = timezone.now()
-    version.status = BudgetVersionStatus.ACTIVE
+    version.state = VersionState.ACTIVE
     version.approved_at, version.approved_by = now, actor.user_id
-    version.save(update_fields=["status", "approved_at", "approved_by", "updated_at"])
+    version.save(update_fields=["state", "approved_at", "approved_by", "updated_at"])
     budget.status, budget.active_version = BudgetStatus.APPROVED, version
     _touch(budget, actor.user_id, "status", "active_version")
     audit.record(budget, "approved", actor_id=actor.user_id,
@@ -260,10 +264,9 @@ def start_correction(actor: Actor, budget_id, *, expected_version: int | None) -
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets.approve", "edit", "на корректировку", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.APPROVED, action="корректировка")
+    _require_status(budget, BudgetStatus.APPROVED, action="корректировать")
     if _draft_version(budget) is not None:
-        raise DomainError("E-STATE-01", f"Корректировка бюджета {budget.number} уже открыта.",
-                          status=409)
+        raise _state_error("начать корректировку", budget, "Корректировка открыта")
     active = budget.active_version
     draft = BudgetVersion.objects.create(
         budget=budget, version_no=active.version_no + 1, created_by=actor.user_id,
@@ -280,23 +283,24 @@ def start_correction(actor: Actor, budget_id, *, expected_version: int | None) -
 def _correction(budget: Budget) -> BudgetVersion:
     draft = _draft_version(budget)
     if draft is None:
-        raise DomainError("E-STATE-01",
-                          f"У бюджета {budget.number} нет открытой корректировки.", status=409)
+        raise _state_error("утвердить или отменить корректировку", budget,
+                           budget.get_status_display())
     return draft
 
 
 def _check_kept_articles(budget: Budget, cleaned: list[dict]) -> None:
-    """Строки действующей версии из корректировки не удаляются — только
-    уменьшается лимит (ТЗ §6.4: «Удалить строку» — только черновик или новая
-    строка корректировки)."""
+    """Строку с «Задействовано» > 0 из корректировки не удалить — только
+    уменьшить лимит не ниже задействованного (ТЗ §6.4)."""
     kept = {line["article_id"] for line in cleaned}
+    committed = calc.committed_by_article(budget.project_id)
     for line in budget.active_version.lines.all():
-        if str(line.article_id) not in kept:
+        used = committed.get(str(line.article_id), Decimal("0"))
+        if str(line.article_id) not in kept and used > 0:
             raise DomainError(
-                "E-BUD-05",
-                f"Строку статьи «{_name(line.article_id)}» в корректировке удалить нельзя — "
-                f"уменьшите её лимит.",
-                fields=[{"field": "lines", "message": "Строка действующей версии"}])
+                "E-BUD-09",
+                f"Строку статьи „{_name(line.article_id)}“ удалить нельзя: по ней задействовано "
+                f"{fmt(used, budget.currency_code)}. Уменьшите лимит не ниже этой суммы.",
+                fields=[{"field": "lines", "message": "По строке есть задействованное"}])
 
 
 def _name(article_id) -> str:
@@ -337,7 +341,7 @@ def approve_correction(actor: Actor, budget_id, *, expected_version: int | None,
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "BR-060", f"Комментарий к корректировке — не короче {COMMENT_MIN} символов.",
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     active = budget.active_version
     list(BudgetLine.objects.select_for_update().filter(version=active))
@@ -348,18 +352,18 @@ def approve_correction(actor: Actor, budget_id, *, expected_version: int | None,
         limit = line.limit_amount if line else Decimal("0")
         if used > limit:
             raise DomainError(
-                "BR-004",
-                f"Лимит статьи «{_name(article_id)}» не может быть меньше задействованной "
-                f"суммы {fmt(used, budget.currency)}.",
+                "E-BUD-05",
+                f"Лимит статьи „{_name(article_id)}“ не может быть меньше задействованной "
+                f"суммы {fmt(used, budget.currency_code)}.",
                 fields=[{"field": "lines", "message": "Лимит ниже задействованного",
                          "article_id": article_id, "committed": str(used)}])
     before = _snapshot(active)
     now = timezone.now()
-    active.status = BudgetVersionStatus.ARCHIVED
-    active.save(update_fields=["status", "updated_at"])
-    draft.status, draft.comment = BudgetVersionStatus.ACTIVE, comment
+    active.state = VersionState.ARCHIVED
+    active.save(update_fields=["state", "updated_at"])
+    draft.state, draft.comment = VersionState.ACTIVE, comment
     draft.approved_at, draft.approved_by = now, actor.user_id
-    draft.save(update_fields=["status", "comment", "approved_at", "approved_by", "updated_at"])
+    draft.save(update_fields=["state", "comment", "approved_at", "approved_by", "updated_at"])
     budget.active_version = draft
     _touch(budget, actor.user_id, "active_version")
     audit.record(budget, "correction_approved", actor_id=actor.user_id, comment=comment,
@@ -389,19 +393,18 @@ def close(actor: Actor, budget_id, *, expected_version: int | None, comment: str
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets.approve", "edit", "на закрытие", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.APPROVED, action="закрытие")
+    _require_status(budget, BudgetStatus.APPROVED, action="закрыть")
     if _draft_version(budget) is not None:
-        raise DomainError("E-STATE-01", f"У бюджета {budget.number} открыта корректировка — "
-                                        f"утвердите или отмените её.", status=409)
-    pending = list(PurchaseRequest.objects.filter(
-        project_id=budget.project_id, status=RequestStatus.ON_REVIEW)
-        .values_list("number", flat=True)[:5])
+        raise _state_error("закрыть", budget, "Корректировка открыта")
+    pending = PurchaseRequest.objects.filter(
+        project_id=budget.project_id, status=RequestStatus.IN_APPROVAL).count()
     if pending:
         raise DomainError(
             "E-BUD-06",
-            f"Бюджет {budget.number} нельзя закрыть: заявки на согласовании — "
-            f"{', '.join(pending)}. Дождитесь решения или отзовите их.",
-            status=409)
+            f"Бюджет нельзя закрыть: {pending} заявок на согласовании. Дождитесь решений "
+            f"или отзовите заявки.",
+            status=409, fields=[{"field": "status", "message": "Есть заявки на согласовании",
+                                 "pending": pending}])
     budget.status, budget.status_comment = BudgetStatus.CLOSED, (comment or "")[:1000]
     _touch(budget, actor.user_id, "status", "status_comment")
     audit.record(budget, "closed", actor_id=actor.user_id, comment=comment or "")
@@ -413,11 +416,11 @@ def reopen(actor: Actor, budget_id, *, expected_version: int | None, comment: st
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets.approve", "edit", "на повторное открытие", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.CLOSED, action="повторное открытие")
+    _require_status(budget, BudgetStatus.CLOSED, action="открыть повторно")
     comment = (comment or "").strip()
     if len(comment) < COMMENT_MIN:
         raise DomainError(
-            "BR-060", f"Комментарий к открытию бюджета — не короче {COMMENT_MIN} символов.",
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
             fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
     budget.status, budget.status_comment = BudgetStatus.APPROVED, comment
     _touch(budget, actor.user_id, "status", "status_comment")
@@ -430,7 +433,7 @@ def delete_draft(actor: Actor, budget_id, *, expected_version: int | None) -> No
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets", "delete", "на удаление", budget)
     check_version(budget, expected_version)
-    _require_status(budget, BudgetStatus.DRAFT, action="удаление")
+    _require_status(budget, BudgetStatus.DRAFT, action="удалить")
     # Журнал сохраняет факт удаления (ТЗ §6.6): запись — до удаления, ключ
     # объекта в журнале остаётся.
     audit.record(budget, "deleted", actor_id=actor.user_id,

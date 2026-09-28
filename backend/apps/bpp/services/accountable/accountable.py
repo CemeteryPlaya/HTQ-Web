@@ -88,10 +88,11 @@ def _require_owner(actor: Actor, req: AccountableFundsRequest, action: str) -> N
 
 
 def _require_status(req: AccountableFundsRequest, statuses, action: str) -> None:
+    """E-STS-01; ``action`` — глагол: «отправить», «отметить выдачу»…"""
     if req.status not in statuses:
         raise DomainError(
-            "E-STATE-01", f"Заявка {req.number} в статусе «{req.get_status_display()}» — "
-                          f"{action} сейчас недоступно.", status=409)
+            "E-STS-01", f"Нельзя {action} заявку {req.number} в статусе "
+                        f"„{req.get_status_display()}“.", status=409)
 
 
 def allowed_actions(actor: Actor, req: AccountableFundsRequest) -> list[str]:
@@ -121,7 +122,7 @@ def _check_budget(req: AccountableFundsRequest, *, lock: bool) -> None:
         raise DomainError(
             "E-BUD-01",
             f"Сумма заявки {fmt(req.amount, req.currency)} превышает доступный остаток "
-            f"статьи «{budget_balance.article_name(req.article_id)}» "
+            f"статьи „{budget_balance.article_name(req.article_id)}“ "
             f"({fmt(figures['available'], req.currency)}) на {fmt(over, req.currency)}. "
             f"Уменьшите сумму или обратитесь к финансовому директору за корректировкой лимита.",
             fields=[{"field": "amount", "message": "Сумма превышает остаток",
@@ -137,7 +138,7 @@ def _check_source(actor: Actor, project_id, article_id) -> str:
         raise _deny(f"Вы не работаете с проектом {brief['code']}.")
     budget = budget_balance.approved_budget(project_id)  # E-BUD-02
     budget_balance.active_line(project_id, article_id)   # E-BUD-03
-    return budget.currency
+    return budget.currency_code
 
 
 # ── заявка ──────────────────────────────────────────────────────────────
@@ -170,7 +171,7 @@ def update_draft(actor: Actor, request_id, *, expected_version, data: dict):
     req = _lock(request_id)
     req.assert_editable()
     _require_owner(actor, req, "Править заявку")
-    _require_status(req, (AccountableStatus.DRAFT,), "правка")
+    _require_status(req, (AccountableStatus.DRAFT,), "править")
     check_version(req, expected_version)
     before = {"amount": str(req.amount), "goal": req.goal, "article_id": str(req.article_id)}
     if data.get("project_id") or data.get("article_id"):
@@ -198,7 +199,7 @@ def delete_draft(actor: Actor, request_id, *, expected_version) -> None:
     req = _lock(request_id)
     req.assert_editable()
     _require_owner(actor, req, "Удалить заявку")
-    _require_status(req, (AccountableStatus.DRAFT,), "удаление")
+    _require_status(req, (AccountableStatus.DRAFT,), "удалить")
     check_version(req, expected_version)
     audit.record(req, "deleted", actor_id=actor.user_id, changes={"number": req.number})
     req.delete()
@@ -209,7 +210,7 @@ def submit(actor: Actor, request_id, *, expected_version):
     req = _lock(request_id)
     req.assert_editable()
     _require_owner(actor, req, "Отправить заявку")
-    _require_status(req, (AccountableStatus.DRAFT,), "отправка")
+    _require_status(req, (AccountableStatus.DRAFT,), "отправить")
     check_version(req, expected_version)
     _check_budget(req, lock=True)
     try:
@@ -230,7 +231,7 @@ def mark_paid(actor: Actor, request_id, *, expected_version):
     req = _lock(request_id)
     if not actor.can("bpp.accountable.payment", "edit"):
         raise _deny("Отметить выдачу подотчётных средств может бухгалтер.")
-    _require_status(req, (AccountableStatus.AWAITING_ACCOUNTING,), "отметка выдачи")
+    _require_status(req, (AccountableStatus.AWAITING_ACCOUNTING,), "отметить выдачу по")
     check_version(req, expected_version)
     req.status = AccountableStatus.AWAITING_REPORT
     req.paid_at, req.paid_by = timezone.now(), actor.user_id
@@ -272,7 +273,7 @@ def _check_capacity(req: AccountableFundsRequest, amount: Decimal, *, exclude_re
 def add_report(actor: Actor, request_id, *, expense_name: str, amount, upload) -> AdvanceReport:
     req = _lock(request_id)
     _require_owner(actor, req, "Добавлять авансовые отчёты")
-    _require_status(req, (AccountableStatus.AWAITING_REPORT,), "авансовый отчёт")
+    _require_status(req, (AccountableStatus.AWAITING_REPORT,), "добавить авансовый отчёт к")
     amount = money(amount)
     if amount <= 0:
         raise DomainError("E-VAL-01", "Сумма отчёта должна быть больше нуля.",
@@ -302,7 +303,7 @@ def submit_report(actor: Actor, report_id) -> AdvanceReport:
         raise DomainError("E-NOT-FOUND", "Авансовый отчёт не найден.", status=404)
     req = _lock(report.request_id)
     _require_owner(actor, req, "Отправлять авансовые отчёты")
-    _require_status(req, (AccountableStatus.AWAITING_REPORT,), "отправка отчёта")
+    _require_status(req, (AccountableStatus.AWAITING_REPORT,), "отправить отчёт по")
     report.assert_editable()
     _check_capacity(req, report.amount, exclude_report_id=report.pk)
     try:
