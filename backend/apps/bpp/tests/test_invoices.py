@@ -189,10 +189,13 @@ def test_ac008_invoice_over_agreement_remaining(company_context):
 def test_terminated_agreement_takes_no_new_invoices(company_context):
     slug = company_context["slug"]
     sn, _, agr = _active_agreement(slug, 1_000_000)
+    assert "create_invoice" in agreement_service.allowed_actions(sn, agr)
     inv = service.create_from_agreement(sn, agr.id)
     inv, _ = service.update_draft(sn, inv.id, expected_version=None, data={"ext_number": "9"})
     agreement_service.terminate(_fd(slug), agr.id, expected_version=None,
                                 comment="Поставщик сорвал сроки")
+    agr.refresh_from_db()
+    assert "create_invoice" not in agreement_service.allowed_actions(sn, agr)
     with pytest.raises(DomainError) as exc:
         service.submit(sn, inv.id, expected_version=None)
     assert exc.value.code == "BR-046" and "расторгнут" in exc.value.message
@@ -406,7 +409,7 @@ def test_http_create_patch_and_registry_tabs(company_context):
     assert created.status_code == 201, created.content
     card = created.json()
     assert card["number"].startswith("СЧ-") and card["basis"] == "no_contract"
-    assert card["threshold"] == "4325000.00"
+    assert card["threshold"] == "4325000.00" and card["initiator_role"] == "sn"
 
     patched = client.patch(f"{BASE}/invoices/{card['id']}", data={
         "version": card["version"], "counterparty_id": str(cp.pk), "ext_number": "7"},

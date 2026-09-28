@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDate, formatMoney } from '../format';
+import { shownQty } from '../plan/planSelection';
 
 import { invoiceApi, invoiceKey } from './api';
 
@@ -129,7 +130,7 @@ export default function InvoiceSignoffView({ id, embedded = false }: Props) {
             <tr key={line.id} className="border-b last:border-0">
               <td className="py-1">{line.sys_number}</td>
               <td className="py-1">{line.name}</td>
-              <td className="py-1 text-right">{line.qty.replace('.', ',')}</td>
+              <td className="py-1 text-right">{shownQty(line.qty)}</td>
               <td className="py-1 text-right">{formatMoney(line.plan_amount)}</td>
               <td className="py-1 text-right">{formatMoney(line.amount)}</td>
             </tr>

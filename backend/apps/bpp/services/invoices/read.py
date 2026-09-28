@@ -112,6 +112,7 @@ def card(actor: Actor, inv: Invoice, *, vat_warning: str | None = None) -> dict:
         "approval_state": inv.approval_state, "version": inv.version,
         "author_id": inv.author_id, "author_name": names.get(inv.author_id),
         "created_at": inv.created_at, "basis": inv.basis,
+        "initiator_role": inv.initiator_role,
         "agreement": None if agr is None else {
             "id": str(agr.pk), "number": agr.number, "ext_number": agr.ext_number,
             "ext_date": agr.ext_date, "is_open": agr.is_open, "status": agr.status,

@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDate, formatMoney } from '../format';
+import { shownQty } from '../plan/planSelection';
 
 import { agreementApi, agreementKey } from './api';
 
@@ -122,7 +123,7 @@ export default function AgreementSignoffView({ id, embedded = false }: Props) {
               <tr key={item.id} className="border-b last:border-0">
                 <td className="py-1">{item.sys_number}</td>
                 <td className="py-1">{item.name}</td>
-                <td className="py-1 text-right">{item.qty.replace('.', ',')} {item.uom ?? ''}</td>
+                <td className="py-1 text-right">{shownQty(item.qty)} {item.uom ?? ''}</td>
                 <td className="py-1 text-right">{formatMoney(item.plan_amount)}</td>
                 <td className="py-1 text-right">
                   {item.amount === null ? '—' : formatMoney(item.amount)}

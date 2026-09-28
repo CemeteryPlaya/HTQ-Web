@@ -53,6 +53,7 @@ export interface InvoiceCard {
   author_name: string | null;
   created_at: string;
   basis: 'no_contract' | 'contract';
+  initiator_role: 'sn' | 'pm' | '';
   agreement: {
     id: string; number: string; ext_number: string; ext_date: string | null;
     is_open: boolean; status: string; effective_amount: Money | null; remaining: Money | null;
@@ -129,4 +130,72 @@ export const invoiceApi = {
       .then((r) => r.data),
   save: (id: string, key: string, body: InvoicePatch & { version: number }) =>
     api.patch<InvoiceCard>(path(id), body, withKey(key)).then((r) => r.data),
+  remove: (id: string, key: string, version: number) =>
+    api.delete(path(id), { ...withKey(key), params: { version } }).then(() => undefined),
+  submit: (id: string, key: string, version: number, counterpartyConfirmed: boolean) =>
+    api.post<InvoiceCard>(path(`${id}/submit`),
+      { version, counterparty_confirmed: counterpartyConfirmed }, withKey(key))
+      .then((r) => r.data),
+  cancel: (id: string, key: string, version: number, comment: string) =>
+    api.post<InvoiceCard>(path(`${id}/cancel`), { version, comment }, withKey(key))
+      .then((r) => r.data),
+  decide: (id: string, key: string, body: {
+    decision: 'pay' | 'not_payable' | 'return'; planned_pay_date?: string | null; comment?: string;
+  }) => api.post<InvoiceCard>(path(`${id}/decision`), body, withKey(key)).then((r) => r.data),
+  batchDecision: (key: string, body: {
+    invoice_ids: string[]; decision: 'pay' | 'not_payable'; comment?: string;
+    planned_pay_date?: string;
+  }) => api.post<{ ok: string[]; failed: { id: string; reason: string }[] }>(
+    path('batch-decision'), body, withKey(key)).then((r) => r.data),
+  pay: (id: string, key: string, body: {
+    pay_date: string; amount: string; pp_number?: string; rate?: string | null;
+  }) => api.post<InvoiceCard>(path(`${id}/payments`), body, withKey(key)).then((r) => r.data),
+  unpay: (id: string, markId: string, key: string, comment: string) =>
+    api.post<InvoiceCard>(path(`${id}/payments/${markId}/cancel`), { comment }, withKey(key))
+      .then((r) => r.data),
+  requestDocs: (id: string, key: string, body: {
+    avr: boolean; waybill: boolean; vat_invoice: boolean; comment?: string;
+  }) => api.post<InvoiceCard>(path(`${id}/request-docs`), body, withKey(key)).then((r) => r.data),
+  submitDocs: (id: string, key: string) =>
+    api.post<InvoiceCard>(path(`${id}/submit-docs`), {}, withKey(key)).then((r) => r.data),
+  acceptDocs: (id: string, key: string) =>
+    api.post<InvoiceCard>(path(`${id}/accept-docs`), {}, withKey(key)).then((r) => r.data),
+  returnDocs: (id: string, key: string, comment: string) =>
+    api.post<InvoiceCard>(path(`${id}/return-docs`), { comment }, withKey(key))
+      .then((r) => r.data),
+  /** Порог 1000 МРП на дату счёта (GetMrpThreshold, ТЗ §23); 422 — МРП на дату нет. */
+  threshold: (onDate: string) =>
+    api.get<{ date: string; threshold: Money }>(path('threshold'), { params: { date: onDate } })
+      .then((r) => r.data.threshold),
 };
+
+export const EXPORT_QUEUE_ENDPOINT = apiPath('bpp', 'invoices/export-queue');
+
+export interface InvoiceRow {
+  id: string;
+  number: string;
+  status: string;
+  created_at: string;
+  author_name: string | null;
+  basis: 'no_contract' | 'contract';
+  agreement_number: string | null;
+  project_code: string | null;
+  article_name: string | null;
+  counterparty_name: string | null;
+  counterparty_reg_number: string | null;
+  counterparty_blocked: boolean;
+  ext_number: string;
+  ext_date: string | null;
+  amount: Money;
+  currency_code: string;
+  amount_kzt: Money | null;
+  due_date: string | null;
+  planned_pay_date: string | null;
+  overdue: boolean;
+  docs_required: { avr?: boolean; waybill?: boolean; vat_invoice?: boolean };
+  days_waiting_docs: number | null;
+  recon_status: string;
+  paid_bank_amount: Money;
+  possible_split: boolean;
+  current_holders: CurrentHolders | null;
+}

@@ -37,6 +37,8 @@ import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShe
 import { StatusBadge } from '../core/StatusBadge';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatMoney, parseMoneyInput } from '../format';
+import { INVOICES_BASE, invoiceApi } from '../invoices/api';
+import { shownQty } from '../plan/planSelection';
 
 import {
   AGREEMENT_HISTORY_TYPE, AGREEMENT_SUBJECT, AGREEMENTS_BASE, agreementApi, agreementKey,
@@ -89,7 +91,7 @@ function ExecutionTab({ id }: { id: string }) {
           {data.invoices.map((row) => (
             <TableRow key={row.id}>
               <TableCell>
-                <Link className="text-primary hover:underline" to={`/bpp/invoices/${row.id}`}>{row.number}</Link>
+                <Link className="text-primary hover:underline" to={`${INVOICES_BASE}/${row.id}`}>{row.number}</Link>
               </TableCell>
               <TableCell>{row.ext_number} {row.ext_date ? `от ${formatDate(row.ext_date)}` : ''}</TableCell>
               <TableCell className="text-right">{formatMoney(row.amount, row.currency_code)}</TableCell>
@@ -220,6 +222,14 @@ export function AgreementFormPage() {
         const created = await agreementApi.supplement(card.id, key);
         apply(created);
         navigate(`${AGREEMENTS_BASE}/${created.id}`);
+      },
+    },
+    create_invoice: {
+      label: t('bpp.agreements.createInvoice', 'Создать счёт'),
+      run: async (key) => {
+        const created = await invoiceApi.createFromAgreement(key, card.id);
+        void queryClient.invalidateQueries({ queryKey: ['bpp', 'registry', 'invoices'] });
+        navigate(`${INVOICES_BASE}/${created.id}`);
       },
     },
     delete: {
@@ -424,13 +434,13 @@ export function AgreementFormPage() {
                           {item.name}
                           {error && <p className="text-xs text-destructive">{error}</p>}
                         </TableCell>
-                        <TableCell className="text-right">{item.qty_available.replace('.', ',')} {item.uom ?? ''}</TableCell>
+                        <TableCell className="text-right">{shownQty(item.qty_available)} {item.uom ?? ''}</TableCell>
                         <TableCell className="text-right">
                           {editable ? (
                             <Input className="text-right" inputMode="decimal" value={row.qty}
                               aria-label={`${t('bpp.agreements.qty', 'Кол-во')} ${item.sys_number}`}
                               onChange={(event) => patch({ qty: event.target.value })} />
-                          ) : item.qty.replace('.', ',')}
+                          ) : shownQty(item.qty)}
                         </TableCell>
                         <TableCell className="text-right">{formatMoney(item.plan_amount)}</TableCell>
                         {!form.is_open && (

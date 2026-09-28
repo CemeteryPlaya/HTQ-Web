@@ -154,6 +154,8 @@ def allowed_actions(actor: Actor, agr: Agreement) -> list[str]:
             actions += ["fulfil", "terminate"]
         if agr.parent_agreement_id is None and actor.can("bpp.agreements", "create"):
             actions.append("supplement")
+        if agr.parent_agreement_id is None and actor.can("bpp.invoices", "create"):
+            actions.append("create_invoice")
     actions.append("print")
     return actions
 
