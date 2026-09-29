@@ -1,6 +1,6 @@
 {
   "uid": "htqweb-bpp",
-  "title": "HTQWeb · БЗО: заявки, сверка, выписки",
+  "title": "HTQWeb · БЗО: заявки, сверка, выписки, счета",
   "tags": [
     "htqweb",
     "business",
@@ -19,7 +19,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Модуль «Бюджет, закупки и оплаты» (apps/bpp/metrics.py, задача A3.2). Считает Celery-beat раз в 60 с по каждой компании (метка company); пустая панель = метрики нет, а не ноль (см. apps/core/metrics.py). Итог ночной сверки «Задействовано» не пересчитывается каждую минуту: его пишет ночная задача (02:30) в настройку модуля committed_check_last (D-S3-4).",
+  "description": "Модуль «Бюджет, закупки и оплаты» (apps/bpp/metrics.py, задача A3.2). Считает Celery-beat раз в 60 с по каждой компании (метка company); пустая панель = метрики нет, а не ноль (см. apps/core/metrics.py). Итог ночной сверки «Задействовано» не пересчитывается каждую минуту: его пишет ночная задача (02:30) в настройку модуля committed_check_last (D-S3-4). Очереди счетов — по статусам, как вкладки реестра счетов (§10.5).",
   "templating": {
     "list": [
       {
@@ -285,6 +285,134 @@
       ],
       "description": "Загрузки выписок в статусе «Ошибка загрузки», созданные за последние 7 дней. Причина — в карточке загрузки (поле failure). Правила нет: автор загрузки видит ошибку на экране сразу; всплеск у многих компаний разом — повод смотреть шаблоны выписок.",
       "id": 7
+    },
+    {
+      "type": "row",
+      "title": "Счета",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": [],
+      "id": 103
+    },
+    {
+      "type": "stat",
+      "title": "На решение ФД",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_awaiting_fd{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Счета «На рассмотрении ФД» — вкладка реестра «На решение ФД» (без строк переноса из contracts). Справочная цифра: решение ФД — задача согласования, и каждому ФД её адресно показывает ежедневная сводка «ждут вашего решения» — см. шапку rules.yml.",
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "К оплате (очередь БУХ)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 6, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_to_pay{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Счета «К оплате» и «Оплачено частично» — ровно вкладка реестра «К оплате»: остаток частично оплаченного счёта платит тот же бухгалтер. Справочная цифра: это рабочий экран бухгалтерии, ненулевой каждый день.",
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Ждут закрывающих дольше 5 дней",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_closing_docs_overdue{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Оплаченные счета в «Ждёт закрывающих документов», у которых документы запрошены больше 5 календарных дней назад (D-13, Q-C29) — те же «N дн.», что в карточке счёта и в разделе сводки автора. Бизнес-правило htqweb-bpp-closing-docs-overdue (чат бизнес-событий). Какие счета — вкладка «Ожидают документы» реестра счетов.",
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Очереди счетов",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 18, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_awaiting_fd{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "На решение ФД"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_to_pay{company=~\"$company\"})",
+          "refId": "B",
+          "legendFormat": "К оплате"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_closing_docs_overdue{company=~\"$company\"})",
+          "refId": "C",
+          "legendFormat": "Закрывающие > 5 дней"
+        }
+      ],
+      "id": 11
     }
   ]
 }

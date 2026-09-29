@@ -52,6 +52,15 @@
 #
 #   htqweb_bpp_bank_imports_failed — автор загрузки выписки видит ошибку на
 #     экране в ту же минуту; алерт сообщил бы то, что человек уже знает.
+#
+#   htqweb_bpp_invoices_awaiting_fd, htqweb_bpp_invoices_to_pay — очереди
+#     счетов ФД и бухгалтерии. Решение ФД — задача согласования, и каждому ФД
+#     её адресно показывает ежедневная сводка «ждут вашего решения»; «К
+#     оплате» — рабочий экран бухгалтерии, ненулевой каждый рабочий день.
+#     Level-алерт на любую из них горел бы всегда. Панели на дашборде «БЗО»
+#     есть, правил нет. Алертится только htqweb_bpp_invoices_closing_docs_overdue
+#     (группа htqweb-business): это уже не очередь, а просрочка, и её не
+#     видит никто, кроме автора счёта.
 
 apiVersion: 1
 
@@ -2016,6 +2025,56 @@ groups:
             Человек двое суток не может войти на платформу, и об этом не знает
             никто: заявка лежит в списке, куда заходят раз в неделю.
             Решение: /django-admin/ → пользователи → статус «ожидает».
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-bpp-closing-docs-overdue
+        title: "БЗО: закрывающие документы не сданы дольше 5 дней"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # Серия на компанию, без агрегации — уведомление называет
+              # компанию. Таблицы счетов в схеме компании ещё нет (до
+              # migrate_companies) — метрики нет, noDataState: OK.
+              expr: 'htqweb_bpp_invoices_closing_docs_overdue'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "10"
+          threshold: "0"
+          summary: "{{ $values.A }} оплаченных счетов ждут закрывающих документов дольше 5 дней"
+          description: |
+            Счёт оплачен, бухгалтер запросил АВР, накладную или счёт-фактуру,
+            а автор счёта больше 5 календарных дней их не вложил (D-13). Сам
+            автор видит это в ежедневной сводке; правило — для бухгалтерии и
+            ФД: пока документов нет, счёт не закрыть («Закрыт» — только
+            после приёма документов бухгалтером).
+            Какие счета — реестр счетов, вкладка «Ожидают документы» (колонка
+            «ждёт N дн.»). Запрета новых счетов такому контрагенту нет — это
+            решение D-13, а не упущение.
         labels:
           severity: warning
           team: platform
