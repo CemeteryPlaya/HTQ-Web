@@ -231,13 +231,16 @@ def _list_param(request, name: str) -> list[str]:
 @api_view(methods=("GET",), module="bpp", level="read")
 def import_list(request):
     """Реестр L-07 (``{items, total, page, page_size}``) или, с
-    ``?format=xlsx``, его выгрузка — та же фильтрованная выборка."""
+    ``?format=xlsx``, его выгрузка — та же фильтрованная выборка. Быстрый
+    поиск — ``q`` (как у контрагентов, понимается и ``search``): номер
+    загрузки или комментарий."""
     _need_bank(request, "view", "просмотр загрузок выписок")
     params = request.GET
     filters = {"account_ids": _list_param(request, "account_id"),
                "period_from": params.get("period_from") or None,
                "period_to": params.get("period_to") or None,
-               "statuses": _list_param(request, "status")}
+               "statuses": _list_param(request, "status"),
+               "q": params.get("q") or params.get("search") or None}
     if params.get("format") == "xlsx":
         return export.respond(
             request, name="Загрузки выписок", columns=IMPORTS_EXPORT_COLUMNS,

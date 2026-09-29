@@ -1511,7 +1511,11 @@ schema the platform can run on.
 422 `E-REF-02`. Родительская статья (`parent_id` в `POST articles`) — только
 из той же группы, что и новая статья; чужая группа или несуществующий
 родитель — 422 `E-REF-05` с `fields[0].field = "parent_id"` (группу и
-родителя после создания `PATCH` не меняет).
+родителя после создания `PATCH` не меняет). Группа проверяется раньше
+родителя: `group_id` не UUID или несуществующей группы — 422 `E-VAL-01`
+«Группа статей не найдена…» с `fields[0].field = "group_id"`; группа в архиве —
+тот же 422 `E-VAL-01` на `group_id` «Группа статей „…“ в архиве — выберите
+действующую.».
 
 | Коллекция | Методы | Запись |
 |---|---|---|
@@ -1724,14 +1728,10 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | Метод и путь | Что делает |
 |---|---|
 | `POST bank/imports` (multipart: `account_id`, `file`, `period_from?`, `period_to?` — ГГГГ-ММ-ДД, `comment?`) | Загрузить выписку. До сохранения проверяется: счёт действующий (иначе 422 `E-VAL-01`, поле `account_id`), файл до 20 МБ (413 `E-FIL-02`), расширение — формата шаблона счёта (`.txt` — 1С, `.xlsx`, `.csv`/`.txt` — CSV; иначе 422 `E-IMP-01`), у 1С — строка `1CClientBankExchange` (422 `E-IMP-01` «Файл не распознан как выписка формата 1С: нет строки „1CClientBankExchange“. Выберите другой формат или файл.») и `РасчСчет` выбранного счёта (иначе 422 `E-VAL-01`), у Excel/CSV — обязательные колонки шаблона (422 `E-IMP-02` с названием колонки), не больше 10 000 строк/документов (422 `E-IMP-03`). Период — из заголовка файла 1С (`ДатаНачала`/`ДатаКонца`), иначе из формы; «по» ≥ «с» и не позже сегодня (422 `E-VAL-01`). Ответ 201 — карточка (`status: processing`) плюс `warnings`: «Период взят из файла выписки: … Период, указанный в форме, не учтён.» (период из файла 1С заменил другой, введённый в форме) и «Период пересекается с загрузкой ВП-2026-0003 (…) этого счёта: …». Очередь фоновых задач недоступна — загрузка сразу `failed` с причиной. Идемпотентна (`Idempotency-Key`) |
-| `GET bank/imports` (`?account_id=&period_from=&period_to=&status=&page=&page_size=`) | Реестр L-07 `{items, total, page, page_size}` (по умолчанию 50, 25/50/100): `{id, number: "ВП-ГГГГ-0001", account: {id, iban, bank_name, currency}, bank_name, format, period_from, period_to, status: processing\|loaded\|failed\|cancelled, status_label, filename, comment, rows_total, debits, rows_done, duplicates, errors_count, lines, matched, unmatched, author_id, author_name, created_at, finished_at}`, новые сверху. Фильтры: счёт (повторяемый `account_id`), период (пересечение с `period_from`…`period_to`), статус (повторяемый; неизвестный — 422). `?format=xlsx` — выгрузка той же выборки (`export.respond`: до 10 000 строк сразу, больше — фоном) |
+| `GET bank/imports` (`?q=&account_id=&period_from=&period_to=&status=&page=&page_size=`) | Реестр L-07 `{items, total, page, page_size}` (по умолчанию 50, 25/50/100): `{id, number: "ВП-ГГГГ-0001", account: {id, iban, bank_name, currency}, bank_name, format, period_from, period_to, status: processing\|loaded\|failed\|cancelled, status_label, filename, comment, rows_total, debits, rows_done, duplicates, errors_count, lines, matched, unmatched, author_id, author_name, created_at, finished_at}`, новые сверху. Фильтры: счёт (повторяемый `account_id`), период (пересечение с `period_from`…`period_to`), статус (повторяемый; неизвестный — 422); быстрый поиск `q` (понимается и `search`, как у контрагентов) — номер загрузки (`ВП-…`) или комментарий, по вхождению, без регистра. `?format=xlsx` — выгрузка той же выборки (`export.respond`: до 10 000 строк сразу, больше — фоном) |
 | `GET bank/imports/<id>` | Карточка — её опрашивает экран: поля реестра плюс `errors: ["Строка 17: не распознана дата „31.02.2026“", …]` (у выписки 1С без единого поля `ПлательщикСчет`/`ПлательщикИИК` первой идёт «В выписке нет счёта плательщика — списания не определены…»), `failure` (почему вся выписка не загрузилась — статус `failed`; строки такой загрузки отменены; разбор, не закончившийся за 15 минут, периодика `bpp.bank_import_reaper` (раз в 10 минут, веером по компаниям) переводит в `failed` с причиной «Загрузка прервана — повторите загрузку…»), `progress` (0–100, `rows_done / debits`), `file` (карточка файла выписки: `id`, `filename`, `size`, …; ссылка на скачивание — панель `/api/files/v1`) |
 | `GET bank/imports/<id>/lines` (`?match_status=&include_cancelled=&page=&page_size=`) | Строки загрузки по порядку в файле — только действующие; отменённые (строки загрузки `failed`) — с `include_cancelled=1`: `{items: [{id, row_no, doc_date, doc_number, amount, currency, recipient_name, recipient_bin, recipient_iban, purpose, match_status, match_status_label, cancelled_at}], total, page, page_size}` |
 
-`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
-`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
-`bpp.orgbankaccount`, `bpp.statementtemplate`, `bpp.bankimport` — загрузка,
-файл, итог разбора), читает тот, кто видит документ.
 **Параметры модуля** — вкладка «Параметры модуля» экрана «Настройки» (ТЗ §05
 п.10), `views_settings.py`; подмодуля нет, гасятся вместе с модулем. Реестр
 правимых ключей — на сервере (`services/core/settings.EDITABLE`); значение
@@ -1746,6 +1746,10 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `GET settings` | Параметры `[{key, label, value, default, kind: integer, min, max, help, updated_at}]` в порядке реестра; `updated_at: null` — параметр не меняли, действует умолчание. Сейчас один — `counterparty_verified_threshold` (порог метки «Проверенный» контрагента, 1…100, по умолчанию 3) |
 | `PATCH settings/<ключ>` (`{value}`) | Сменить параметр; ответ — параметр в том же виде. Не целое или вне `min`…`max` — 422 `E-VAL-01` с полем `value`; ключ вне реестра (в том числе служебный) — 404 `E-NOT-FOUND`. То же значение — без записи и строки журнала. Идемпотентна (`Idempotency-Key`) |
 
+`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
+`bpp.orgbankaccount`, `bpp.statementtemplate`, `bpp.bankimport` — загрузка,
+файл, итог разбора), читает тот, кто видит документ.
 
 `GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
 ["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в

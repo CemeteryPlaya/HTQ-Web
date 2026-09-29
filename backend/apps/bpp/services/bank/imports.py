@@ -461,8 +461,11 @@ def card(imp: BankImport) -> dict:
     return data
 
 
-def _filtered(*, account_ids=(), period_from=None, period_to=None, statuses=()):
+def _filtered(*, account_ids=(), period_from=None, period_to=None, statuses=(), q=None):
     rows = BankImport.objects.select_related("account").defer("source")
+    text = " ".join(str(q or "").split())
+    if text:  # быстрый поиск: номер загрузки (ВП-…) или комментарий, без регистра
+        rows = rows.filter(Q(number__icontains=text) | Q(comment__icontains=text))
     keys = [key for key in (_as_uuid(value) for value in account_ids) if key]
     if account_ids and not keys:
         return rows.none()
@@ -482,13 +485,14 @@ def _filtered(*, account_ids=(), period_from=None, period_to=None, statuses=()):
     return rows.order_by("-created_at", "-pk")
 
 
-def registry(*, account_ids=(), period_from=None, period_to=None, statuses=(), page: int = 1,
-             page_size: int | None = None) -> dict:
+def registry(*, account_ids=(), period_from=None, period_to=None, statuses=(), q=None,
+             page: int = 1, page_size: int | None = None) -> dict:
     """Реестр L-07: номер, банк, период, дата загрузки, кто, строк,
     сопоставлено, не сопоставлено, статус; фильтры «банк» (счёт), «период»
-    (пересечение), «статус»; пагинация 25/50/100 (по умолчанию 50)."""
+    (пересечение), «статус», быстрый поиск ``q`` (номер загрузки или
+    комментарий, без регистра); пагинация 25/50/100 (по умолчанию 50)."""
     rows = _filtered(account_ids=account_ids, period_from=period_from, period_to=period_to,
-                     statuses=statuses)
+                     statuses=statuses, q=q)
     page_size = page_size if page_size in PAGE_SIZES else DEFAULT_PAGE_SIZE
     page = max(1, page or 1)
     total = rows.count()
@@ -498,17 +502,18 @@ def registry(*, account_ids=(), period_from=None, period_to=None, statuses=(), p
             "page_size": page_size}
 
 
-def export_count(*, account_ids=(), period_from=None, period_to=None, statuses=()) -> int:
+def export_count(*, account_ids=(), period_from=None, period_to=None, statuses=(),
+                 q=None) -> int:
     return _filtered(account_ids=account_ids, period_from=period_from, period_to=period_to,
-                     statuses=statuses).count()
+                     statuses=statuses, q=q).count()
 
 
-def export_rows(*, account_ids=(), period_from=None, period_to=None, statuses=()):
+def export_rows(*, account_ids=(), period_from=None, period_to=None, statuses=(), q=None):
     """Строки выгрузки реестра L-07 — та же выборка, что у страницы, без
     пагинации (и функция пересборки фоновой выгрузки ``export.respond``).
     Видимость одна на всех держателей ``bpp.bank`` view."""
     rows = list(_with_counts(_filtered(account_ids=account_ids, period_from=period_from,
-                                       period_to=period_to, statuses=statuses)))
+                                       period_to=period_to, statuses=statuses, q=q)))
     names = _names([imp.author_id for imp in rows])
     for imp in rows:
         item = _brief(imp, names)

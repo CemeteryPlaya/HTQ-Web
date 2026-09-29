@@ -191,9 +191,13 @@ describe('useRegistryState — страница и поиск в адресе', 
   beforeEach(() => window.localStorage.clear());
   afterEach(() => window.localStorage.clear());
 
-  function renderWithUrl(entry: string) {
-    const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(MemoryRouter, { initialEntries: [entry] }, children);
+  /** `previous` — страница, с которой пришли в реестр: по ней видно, что
+   * правка адреса не добавила шагов «Назад». */
+  function renderWithUrl(entry: string, previous?: string) {
+    const entries = previous ? [previous, entry] : [entry];
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(
+      MemoryRouter, { initialEntries: entries, initialIndex: entries.length - 1 }, children,
+    );
     return renderHook(() => {
       const [params, setParams] = useSearchParams();
       const location = useLocation();
@@ -213,6 +217,39 @@ describe('useRegistryState — страница и поиск в адресе', 
   it('мусор в ?page= — первая страница', () => {
     const { result } = renderWithUrl('/bpp/requests?page=abc');
     expect(result.current.state.page).toBe(1);
+  });
+
+  it.each([
+    ['?page=abc', ''],
+    ['?page=0', ''],
+    ['?page=-2', ''],
+    ['?page=1', ''],
+    ['?page=2.5', ''],
+    ['?page=02&tab=mine', '?page=2&tab=mine'],
+    ['?tab=mine&page=x&q=бетон', `?tab=mine&q=${encodeURIComponent('бетон')}`],
+  ])('негодный номер %s сразу переписывается в адресе (без записи в историю)', (search, expected) => {
+    const { result } = renderWithUrl(`/bpp/requests${search}`, '/bpp/menu');
+    expect(result.current.location.pathname).toBe('/bpp/requests');
+    expect(result.current.location.search).toBe(expected);
+    expect(result.current.state.page).toBe(expected.includes('page=2') ? 2 : 1);
+
+    // `replace`: исправление адреса не добавило шаг «Назад».
+    act(() => result.current.navigate(-1));
+    expect(result.current.location.pathname).toBe('/bpp/menu');
+  });
+
+  it('листание страниц не добавляет записей в историю браузера (replace)', () => {
+    const { result } = renderWithUrl('/bpp/requests', '/bpp/menu');
+
+    act(() => result.current.state.setPage(2));
+    act(() => result.current.state.setPage(3));
+    act(() => result.current.state.setPage(4));
+    expect(result.current.location.search).toBe('?page=4');
+
+    // Один шаг «Назад» уводит со страницы реестра, а не на третью страницу.
+    act(() => result.current.navigate(-1));
+    expect(result.current.location.pathname).toBe('/bpp/menu');
+    expect(result.current.location.search).toBe('');
   });
 
   it('страница и применённый поиск пишутся в адрес, чужие параметры не трогаются', () => {

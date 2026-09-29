@@ -458,6 +458,39 @@ def test_registry_filters_and_xlsx_export(slug, onec_account, xlsx_account,
     assert rows[0][0] == "Номер" and len(rows) == 2 and rows[1][0] == loaded.number
 
 
+@pytest.mark.django_db
+def test_registry_quick_search_by_number_and_comment(slug, onec_account, xlsx_account,
+                                                     django_capture_on_commit_callbacks):
+    """Быстрый поиск реестра L-07: ``q`` (и ``search``, как у контрагентов) —
+    номер загрузки или комментарий, без регистра, по вхождению; выгрузка
+    ``?format=xlsx`` — та же выборка."""
+    first, _ = _start(django_capture_on_commit_callbacks, onec_account,
+                      _onec_upload(onec_account), comment="Сентябрь, аванс")
+    rows = [["1", _ru(_ago(60)), -5, "x", "", ""]]
+    second, _ = _start(django_capture_on_commit_callbacks, xlsx_account,
+                       _xlsx_upload(xlsx_account, rows), comment="Октябрь",
+                       period_from=_ago(70).isoformat(), period_to=_ago(50).isoformat())
+    client = Client()
+    headers = _headers(slug, BUH)
+
+    def found(**params) -> list[str]:
+        return [item["number"] for item in client.get(BASE, params, **headers).json()["items"]]
+
+    assert found(q=second.number[-4:]) == [second.number]  # часть номера
+    assert found(q=second.number.lower()) == [second.number]  # «вп-…» — без регистра
+    assert set(found(q="вп-")) == {first.number, second.number}
+    assert found(q="  АВАНС ") == [first.number]  # комментарий, крайние пробелы — мимо
+    assert found(search="октяб") == [second.number]  # имя параметра заявок и счетов
+    assert found(q="нет такого") == []
+    assert found(q="аванс", account_id=str(xlsx_account.pk)) == []  # с фильтрами — «и»
+
+    xlsx = client.get(BASE, {"format": "xlsx", "q": "аванс"}, **headers)
+    assert xlsx.status_code == 200
+    sheet = openpyxl.load_workbook(io.BytesIO(xlsx.content)).active
+    exported = list(sheet.iter_rows(values_only=True))
+    assert len(exported) == 2 and exported[1][0] == first.number
+
+
 # ── счёт с загрузками и файл выписки ───────────────────────────────────
 
 @pytest.mark.django_db

@@ -7,7 +7,7 @@ import type { ComponentProps } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestQueryClient } from '@/test/renderWithProviders';
@@ -298,6 +298,82 @@ describe('BppRegistry — место в реестре в адресе', () => {
     expect(await screen.findByRole('link', { name: 'ЗЗ-2' })).toBeInTheDocument();
     expect(get.mock.calls.at(-1)?.[1].params).toMatchObject({ page: 2, search: 'бетон' });
     expect(screen.getByRole('textbox')).toHaveValue('бетон');
+  });
+
+  function LocationProbe() {
+    const location = useLocation();
+    const navigate = useNavigate();
+    return (
+      <>
+        <output data-testid="location">{`${location.pathname}${location.search}`}</output>
+        <button type="button" onClick={() => navigate(-1)}>Шаг назад</button>
+      </>
+    );
+  }
+
+  function renderAt(entry: string) {
+    return render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={['/bpp/menu', entry]} initialIndex={1}>
+          <LocationProbe />
+          <Routes>
+            <Route
+              path="/bpp/requests"
+              element={<BppRegistry<Row> registryKey="test-registry" endpoint="/bpp/v1/requests" columns={COLUMNS} />}
+            />
+            <Route path="/bpp/menu" element={<p>Меню</p>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('?page=abc — сразу первая страница, адрес исправлен без записи в историю', async () => {
+    const user = userEvent.setup();
+    get.mockResolvedValue({ data: page([row('1', 'ЗЗ-01')], 120) });
+    renderAt('/bpp/requests?page=abc&q=бетон');
+
+    await screen.findByText('ЗЗ-01');
+    expect(get.mock.calls[0][1].params).toMatchObject({ page: 1, search: 'бетон' });
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/bpp\/requests\?q=/);
+    expect(screen.getByTestId('location')).not.toHaveTextContent('page=');
+
+    await user.click(screen.getByRole('button', { name: 'Шаг назад' }));
+    expect(await screen.findByText('Меню')).toBeInTheDocument();
+  });
+
+  it('?page= за пределами выборки — последняя страница, адрес следует за ней (replace)', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((_url: string, config: { params: Record<string, unknown> }) =>
+      Promise.resolve({ data: page(config.params.page === 2 ? [row('2', 'ЗЗ-51')] : [], 60) }));
+    renderAt('/bpp/requests?page=9');
+
+    expect(await screen.findByText('ЗЗ-51')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/bpp/requests?page=2');
+    expect(get.mock.calls.at(-1)?.[1].params).toMatchObject({ page: 2 });
+
+    await user.click(screen.getByRole('button', { name: 'Шаг назад' }));
+    expect(await screen.findByText('Меню')).toBeInTheDocument();
+  });
+
+  it('листание страниц не добавляет записей в историю браузера', async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((_url: string, config: { params: Record<string, unknown> }) => {
+      const n = String(config.params.page);
+      return Promise.resolve({ data: page([row(`r${n}`, `ЗЗ-${n}`)], 150) });
+    });
+    renderAt('/bpp/requests');
+
+    await screen.findByText('ЗЗ-1');
+    await user.click(screen.getByRole('button', { name: 'Следующая страница' }));
+    await screen.findByText('ЗЗ-2');
+    await user.click(screen.getByRole('button', { name: 'Следующая страница' }));
+    await screen.findByText('ЗЗ-3');
+    expect(screen.getByTestId('location')).toHaveTextContent('/bpp/requests?page=3');
+
+    // Один шаг назад — сразу со страницы реестра, а не на вторую страницу.
+    await user.click(screen.getByRole('button', { name: 'Шаг назад' }));
+    expect(await screen.findByText('Меню')).toBeInTheDocument();
   });
 
   it('syncUrl={false} — адрес не читается', async () => {
