@@ -68,7 +68,7 @@ HTQWeb1/
 
 | Аппка (`backend/apps/`) | URL-префикс (`API_PREFIX`) | Имя в реестре `ServiceStatus` | Домен |
 |---|---|---|---|
-| **core** | — (примонтирована в корень `htqweb/urls.py`, свой префикс `api/core/v1/` объявляет сама) | — (сам реестр) | `/health/`, `/health/ready/`, `/api/core/v1/services/`; общий ETL-хелпер (`etl.py`) |
+| **core** | — (примонтирована в корень `htqweb/urls.py`, свой префикс `api/core/v1/` объявляет сама) | — (сам реестр) | `/health/`, `/health/ready/`, `/api/core/v1/services/`; общий ETL-хелпер (`etl.py`); реестр периодических задач тенантных аппок (`periodic_tasks.py`, `ensure_periodic_tasks` — зовёт `migrate_shared`) |
 | **users** | `api/users/v1/` | `users` | Identity, JWT issuer+validator, профиль, регистрация, админ-юзеры, items |
 | **hr** | `api/hr/v1/` | `hr` | Сотрудники, отделы, должности (`is_manager`/`external_hierarchy` — руководящая должность и участие во внешней иерархии между компаниями, `substitutes_for` — матрица замещения, `participant_position()` — ОСУ через `services/participant_service.py`), вакансии, табель, документы, аудит, оргдерево, PMO, **десять кадровых предметов согласования** (`approval_hooks.py` — объявление и регистрация из `HrConfig.ready()`, `services/approval_service.py` — отправка на согласование через `apps.signoff.interface`), сводка по группе для холдинга (`holding_models.py` — читатели `holding.hr_*`, `services/holding_service.py`, блок H). **Права** — `rbac.py` (`NodeAccess`: проверка по узлу реестра `apps.access` через старые ключи `permissions.py` и таблицу `legacy_roles.py::KEY_TO_NODE`; единственная модель прав домена с блока I); `access.py` — НЕ модель прав, а эвристика переноса (`classify_hr_level` для `interface.list_positions_hr_levels` → `access_backfill_positions`; сторож `tests/test_single_rbac_guards.py`); временные исполнители должностей (`ActingAssignment`, БЗО D-22) — в разрешении должности на дату |
 | **tasks** | `api/tasks/v1/` | `tasks` | Workflow-движок Jira+SharePoint (см. §4.2); сводка по группе для холдинга (`holding_models.py` — читатели `holding.tasks_*`, `services/holding_service.py`, блок H) |
@@ -325,7 +325,8 @@ backend/apps/companies/        # Реестр компаний (схема publi
     ├── migrate_companies.py              # довести схемы компаний до текущей версии (снос/сборка
     │                                     #   сводок холдинга вокруг прогона)
     ├── migrate_shared.py                  # migrate только нетенантных аппок — этим стартует
-    │                                      #   контейнер вместо голого migrate (RUN_MIGRATIONS=1)
+    │                                      #   контейнер вместо голого migrate (RUN_MIGRATIONS=1);
+    │                                      #   в конце — ensure_periodic_tasks (расписания тенантных аппок)
     ├── seed_group_demo.py                 # стенд группы: четыре компании (холдинг + три ДО) — реестр,
     │                                      #   схемы, оргструктуры, учётки, членства, задачи HTQ; только
     │                                      #   локальная БД (псевдонимов не ставит — стенд живёт по слагу)
