@@ -47,6 +47,21 @@ def test_route_td_then_od_with_bpp_flags_and_idempotent(company_context):
     assert ApprovalRoute.objects.filter(subject_type="bpp.purchase_request").count() == 1
 
 
+def test_every_document_of_the_module_gets_a_route(company_context):
+    """С ФД и ГД заводятся маршруты всех документов модуля — подотчёт и
+    авансовый отчёт тоже (одним этапом ФД): без маршрута их не отправить."""
+    ids = _positions()
+    _run(company_context["slug"])
+    routes = {(r.subject_type, r.scope): r for r in ApprovalRoute.objects.filter(is_active=True)}
+    assert set(routes) == {
+        ("bpp.purchase_request", ""), ("bpp.agreement", ""), ("bpp.agreement", "supplementary"),
+        ("bpp.invoice", ""), ("bpp.accountable_funds_request", ""), ("bpp.advance_report", "")}
+    for key in (("bpp.accountable_funds_request", ""), ("bpp.advance_report", "")):
+        stages = list(routes[key].stages.all())
+        assert [row.position_id for row in stages[0].roles.all()] == [ids["Финансовый директор"]]
+        assert len(stages) == 1 and routes[key].forbid_self_approval
+
+
 def test_dry_run_writes_nothing(company_context):
     _positions()
     assert "завести маршрут" in _run(company_context["slug"], "--dry-run")

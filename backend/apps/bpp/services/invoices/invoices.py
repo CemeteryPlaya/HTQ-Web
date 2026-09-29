@@ -73,8 +73,9 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД, БУХ, ТД, ОД, ГД и АДМ видят все счета (ТЗ §10.1): у их ролей на
-    ``bpp.invoices`` нет права создавать."""
-    return actor.can("bpp.invoices", "view") and not actor.can("bpp.invoices", "create")
+    ``bpp.invoices`` нет права создавать. Суперпользователь — тоже."""
+    return actor.is_superuser or (actor.can("bpp.invoices", "view")
+                                  and not actor.can("bpp.invoices", "create"))
 
 
 def can_view(actor: Actor, inv: Invoice) -> bool:

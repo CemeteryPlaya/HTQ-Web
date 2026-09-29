@@ -8,7 +8,10 @@
   росте суммы (``amount_delta > 0``); без изменения суммы этапов не остаётся
   и допсоглашение вступает в силу сразу (флаг ``skip_unmatched_groups``);
 - **счёт на оплату** — один этап ФД (D-12) с требованием ``bpp:budget``:
-  «Согласовать» из общего инбокса проходит проверку бюджета, как «Оплатить».
+  «Согласовать» из общего инбокса проходит проверку бюджета, как «Оплатить»;
+- **заявка на подотчёт** и **авансовый отчёт** — один этап ФД. В ТЗ маршрута
+  подотчёта нет (подотчёт пришёл из ``contracts``), это умолчание: без
+  маршрута заявку на подотчёт не отправить вовсе.
 
 Флаги у всех маршрутов:
 
@@ -34,6 +37,8 @@ from htqweb.tenancy.db import use_company
 REQUEST = "bpp.purchase_request"
 AGREEMENT = "bpp.agreement"
 INVOICE = "bpp.invoice"
+ACCOUNTABLE = "bpp.accountable_funds_request"
+ADVANCE_REPORT = "bpp.advance_report"
 SUPPLEMENTARY = "supplementary"
 TITLES = {
     "td": "Технический директор",
@@ -51,7 +56,8 @@ def _stage(order: int, key: str, positions: dict, **extra) -> dict:
 
 class Command(BaseCommand):
     help = ("Завести маршруты согласования модуля БЗО (заявка: ТД → ОД; договор: "
-            "ФД → ТД → ОД → ГД; допсоглашение: ФД при росте суммы; счёт: ФД) с флагами БЗО.")
+            "ФД → ТД → ОД → ГД; допсоглашение: ФД при росте суммы; счёт, подотчёт и "
+            "авансовый отчёт: ФД) с флагами БЗО.")
 
     def add_arguments(self, parser):
         parser.add_argument("--company", required=True)
@@ -92,6 +98,18 @@ class Command(BaseCommand):
                 "subject_type": INVOICE, "scope": "", "what": "счёта на оплату",
                 "name": "Счёт на оплату: решение ФД",
                 "stages": [_stage(1, "fd", positions, requirement_key="bpp:budget")],
+                "flags": {},
+            })
+            routes.append({
+                "subject_type": ACCOUNTABLE, "scope": "", "what": "заявки на подотчёт",
+                "name": "Заявка на подотчёт: ФД",
+                "stages": [_stage(1, "fd", positions)],
+                "flags": {},
+            })
+            routes.append({
+                "subject_type": ADVANCE_REPORT, "scope": "", "what": "авансового отчёта",
+                "name": "Авансовый отчёт: ФД",
+                "stages": [_stage(1, "fd", positions)],
                 "flags": {},
             })
         return routes

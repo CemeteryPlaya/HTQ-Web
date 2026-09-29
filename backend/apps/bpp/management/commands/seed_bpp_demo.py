@@ -6,12 +6,15 @@
 Заводит два проекта ``ДЕМО-01`` / ``ДЕМО-02`` и проводит по ним документы
 теми же сервисами, что и экраны, от имени настоящих держателей ролей:
 утверждённые бюджеты, заявки во всех статусах (черновик, на согласовании,
-на доработке, отклонена, утверждена), договор — действующий и черновик,
-счета — черновик, у ФД, к оплате и частично оплачен (по договору), оплачен
-с запросом закрывающих, и подотчёт. Решения по маршрутам принимает держатель
-ждущей задачи — поэтому нужны настроенные маршруты
-(``bpp_configure_routes``) и роли у людей (``bpp_assign_roles`` или личные
-назначения); чего нет — команда говорит, что сделать, и ничего не пишет.
+на доработке, отклонена, утверждена), договор — действующий с согласованным
+допсоглашением и черновик, счета — черновик, у ФД, возвращён, не к оплате,
+частично оплачен (по договору), ждёт закрывающих, документы предоставлены,
+закрыт, и подотчёт с авансовыми отчётами (согласованным и черновиком).
+Решения по маршрутам принимает держатель ждущей задачи — поэтому нужны
+настроенные маршруты (``bpp_configure_routes``) и роли у людей
+(``bpp_assign_roles`` или личные назначения); чего нет — команда говорит,
+что сделать, и ничего не пишет. Маршрутов подотчёта и авансового отчёта
+нет — подотчёт остаётся черновиком (они необязательны).
 
 - **Идемпотентна**: проект ``ДЕМО-01`` уже есть — повторный запуск ничего не
   делает (пересоздать — ``--purge`` и запуск заново).
@@ -19,8 +22,10 @@
   согласования, сами проекты и демо-контрагентов (если на них не ссылаются
   чужие документы). Журнал изменений неизменяем (триггер ``bpp/0001``) —
   его строки о демо-документах остаются, как и израсходованные номера.
-- К договору и счетам прикладывается файл-заглушка ``DEMO_PDF`` — без файла
-  их не отправить (ТЗ §21); ``--purge`` убирает файлы вместе с документами.
+- К договору, допсоглашению и счетам прикладывается файл-заглушка
+  ``DEMO_PDF`` — без файла их не отправить (ТЗ §21); им же — накладные к
+  закрывающим и подтверждение авансовых отчётов. ``--purge`` убирает файлы
+  вместе с документами.
 - Уведомления — как при ручной работе: согласующие получат колокольчик и
   письма о демо-документах. На пилоте запускать до подключения людей.
 - Статьи бюджета — действующие статьи групп «Снабжение» и «Проектное
@@ -33,6 +38,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
@@ -40,6 +46,7 @@ from django.utils import timezone
 from apps.access import interface as access
 from apps.bpp.models import (
     AccountableFundsRequest,
+    AdvanceReport,
     Agreement,
     AgreementStatus,
     Budget,
@@ -300,7 +307,16 @@ class Command(BaseCommand):
             raise CommandError(f"Договор {agr.number} не вступил в силу: {agr.status}")
         agr_draft = agreement_service.create_from_plan(sn, [str(agreement_items[2].id)],
                                                        role="sn")
-        out(f"договоры {agr.number} — действует, {agr_draft.number} — черновик")
+        # Допсоглашение к действующему: рост суммы — этап ФД (D-18).
+        supp = agreement_service.create_supplement(sn, agr.id)
+        supp, _ = agreement_service.update_draft(sn, supp.id, expected_version=None, data={
+            "amount": Decimal("300000"), "ext_number": "ДС-1 к Д-2026/17", "ext_date": today})
+        self._attach(supp, "agreement", "ds-1-D-2026-17.pdf")
+        agreement_service.submit(sn, supp.id, expected_version=None)
+        self._approve_all("bpp.agreement", supp.pk)
+        supp.refresh_from_db()
+        out(f"договоры {agr.number} — действует (допсоглашение {supp.number} — "
+            f"{supp.get_status_display()}), {agr_draft.number} — черновик")
 
         # Счёт по договору: ФД — «Оплатить», БУХ — оплата половины.
         by_agr = invoice_service.create_from_agreement(sn, agr.id)
@@ -324,7 +340,24 @@ class Command(BaseCommand):
         payments.request_docs(buh, inv_paid.id,
                               docs={"avr": False, "waybill": True, "vat_invoice": True},
                               comment="Накладная и счёт-фактура на щиты")
-        for inv in (by_agr, inv_draft, inv_review, inv_paid):
+        # Вторая заявка на электрику — счета в остальных статусах: возвращён,
+        # не к оплате, документы предоставлены, закрыт.
+        lighting = self._submitted(sn, p2, electro, "sn", "Освещение склада", [
+            ("Светильник LED 36 Вт", pcs, 60, 14500), ("Кабель ВВГнг 3×1,5", m, 400, 620),
+            ("Датчик движения", pcs, 12, 5200), ("Выключатель одноклавишный", pcs, 20, 1400)])
+        self._approve_all("bpp.purchase_request", lighting.pk)
+        light = list(lighting.items.order_by("line_no"))
+        inv_returned = self._invoice(sn, light[0], electro_cp, "Э-81")
+        self._fd_decide(slug, inv_returned, "return",
+                        "Приложите счёт с подписью и печатью поставщика")
+        inv_refused = self._invoice(sn, light[1], electro_cp, "Э-82")
+        self._fd_decide(slug, inv_refused, "not_payable",
+                        "Кабель этой марки уже оплачен по счёту Э-71")
+        inv_docs = self._with_closing_docs(slug, sn, buh, light[2], electro_cp, "Э-83", "1003")
+        inv_closed = self._with_closing_docs(slug, sn, buh, light[3], electro_cp, "Э-84", "1004")
+        payments.accept_docs(buh, inv_closed.id)
+        for inv in (by_agr, inv_draft, inv_review, inv_paid, inv_returned, inv_refused,
+                    inv_docs, inv_closed):
             inv.refresh_from_db()
             out(f"счёт {inv.number} — {inv.get_status_display()}")
 
@@ -336,8 +369,19 @@ class Command(BaseCommand):
             accountable_service.submit(sn, acc.id, expected_version=None)
             self._approve_all(subject, acc.pk)
             accountable_service.mark_paid(buh, acc.id, expected_version=None)
+            # Авансовые отчёты: один согласован (если есть маршрут), второй — черновик.
+            spent = accountable_service.add_report(
+                sn, acc.id, expense_name="Крепёж и анкеры", amount=Decimal("45000"),
+                upload=self._upload("chek-krepezh.pdf"))
+            if signoff.has_active_route(AdvanceReport.SIGNOFF_SUBJECT_TYPE):
+                accountable_service.submit_report(sn, spent.id)
+                self._approve_all(AdvanceReport.SIGNOFF_SUBJECT_TYPE, spent.pk)
+            accountable_service.add_report(
+                sn, acc.id, expense_name="Расходные материалы для сварки",
+                amount=Decimal("12500"), upload=self._upload("chek-svarka.pdf"))
         acc.refresh_from_db()
-        out(f"подотчёт {acc.number} — {acc.get_status_display()}")
+        out(f"подотчёт {acc.number} — {acc.get_status_display()}, "
+            f"авансовых отчётов: {acc.reports.count()}")
 
     def _invoice(self, sn: Actor, item, counterparty: Counterparty, ext_number: str, *,
                  submit: bool = True) -> Invoice:
@@ -351,6 +395,25 @@ class Command(BaseCommand):
                                          counterparty_confirmed=True)
         return inv
 
+    def _with_closing_docs(self, slug: str, sn: Actor, buh: Actor, item,
+                           counterparty: Counterparty, ext_number: str,
+                           pp_number: str) -> Invoice:
+        """Счёт оплачен целиком, БУХ запросил накладную, автор вложил её и
+        отправил — «Документы предоставлены»."""
+        inv = self._invoice(sn, item, counterparty, ext_number)
+        self._fd_decide(slug, inv, "pay")
+        inv.refresh_from_db()
+        payments.mark_paid(buh, inv.id, pay_date=timezone.localdate(), amount=inv.amount,
+                           pp_number=pp_number)
+        payments.request_docs(buh, inv.id,
+                              docs={"avr": False, "waybill": True, "vat_invoice": False})
+        self._attach(inv, "waybill", f"nakladnaya-{ext_number}.pdf")
+        return payments.submit_docs(sn, inv.id)
+
+    @staticmethod
+    def _upload(filename: str) -> SimpleUploadedFile:
+        return SimpleUploadedFile(filename, DEMO_PDF, content_type="application/pdf")
+
     @staticmethod
     def _attach(doc, file_type: str, filename: str) -> None:
         """Файл документа (договор и счёт обязательны для отправки, ТЗ §21) —
@@ -358,14 +421,14 @@ class Command(BaseCommand):
         core_files.attach(doc, file_type, data=DEMO_PDF, filename=filename,
                           mime="application/pdf", actor_id=doc.author_id)
 
-    def _fd_decide(self, slug: str, inv: Invoice, decision: str) -> None:
+    def _fd_decide(self, slug: str, inv: Invoice, decision: str, comment: str = "") -> None:
         """Решение ФД — доменной ручкой от имени держателя ждущей задачи:
         она ставит плановую дату и пишет журнал."""
         tasks = self._pending(Invoice.SIGNOFF_SUBJECT_TYPE, inv.pk)
         if not tasks:
             raise CommandError(f"Счёт {inv.number}: нет задачи ФД")
         decisions.decide(Actor.for_user(tasks[0]["user_id"], company=slug), inv.id,
-                         decision=decision)
+                         decision=decision, comment=comment)
 
     # ── очистка ─────────────────────────────────────────────────────────
 

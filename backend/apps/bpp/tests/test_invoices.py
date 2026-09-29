@@ -488,3 +488,18 @@ def test_http_create_patch_and_registry_tabs(company_context):
     tab = client.get(f"{BASE}/invoices?tab=fd", **s.auth(slug, s.FD)).json()
     assert [row["number"] for row in tab["items"]] == [card["number"]]
     assert client.get(f"{BASE}/invoices?tab=to_pay", **s.auth(slug, s.FD)).json()["total"] == 0
+
+
+def test_superuser_sees_every_invoice_agreement_and_accountable(company_context):
+    """«Видит всё = просмотр без права создавать» запирало суперпользователя
+    (у него есть и создание) в своих документах: на стенде админ видел пустые
+    реестры счетов и подотчёта."""
+    from apps.bpp.services.accountable import accountable as accountable_service
+
+    slug = company_context["slug"]
+    _, _, inv = _submitted(slug, 100_000)
+    root = s.actor(slug, 999, superuser=True)
+    assert service.sees_all(root) and service.can_view(root, inv)
+    assert [row["id"] for row in read.registry(root)["items"]] == [str(inv.pk)]
+    assert agreement_service.sees_all(root) and accountable_service.sees_all(root)
+    assert not service.sees_all(s.actor(slug, s.SN, "bpp-sn"))

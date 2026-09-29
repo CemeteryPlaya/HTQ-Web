@@ -35,19 +35,28 @@ class Actor:
                  is_superuser: bool = False) -> "Actor":
         """Тот же пользователь без HTTP-запроса — для фоновой пересборки
         выгрузки (``export.respond``, ``rebuild``): права считаются по его
-        ролям в компании, как в ручке, где он заказал файл."""
+        ролям в компании, как в ручке, где он заказал файл. ``META`` пустой:
+        HTTP за таким «запросом» нет, и журнал файлов пишет его без IP и
+        user-agent (``core/files._audit`` читает их из ``META``)."""
         token = SimpleNamespace(user_id=int(user_id), is_superuser=bool(is_superuser))
-        return cls(SimpleNamespace(token=token, company={"slug": company} if company else None))
+        return cls(SimpleNamespace(token=token, company={"slug": company} if company else None,
+                                   META={}))
 
     def export_identity(self) -> dict:
         """Кто заказал выгрузку — JSON для ``rebuild`` (обратно — ``for_user``)."""
         company = (getattr(self.request, "company", None) or {}).get("slug")
         return {"user_id": self.user_id, "company": company,
-                "is_superuser": bool(getattr(self.request.token, "is_superuser", False))}
+                "is_superuser": self.is_superuser}
 
     @property
     def user_id(self) -> int:
         return self.request.token.user_id
+
+    @property
+    def is_superuser(self) -> bool:
+        """Суперпользователь: права у него есть все, включая «создавать», —
+        правило «видит всё = просмотр без создания» его бы запирало в своих."""
+        return bool(getattr(self.request.token, "is_superuser", False))
 
     def can(self, node: str, flag: str) -> bool:
         if node not in self._flags:

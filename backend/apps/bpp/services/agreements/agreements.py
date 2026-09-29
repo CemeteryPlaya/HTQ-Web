@@ -79,8 +79,9 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД, ТД, ОД, ГД, БУХ и АДМ видят все договоры (ТЗ §9.1): у их ролей на
-    ``bpp.agreements`` нет права создавать."""
-    return actor.can("bpp.agreements", "view") and not actor.can("bpp.agreements", "create")
+    ``bpp.agreements`` нет права создавать. Суперпользователь — тоже."""
+    return actor.is_superuser or (actor.can("bpp.agreements", "view")
+                                  and not actor.can("bpp.agreements", "create"))
 
 
 def _sees_by_scope(actor: Actor, agr: Agreement) -> bool:
