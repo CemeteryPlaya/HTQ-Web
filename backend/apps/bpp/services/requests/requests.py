@@ -30,6 +30,7 @@ from apps.bpp.models import (
     RequestStatus,
 )
 from apps.bpp.services.actor import ROLE_GROUP, Actor
+from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
 from apps.bpp.services.core import files as core_files
@@ -65,13 +66,13 @@ def _deny(text: str) -> DomainError:
 
 
 def sees_all(actor: Actor) -> bool:
-    """ТД, ОД, ФД, ГД видят все заявки; СН и ПМ — только свои (ТЗ §7.1).
+    """ТД, ОД, ФД, ГД и АДМ видят все заявки; СН и ПМ — только свои (ТЗ §7.1).
 
-    Отличает их право создавать заявки: у ролей директоров на ``bpp.requests``
-    только просмотр (миграция ``access/0014``). Отдельного узла «все заявки»,
-    как ``bpp.plan.all``, в реестре нет — предложение в файле сверки.
+    Узел ``bpp.requests.all`` (``access/0017``) — тот же круг ролей, что
+    раньше выводился из «просмотр без права создавать»; теперь совмещающий
+    СН с ролью директора видит все заявки, а не только свои.
     """
-    return actor.can("bpp.requests", "view") and not actor.can("bpp.requests", "create")
+    return actor.can("bpp.requests.all", "view")
 
 
 def can_view(actor: Actor, req: PurchaseRequest) -> bool:
@@ -461,8 +462,11 @@ def _comment(comment: str, action: str) -> str:
 
 
 def _in_documents(req: PurchaseRequest) -> bool:
-    """Есть ли позиции заявки в договорах или счетах (этап 3, B3.1/B3.2)."""
-    return False
+    """Есть ли позиции заявки в договорах (B3.1) или счетах (B3.2)."""
+    items = list(req.items.all())
+    used = positions.remaining(items)
+    return any(row["qty_in_agreements"] > 0 or row["qty_in_invoices"] > 0
+               for row in used.values())
 
 
 @transaction.atomic

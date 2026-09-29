@@ -13,6 +13,7 @@ from django.db.models import Q
 
 from apps.bpp.models import PurchaseRequest, RequestStatus
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import files as core_files
 from apps.project import interface as projects
@@ -54,13 +55,17 @@ def _budget_figures(req: PurchaseRequest) -> dict | None:
 
 def execution(req: PurchaseRequest) -> list[dict]:
     """Блок 6 «Исполнение» (ТЗ §7.5): по позиции план / в договорах / в счетах /
-    оплачено / остаток. Договоры и счета приходят с этапа 3 (B3.3)."""
+    оплачено / остаток к закупке (CALC-005, CALC-006). Оплаты — со счетами (B3.2)."""
+    items = list(req.items.all())
+    left = positions.remaining(items)
     return [{
         "id": str(item.id), "sys_number": item.sys_number, "name": item.name,
-        "status": item.status, "qty": item.qty, "qty_in_agreements": Decimal("0"),
-        "qty_in_invoices": Decimal("0"), "amount": item.amount,
-        "amount_in_invoices": ZERO, "amount_paid": ZERO, "amount_left": item.amount,
-    } for item in req.items.all()]
+        "status": item.status, "qty": item.qty,
+        "qty_in_agreements": left[str(item.pk)]["qty_in_agreements"],
+        "qty_in_invoices": left[str(item.pk)]["qty_in_invoices"], "amount": item.amount,
+        "amount_in_invoices": left[str(item.pk)]["amount_in_invoices"], "amount_paid": ZERO,
+        "amount_left": left[str(item.pk)]["amount_left"],
+    } for item in items]
 
 
 def card(actor: Actor, req: PurchaseRequest) -> dict:
@@ -99,9 +104,9 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
     }
 
 
-def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
-             page_size: int = 50) -> dict:
-    filters = filters or {}
+def _visible(actor: Actor, filters: dict):
+    """Выборка реестра L-02 — одна на страницу и выгрузку (ТЗ §19: экспорт —
+    ровно то, что пользователь видит с этими фильтрами)."""
     rows = PurchaseRequest.objects.filter(is_migrated=False)
     if not service.sees_all(actor):
         awaiting = [str(sid) for sid in signoff.list_awaiting_subject_ids(actor.user_id, SUBJECT)]
@@ -123,7 +128,12 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
         rows = rows.filter(created_at__date__lte=filters["created_to"])
     if filters.get("search"):
         rows = rows.filter(number__icontains=filters["search"])
-    rows = rows.order_by("-created_at")
+    return rows.order_by("-created_at")
+
+
+def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
+             page_size: int = 50) -> dict:
+    rows = _visible(actor, filters or {})
     total = rows.count()
     totals_amount = sum((row for row in rows.values_list("total_amount", flat=True)), ZERO)
     page_size = page_size if page_size in (25, 50, 100) else 50
@@ -135,7 +145,7 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
     items = [{
         "id": str(r.id), "number": r.number, "status": r.status, "created_at": r.created_at,
         "author_id": r.author_id, "author_name": names.get(r.author_id),
-        "project_id": str(r.project_id),
+        "initiator_role": r.initiator_role, "project_id": str(r.project_id),
         "project_code": project_map.get(str(r.project_id), {}).get("code"),
         "article_id": str(r.article_id) if r.article_id else None,
         "article_name": article_map.get(str(r.article_id), {}).get("name"),
@@ -145,3 +155,59 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
     } for r in chunk]
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "totals": {"total_amount": totals_amount}}
+
+
+# ── выгрузка реестра в xlsx (ТЗ §19, контракт A: ``export.respond``) ────
+
+#: Путь пересборки для фоновой выгрузки (строка — её везёт брокер Celery).
+EXPORT_REBUILD_PATH = "apps.bpp.services.requests.read.export_rows"
+#: Сколько строк за раз дополняется «Сейчас у», проектами и статьями.
+_EXPORT_CHUNK = 500
+
+
+def export_count(*, user_id: int, company: str | None, is_superuser: bool = False,
+                 filters: dict) -> int:
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    return _visible(actor, filters).count()
+
+
+def _holder_text(entry: dict | None) -> str:
+    if not entry:
+        return ""
+    if entry.get("no_executor"):
+        return f"{entry['stage']}: нет исполнителя"
+    names = ", ".join(user["name"] for user in entry["users"] if user["name"])
+    return f"{entry['stage']}: {names}" if names else entry["stage"]
+
+
+def export_rows(*, user_id: int, company: str | None, is_superuser: bool = False,
+                filters: dict):
+    """Строки выгрузки — та же выборка, что у страницы реестра, без пагинации.
+    Права — заказчика выгрузки: фоновая задача зовёт это без запроса."""
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    rows = _visible(actor, filters)
+    chunk: list[PurchaseRequest] = []
+    for req in rows.iterator(chunk_size=_EXPORT_CHUNK):
+        chunk.append(req)
+        if len(chunk) == _EXPORT_CHUNK:
+            yield from _export_chunk(chunk)
+            chunk = []
+    if chunk:
+        yield from _export_chunk(chunk)
+
+
+def _export_chunk(chunk: list[PurchaseRequest]):
+    project_map = projects.project_brief(list({str(r.project_id) for r in chunk}))
+    article_map = refdata.article_brief(list({str(r.article_id) for r in chunk if r.article_id}))
+    names = _names([r.author_id for r in chunk])
+    holders = signoff.current_holders(SUBJECT, [str(r.pk) for r in chunk])
+    for r in chunk:
+        yield {
+            "number": r.number, "status": r.get_status_display(), "created_at": r.created_at,
+            "author": names.get(r.author_id, ""),
+            "project": project_map.get(str(r.project_id), {}).get("code"),
+            "article": article_map.get(str(r.article_id), {}).get("name"),
+            "purchase_type": r.get_purchase_type_display(), "need_date": r.need_date,
+            "total_amount": r.total_amount, "currency_code": r.currency_code,
+            "current_holder": _holder_text(holders.get(str(r.pk))),
+        }

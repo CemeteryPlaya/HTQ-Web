@@ -298,11 +298,18 @@ def start(*, subject_type: str, subject_id: int | str,
     # services/conditions.py). Поэтому act/_advance/кворум/блокировки
     # ветвления не касаются.
     facts = registry.facts_for(subject_type, subject_id)
-    selected = _select_stages(stages, facts, subject=subject, route=route)
-    pre = _preapproved_positions(preapproved, selected)
     # Флаги маршрута — снимком в процесс: правка маршрута идущий процесс не
     # меняет (ТЗ §16.1 п.2). Без флагов всё ниже — прежнее поведение.
     flags = resolution.route_flags_of(route)
+    selected = _select_stages(stages, facts, subject=subject, route=route,
+                              skip_unmatched=flags["skip_unmatched_groups"])
+    if not selected:
+        # Только с флагом skip_unmatched_groups: этапов под объект нет вовсе —
+        # согласовано без решений (D-18, допсоглашение без изменения суммы).
+        return _approve_without_stages(subject, subject_type, subject_id, scope=scope,
+                                       route=route, facts=facts, flags=flags,
+                                       initiator_id=initiator_id)
+    pre = _preapproved_positions(preapproved, selected)
     if flags["lazy_resolution"]:
         # Исполнители — при активации этапа, по снимку этапа (ТЗ §16.1 п.2);
         # на запуске проверяется только сама настройка.
@@ -465,7 +472,37 @@ def _assert_submittable(subject, subject_id: str) -> None:
     )
 
 
-def _select_stages(stages, facts: dict, *, subject, route):
+def _approve_without_stages(subject, subject_type: str, subject_id: str, *, scope: str,
+                            route, facts: dict, flags: dict,
+                            initiator_id: int | None) -> ApprovalProcess:
+    """Процесс, закрытый в момент запуска: ни одна группа маршрута не подошла
+    объекту, а маршрут это разрешает (``skip_unmatched_groups``).
+
+    Процесс всё равно заводится — в журнале остаётся, по какому маршруту и
+    с какими фактами документ вступил в силу без решений, а предметная аппка
+    получает обычные ``on_started`` и ``on_approved``.
+    """
+    try:
+        process = ApprovalProcess.objects.create(
+            subject_type=subject_type, subject_id=subject_id, scope=scope,
+            route_id=route.pk, initiator_id=initiator_id,
+            state=ProcessState.PENDING, subject_facts=facts, route_flags=flags)
+    except IntegrityError as exc:
+        raise AlreadyInApproval(f"«{subject.label}» уже находится на согласовании") from exc
+    _log(process, "started", actor_id=initiator_id, payload={
+        "route_id": route.pk, "route_name": route.name, "facts": facts,
+        "skipped_stages": [], "no_applicable_stages": True})
+    _log(process, "no_applicable_stages", actor_id=initiator_id,
+         payload={"facts": facts})
+    if subject.on_started is not None:
+        subject.on_started(registry.native_id(subject_type, subject_id))
+    _set_subject_state(subject_type, subject_id, ApprovalState.PENDING)
+    _finish(process, ProcessState.APPROVED, actor_id=initiator_id,
+            comment="Этапов под объект нет — согласовано без решений")
+    return process
+
+
+def _select_stages(stages, facts: dict, *, subject, route, skip_unmatched: bool = False):
     """Отобрать ветки маршрута под факты объекта, переведя отказы в 409.
 
     Обе ошибки ``conditions`` — про настройку маршрута, но прочтёт их
@@ -474,7 +511,7 @@ def _select_stages(stages, facts: dict, *, subject, route):
     ни одно условие» невозможно понять, к кому идти.
     """
     try:
-        return conditions.select_stages(stages, facts)
+        return conditions.select_stages(stages, facts, skip_unmatched=skip_unmatched)
     except conditions.NoBranchMatched as exc:
         raise RouteUnusable(
             f"«{subject.label}»: в маршруте «{route.name}» на шаге "

@@ -6,14 +6,12 @@
   которой смотрят план (ТЗ §8.1: СН — роль «СН», ПМ — роль «ПМ»);
 - держатель ``bpp.plan.all`` (ФД) видит все позиции без действий.
 
-Остатки — CALC-005 (количество) и CALC-006 (сумма). На этапе 2 договоров и
-счетов нет, поэтому остаток равен плану; этап 3 (B3.3) вычитает договоры и
-счета здесь же, в ``_remaining``.
+Остатки — CALC-005 (количество) и CALC-006 (сумма): ``services/agreements/
+positions.py`` вычитает договоры (B3.1) и счета (B3.2) одной выборкой на
+страницу.
 """
 
 from __future__ import annotations
-
-from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Q
@@ -21,6 +19,7 @@ from django.utils import timezone
 
 from apps.bpp.models import InitiatorRole, ItemStatus, PurchaseRequestItem, RequestStatus
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.agreements import positions
 from apps.bpp.services.core import audit
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
@@ -63,9 +62,10 @@ def _base():
             .select_related("request"))
 
 
-def _remaining(item: PurchaseRequestItem) -> tuple[Decimal, Decimal]:
-    """(остаток кол-ва CALC-005, остаток суммы CALC-006)."""
-    return item.qty, item.amount
+def _left(items) -> dict[str, dict]:
+    """``{item_id: {qty_in_agreements, qty_in_invoices, qty_left,
+    amount_in_invoices, amount_left}}`` — CALC-005, CALC-006."""
+    return positions.remaining(items)
 
 
 def _scoped(actor: Actor, role: str | None):
@@ -97,12 +97,17 @@ def _filtered(rows, filters: dict):
     return rows
 
 
-def plan_items(actor: Actor, *, role: str | None = None, filters: dict | None = None,
-               sort: str = "need_date", page: int = 1, page_size: int = 50) -> dict:
+def _visible(actor: Actor, *, role: str | None, filters: dict, sort: str):
+    """Выборка плана L-04 — одна на страницу и выгрузку."""
     if not actor.can("bpp.plan", "view") and not sees_all(actor):
         raise _deny("У вас нет доступа к плану закупок.")
     rows, read_only = _scoped(actor, role)
-    rows = _filtered(rows, filters or {}).order_by(*SORTS.get(sort, SORTS["need_date"]))
+    return _filtered(rows, filters).order_by(*SORTS.get(sort, SORTS["need_date"])), read_only
+
+
+def plan_items(actor: Actor, *, role: str | None = None, filters: dict | None = None,
+               sort: str = "need_date", page: int = 1, page_size: int = 50) -> dict:
+    rows, read_only = _visible(actor, role=role, filters=filters or {}, sort=sort)
     total = rows.count()
     page_size = page_size if page_size in (25, 50, 100) else 50
     chunk = list(rows[(page - 1) * page_size: page * page_size])
@@ -115,9 +120,12 @@ def plan_items(actor: Actor, *, role: str | None = None, filters: dict | None = 
               for row in users.get_users_brief(list({i.executor_id for i in chunk}))}
              if read_only and chunk else {})
     today = timezone.localdate()
+    left = _left(chunk)
+    on_review = positions.on_review_item_ids([i.pk for i in chunk])
     items = []
     for item in chunk:
-        qty_left, amount_left = _remaining(item)
+        figures = left[str(item.pk)]
+        qty_left = figures["qty_left"]
         req = item.request
         items.append({
             "id": str(item.id), "sys_number": item.sys_number,
@@ -127,17 +135,69 @@ def plan_items(actor: Actor, *, role: str | None = None, filters: dict | None = 
             "article_id": str(req.article_id) if req.article_id else None,
             "article_name": article_map.get(str(req.article_id), {}).get("name"),
             "name": item.name, "uom": uom_map.get(str(item.uom_id), {}).get("short_name"),
-            "qty": item.qty, "qty_in_agreements": Decimal("0"), "qty_in_invoices": Decimal("0"),
-            "qty_left": qty_left, "amount": item.amount, "amount_in_invoices": Decimal("0.00"),
-            "amount_left": amount_left, "need_date": item.need_date,
+            "qty": item.qty, "qty_in_agreements": figures["qty_in_agreements"],
+            "qty_in_invoices": figures["qty_in_invoices"], "qty_left": qty_left,
+            "amount": item.amount, "amount_in_invoices": figures["amount_in_invoices"],
+            "amount_left": figures["amount_left"], "need_date": item.need_date,
             "overdue": item.need_date < today, "purchase_type": req.purchase_type,
-            "in_agreement_on_review": False,  # метка с этапа 3 (B3.1)
+            "in_agreement_on_review": str(item.pk) in on_review,
             "executor_id": item.executor_id, "executor_name": names.get(item.executor_id),
             "selectable": not read_only and qty_left > 0,
         })
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "read_only": read_only}
 
+
+
+# ── выгрузка плана в xlsx (ТЗ §19, контракт A: ``export.respond``) ─────
+
+#: Путь пересборки для фоновой выгрузки (строка — её везёт брокер Celery).
+EXPORT_REBUILD_PATH = "apps.bpp.services.plan.service.export_rows"
+_EXPORT_CHUNK = 500
+
+
+def export_count(*, user_id: int, company: str | None, is_superuser: bool = False,
+                 role: str | None, filters: dict, sort: str) -> int:
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    return _visible(actor, role=role, filters=filters, sort=sort)[0].count()
+
+
+def export_rows(*, user_id: int, company: str | None, is_superuser: bool = False,
+                role: str | None, filters: dict, sort: str):
+    """Строки выгрузки — та же выборка, что у страницы плана, без пагинации."""
+    actor = Actor.for_user(user_id, company=company, is_superuser=is_superuser)
+    rows, _read_only = _visible(actor, role=role, filters=filters, sort=sort)
+    chunk: list[PurchaseRequestItem] = []
+    for item in rows.iterator(chunk_size=_EXPORT_CHUNK):
+        chunk.append(item)
+        if len(chunk) == _EXPORT_CHUNK:
+            yield from _export_chunk(chunk)
+            chunk = []
+    if chunk:
+        yield from _export_chunk(chunk)
+
+
+def _export_chunk(chunk: list[PurchaseRequestItem]):
+    project_map = projects.project_brief(list({str(i.request.project_id) for i in chunk}))
+    article_map = refdata.article_brief(
+        list({str(i.request.article_id) for i in chunk if i.request.article_id}))
+    uom_map = refdata.uom_brief(list({str(i.uom_id) for i in chunk}))
+    names = {row["id"]: row["full_name"]
+             for row in users.get_users_brief(list({i.executor_id for i in chunk if i.executor_id}))}
+    left = _left(chunk)
+    for item in chunk:
+        figures = left[str(item.pk)]
+        req = item.request
+        yield {
+            "sys_number": item.sys_number, "request_number": req.number,
+            "project": project_map.get(str(req.project_id), {}).get("code"),
+            "article": article_map.get(str(req.article_id), {}).get("name"),
+            "name": item.name, "uom": uom_map.get(str(item.uom_id), {}).get("short_name"),
+            "qty": item.qty, "qty_left": figures["qty_left"], "amount": item.amount,
+            "amount_left": figures["amount_left"], "need_date": item.need_date,
+            "purchase_type": req.get_purchase_type_display(),
+            "executor": names.get(item.executor_id, ""),
+        }
 
 def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
                        role: str | None = None) -> dict:
@@ -162,7 +222,8 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
         raise DomainError(
             "E-PLN-01", "Для одного документа выберите позиции одного проекта и одной статьи",
             fields=[{"field": "item_ids", "message": "Разные проекты или статьи"}])
-    empty = [r.sys_number for r in rows if _remaining(r)[0] <= 0]
+    left = _left(rows)
+    empty = [r.sys_number for r in rows if left[str(r.pk)]["qty_left"] <= 0]
     if empty:
         raise DomainError(
             "E-PLN-02", f"Позиция {empty[0]} уже закуплена полностью.",
@@ -173,7 +234,8 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
         "ok": True, "target": target, "project_id": project_id, "article_id": article_id,
         "purchase_type": purchase_types.pop() if len(purchase_types) == 1 else None,
         "items": [{"id": str(r.id), "sys_number": r.sys_number, "name": r.name,
-                   "qty_left": _remaining(r)[0], "amount_left": _remaining(r)[1]}
+                   "qty_left": left[str(r.pk)]["qty_left"],
+                   "amount_left": left[str(r.pk)]["amount_left"]}
                   for r in sorted(rows, key=lambda r: r.sys_number)],
     }
 
@@ -182,7 +244,7 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
 def reassign(actor: Actor, item_ids: list[str], *, to_user_id: int) -> int:
     """«Переназначить исполнителя позиций» — АДМ (ТЗ §8.1): при увольнении
     позиции передаются другому снабженцу или ПМ."""
-    if not actor.can("bpp.settings", "edit"):
+    if not actor.can("bpp.plan.reassign", "edit"):
         raise _deny("Переназначать исполнителя позиций может администратор модуля.")
     if not users.get_users_brief([to_user_id]):
         raise DomainError("E-NOT-FOUND", "Пользователь не найден.", status=404,

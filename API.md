@@ -1277,7 +1277,7 @@ is how `approvals` decides who may fill approver-filled fields.
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
 | `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
 | `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
-| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | admin | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
+| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | admin | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `skip_unmatched_groups` (a group whose conditions all miss and that has no fallback is skipped instead of 409; no stage left → the process is approved at once, D-18), `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
 | `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
 | `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
 | `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
@@ -1539,10 +1539,10 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам |
+| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / доступно) по видимым строкам; `?format=xlsx` — выгрузка |
 | `POST budgets` | Создать черновик (версия 1); второй бюджет проекта — 422 `E-BUD-03` со ссылкой в `fields[0].existing_id`, дубль статьи — `E-BUD-04` с номером строки |
 | `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`) |
-| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08` |
+| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08`. СН компании и ПМ проекта получают уведомление «Бюджет проекта … утверждён» (ТЗ §16.2 п.1; получатели — `access.holders_of` + участники проекта, только члены компании); утверждённая корректировка — «…лимиты статей обновлены» |
 | `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку с «Задействовано» > 0 удалить нельзя — 422 `E-BUD-09` |
 | `POST budgets/<id>/correction/approve` (`comment` ≥ 10, иначе `BR-060`) | Утвердить: лимит ниже задействованного — 422 `E-BUD-05` с суммой; проверка под блокировкой строк |
 | `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
@@ -1558,7 +1558,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; ТД, ОД, ФД, ГД — все. Колонка `current_holders` («Сейчас у») |
+| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; держатели `bpp.requests.all` (ТД, ОД, ФД, ГД, АДМ) — все. Колонка `current_holders` («Сейчас у»); `?format=xlsx` — выгрузка |
 | `POST requests` | Черновик: номер `ЗЗ-ГГГГ-NNNNNN` сразу; обязателен только проект. Нет утверждённого бюджета — 422 `E-BUD-02`, статья чужой группы — 403 `E-REQ-04` (AC-002), проект не из участий ПМ — 403 `E-REQ-05`, > 200 позиций — 422 `E-REQ-06`, статьи нет в бюджете — 422 `E-BUD-07` |
 | `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
 | `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
@@ -1566,12 +1566,13 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10, иначе `BR-060`) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
 | `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
 | `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET requests/<id>/print` | Печатная форма заявки в PDF (`inline`): реквизиты, позиции, итог и «Лист согласования» — решения последнего процесса, ждущие задачи не печатаются. Чужая заявка — 404 |
 | `GET` / `POST requests/<id>/files` (multipart `file`) | Документы заявки (КП, ТЗ, спецификация — тип `request_attachment`, ТЗ §21): добавляет автор в черновике и на доработке |
 | `POST requests/<id>/files/<file_id>/version` | Новая версия документа — автор, кроме финальных статусов |
 | `GET requests/<id>/files/<file_id>/link` | Ссылка на скачивание; каждая выдача пишется в журнал скачиваний |
-| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only` |
+| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only`; `?format=xlsx` — выгрузка |
 | `POST plan/validate` (`{item_ids, target: contract\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `E-PLN-01`, остаток 0 — `E-PLN-02`, позиции не в плане — 409 `E-PLN-03`; ответ — заготовка мастера F-03 |
-| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.settings` edit) |
+| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.plan.reassign` edit) |
 
 **Подотчётные средства** — подмодуль `bpp_accountable` (задача B4.1, логика
 `contracts`). Источник — статья бюджета проекта; сумма занимает бюджет с
@@ -1582,14 +1583,68 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 | Метод и путь | Что делает |
 |---|---|
-| `GET` / `POST accountable` | Реестр (свои; ФД и бухгалтер — все) / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
-| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (остаток, отчёты, «Сейчас у») / правка и удаление черновика |
+| `GET` / `POST accountable` (`?status=&project_id=&article_id=&date_from=&date_to=&search=&awaiting_me=1&page=&page_size=`) | Реестр — конверт реестров модуля `{items, total, page, page_size, totals: {amount}}`: свои заявки и ждущие вашего решения; ФД и бухгалтер — все. Строка — подотчётное лицо, проект, статья, цель, сумма, «Подтверждено отчётами», «Сейчас у»; поиск — по номеру и цели; `?format=xlsx` — выгрузка / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
+| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (проект, подотчётное лицо, выдача, остаток, отчёты с файлами и `can_submit`, «Сейчас у», `allowed_actions`: `save`/`submit`/`delete` — автору в черновике, `mark_paid` — бухгалтеру, `add_report` — автору, пока заявка ждёт отчётов) / правка и удаление черновика |
 | `POST accountable/<id>/submit` | Отправить: остаток под блокировкой строки бюджета |
 | `POST accountable/<id>/mark-paid` | Бухгалтер выдал деньги (`bpp.accountable.payment`) — заявка ждёт отчётов |
 | `POST accountable/<id>/reports` (multipart `expense_name`, `amount`, `file`) | Авансовый отчёт; сверх остатка — 422 `E-ACN-01` |
 | `POST accountable/reports/<id>/submit`, `GET …/file-link` | Отправить отчёт на согласование / ссылка на файл |
 
 Одобренные отчёты, покрывшие сумму, закрывают заявку.
+
+**Договор** — подмодуль `bpp_agreements` (ТЗ §09, §15.3, задача B3.1). Согласование
+«ФД → ТД → ОД → ГД» — движок `signoff`, тип `bpp.agreement`; допсоглашение —
+тот же тип в области `supplementary` (этап ФД только при `amount_delta > 0`,
+без изменения суммы — сразу в силе, флаг `skip_unmatched_groups`). Маршруты
+заводит `manage.py bpp_configure_routes`. Узлы: создание — `bpp.agreements`
+`create` (СН, ПМ), «Исполнен» и расторжение — `bpp.agreements.terminate` (ФД).
+Позиции закрытого договора «На согласовании»/«Действует» занимают бюджет
+(CALC-002), открытый — нет (D-09); допсоглашение занимает свой прирост на
+уровне статьи.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET agreements` (`?status=&project_id=&article_id=&counterparty_id=&date_from=&date_to=&search=&awaiting_me=1`) | Реестр L-05: СН и ПМ — свои, договоры своих проектов и групп статей и ждущие их решения; ФД, ТД, ОД, ГД, БУХ, АДМ — все. Колонки «Остаток по договору» (CALC-009) и «Сейчас у»; `?format=xlsx` — выгрузка |
+| `POST agreements` (`{item_ids, role?}`) | Черновик из плана (мастер F-03): номер `ДГ-ГГГГ-NNNNNN`; проект, статья, тип — из заявки; количество — остаток позиции, сумма — Σ плановых остатков. Выбор проверяет `plan/validate` (E-PLN-01…03) |
+| `GET` / `PATCH` / `DELETE agreements/<id>` | Карточка F-04 (контрагент, НДС, позиции с остатком, блок «Бюджет» с превышением над планом, допсоглашения, `effective_amount`, `remaining`, `allowed_actions` — у действующего основного договора и права `bpp.invoices:create` в нём `create_invoice`: `POST invoices {agreement_id}`) / правка автором в черновике и на доработке / удаление черновика. `PATCH` пересчитывает НДС (CALC-008): ставка страны контрагента на дату договора из справочника, нет — 16% и `vat_warning` (D-14); `vat_rate` — ручная ставка (`vat_source: manual`, в журнале), `null` — вернуть справочную. Заблокированный или архивный контрагент — 422 `E-CTR-01`; количество больше остатка позиции — 409 `BR-042` |
+| `POST agreements/<id>/submit` (`{version, counterparty_confirmed}`) | Отправить: обязательные поля — 422 `E-AGR-01`; контрагент — `E-CTR-01`; непроверенный без подтверждения — 422 `E-CTR-05` (подтверждение — в журнал, метку не ставит, D-20); дубль «контрагент + номер + дата» — 422 `BR-032` с `existing_id`; остаток позиций — 409 `BR-042`; Σ позиций ≠ сумме — 422 `BR-033`; под блокировкой строки бюджета превышение над планом > доступного остатка — 422 `BR-034`; маршрута нет — 409 `E-SGN-01` |
+| `POST agreements/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STS-01` |
+| `POST agreements/<id>/fulfil`, `…/terminate` (`comment` ≥ 10, иначе `BR-060`) | «Исполнен» (нет неоплаченных счетов) / «Расторгнут» — ФД; неосвоенные позиции возвращаются в план, резерв снимается (Q-D02) |
+| `POST agreements/<id>/supplement` | Допсоглашение к действующему договору: реквизиты родителя, сумма — прирост (0 — без изменения суммы), свой маршрут; утверждённое продлевает срок родителя и прибавляет сумму |
+| `GET agreements/<id>/execution` | Блок «Исполнение»: счета по договору (с B3.2), `effective_amount`, `remaining` |
+| `GET agreements/search?project_id=&article_id=&q=` | Договоры для счёта (BR-046, AC-007): только «Действует», тот же проект и статья, срок не истёк, у закрытого остаток > 0 |
+
+**Счёт на оплату** — подмодуль `bpp_invoices` (ТЗ §10, §15.4, задача B3.2). Один
+счёт на оба основания — «без договора» и «по договору» (D-11). Решение ФД —
+одноэтапный маршрут `signoff` типа `bpp.invoice` (D-12) с требованием
+`bpp:budget`: «Согласовать» из общего инбокса проходит ту же проверку бюджета,
+что «Оплатить». Статусы: `draft` → `under_review` → `to_pay` / `not_payable` /
+`returned` → `partially_paid` → `paid` → `awaiting_docs` → `docs_provided` →
+`closed`; кроме того `cancelled` и `replaced`. Закрывающие документы — только
+после оплаты (D-13). Строки счетов от «На рассмотрении ФД» (кроме отменённых,
+«Не к оплате» и возвращённых) занимают бюджет (CALC-002). Узлы: создание —
+`bpp.invoices` `create` (СН, ПМ); решение ФД — `bpp.invoices.decision`;
+оплата и документы БУХ — `bpp.invoices.payment`; вложение закрывающих —
+`bpp.invoices.closing_docs`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET invoices` (`?tab=all\|fd\|to_pay\|awaiting_docs\|docs_provided\|bank_unconfirmed\|bank_mismatch&status=&project_id=&article_id=&counterparty_id=&basis=&agreement_id=&date_from=&date_to=&search=`) | Реестр L-06 с вкладками §10.5: СН и ПМ — свои и ждущие их решения; ФД, БУХ, ТД, ОД, ГД, АДМ — все. `totals` — Σ в KZT и Σ оплачено по банку; у строки — `possible_split` (D-17), `counterparty_blocked`, `overdue`, `days_waiting_docs`, «Сейчас у»; `?format=xlsx` — выгрузка |
+| `POST invoices` (`{item_ids}` из плана или `{agreement_id, item_ids?}` из договора) | Черновик `СЧ-ГГГГ-NNNNNN`: срок оплаты — дата + 5 рабочих дней; по договору контрагент, валюта, НДС и тип — из договора |
+| `GET` / `PATCH` / `DELETE invoices/<id>` | Карточка F-05 (порог 1000 МРП и `over_threshold`, курс и сумма в KZT, остаток договора, отметки оплаты, `possible_split`, `initiator_role` — роль, от которой оформлен счёт: с ней экран создаёт договор «по этим позициям», `allowed_actions`) / правка автором в черновике и после возврата (`basis: "no_contract"` очищает договор; `rate` — фактический курс, `null` — НБРК; `vat_rate` — ручная ставка) / удаление черновика |
+| `POST invoices/<id>/submit` (`{version, counterparty_confirmed}`) | «Отправить ФД»: обязательные поля — 422 `E-INV-05`; без договора — порог 1000 МРП в KZT на дату счёта (422 `E-INV-01`, текст ТЗ); по договору — договор действует и тот же проект и статья (`BR-046`, расторгнутый — текст §26.2), срок (`BR-036`), остаток закрытого договора (422 `E-INV-02`); дубль — 422 `E-INV-03` со ссылкой; количество — 409 `BR-042`; Σ строк = сумме — 422 `BR-044`; под блокировкой строки бюджета сверхплановая часть ≤ остатка статьи — 422 `BR-043`; нет курса — 422 `E-REF-05` |
+| `POST invoices/<id>/cancel` (`comment` ≥ 10) | Отменить: автор — до решения ФД, ФД — до первой отметки оплаты |
+| `POST invoices/<id>/decision` (`{decision: pay\|not_payable\|return, planned_pay_date?, comment}`) | Решение ФД: «Оплатить» — повторная проверка бюджета «на текущий момент» под блокировкой (422 `E-BUD-01`) и плановая дата (по умолчанию — срок оплаты); «Не оплачивать» и «Вернуть» — комментарий ≥ 10 (`BR-060`) |
+| `POST invoices/batch-decision` (`{invoice_ids, decision: pay\|not_payable, comment?}`) | Массово: каждый счёт отдельно, ответ `{ok: [id], failed: [{id, reason}]}` (§10.5) |
+| `POST invoices/<id>/payments` (`{pay_date, amount, pp_number?, rate?}`) | «Оплачено» — БУХ: сумма ≤ неоплаченного остатка (422 `BR-052`); частично — «Оплачено частично», полностью — «Оплачено» |
+| `POST invoices/<id>/payments/<mark_id>/cancel` (`comment` ≥ 10) | Отменить отметку — БУХ или ФД, пока банк не подтвердил (`paid_bank_amount` = 0, иначе 409) |
+| `POST invoices/<id>/request-docs` (`{avr, waybill, vat_invoice, comment}`), `…/submit-docs`, `…/accept-docs`, `…/return-docs` (`comment` ≥ 10) | Закрывающие документы после оплаты (D-13): запрос БУХ (без флажков — по типу: ТМЦ → накладная, услуги → АВР) → «Ждёт закрывающих» → автор (или ФД от его имени) вложил → «Документы предоставлены» → принять («Закрыт») / вернуть |
+| `GET invoices/threshold?date=` | GetMrpThreshold: 1000 × МРП на дату |
+| `GET invoices/export-queue` | Очередь к оплате в xlsx — БУХ: номер, контрагент, БИН, IBAN, сумма к оплате, плановая дата, назначение платежа «Оплата по счёту № … от …, СЧ-…» |
+
+Для соседних аппок (`bpp.interface`): `find_by_number(number)` — счёт по
+`СЧ-ГГГГ-NNNNNN` для сверки выписки (A4.2); `closing_docs_pending_for_user
+(user_id)` — счета автора в «Ждёт закрывающих» для ежедневной сводки (A3.2).
 
 **Контрагенты** — ядро модуля, без своего рубильника (ТЗ §18, L-08, D-20,
 задача A2.3). Без согласования; уникальна пара (страна, рег. номер), номер
@@ -1635,8 +1690,11 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 `export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
 колонки — `export.Column(key, title, kind)`, `kind` —
 `text|money|decimal|date|datetime`. Подключено у **контрагентов**
-(`GET counterparties?format=xlsx`, задача 6) — бюджет, заявка и план
-закупок ждут своего подключения (задачи B):
+(`GET counterparties?format=xlsx`, задача 6), **бюджетов**, **заявок** и
+**плана закупок** (остаток B, B-3). У реестров с видимостью «свои» права
+заказчика едут в пересборку фоновой выгрузки: `Actor.export_identity()` →
+`{user_id, company, is_superuser}` в `rebuild`, `Actor.for_user(...)` в
+задаче:
 
 - до 10 000 строк — xlsx сразу тем же запросом (`Content-Disposition:
   attachment`, имя — `filename*`); суммы — числа с форматом `#,##0.00`
@@ -1656,7 +1714,8 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 
 Печать — `printing.render_html/render_pdf/pdf_response(template, context,
 filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
-наследуется документами модуля (задачи этапа 3): номер, статус, автор,
+наследуется документами модуля (заявка — `print/purchase_request.html`,
+остальные — задачи этапа 3): номер, статус, автор,
 дата, таблица (блок `body`, по умолчанию — из контекста `table`), «Лист
 согласования»; место под фирменный бланк — колонтитулы (блоки
 `letterhead_header`/`letterhead_footer`, Q-B31, ожидаются отдельно).

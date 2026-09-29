@@ -18,12 +18,19 @@ from __future__ import annotations
 from apps.bpp.models import (
     AccountableFundsRequest,
     AdvanceReport,
+    Agreement,
+    AgreementType,
     Budget,
+    Invoice,
+    InvoiceBasis,
     PurchaseRequest,
     PurchaseType,
 )
 from apps.bpp.services.accountable import accountable as accountable_service
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.agreements import agreements as agreement_service
+from apps.bpp.services.counterparties import lookup as counterparty_lookup
+from apps.bpp.services.invoices import invoices as invoice_service
 from apps.bpp.services.budget import budgets as budget_service
 from apps.bpp.services.core import audit
 from apps.bpp.services.money import fmt
@@ -105,6 +112,63 @@ def _report_facts(subject_id) -> dict:
 _AMOUNT_FIELDS = [{"key": "amount", "label": "Сумма", "type": "number"}]
 
 
+def _describe_agreement(subject_id) -> dict | None:
+    agr = Agreement.objects.select_related("counterparty").filter(pk=subject_id).first()
+    if agr is None:
+        return None
+    kind = "Допсоглашение" if agr.parent_agreement_id else "Договор"
+    who = f" с {counterparty_lookup.display_name(agr.counterparty)}" if agr.counterparty_id else ""
+    amount = (f" на {fmt(agr.amount, agr.currency_code)}"
+              if agr.amount is not None and not agr.is_open else "")
+    return {"title": f"{kind} {agr.number}{who}{amount}", "url": f"/bpp/agreements/{agr.pk}"}
+
+
+def _agreement_fact_fields() -> list[dict]:
+    return [
+        {"key": "amount", "label": "Сумма договора", "type": "number"},
+        {"key": "amount_delta", "label": "Прирост суммы допсоглашения", "type": "number"},
+        {"key": "is_supplement", "label": "Допсоглашение", "type": "bool"},
+        {"key": "is_open", "label": "Открытый договор", "type": "bool"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+        {"key": "agreement_type", "label": "Тип договора", "type": "choice",
+         "options": [{"value": v, "label": label} for v, label in AgreementType.choices]},
+        {"key": "article_group", "label": "Группа статей", "type": "choice",
+         "options": [{"value": g["code"], "label": g["name"]}
+                     for g in refdata.article_groups()]},
+    ]
+
+
+def _describe_invoice(subject_id) -> dict | None:
+    inv = Invoice.objects.select_related("counterparty").filter(pk=subject_id).first()
+    if inv is None:
+        return None
+    who = f" {counterparty_lookup.display_name(inv.counterparty)}" if inv.counterparty_id else ""
+    return {"title": f"Счёт {inv.number}{who} на {fmt(inv.amount, inv.currency_code)}",
+            "url": f"/bpp/invoices/{inv.pk}"}
+
+
+def _invoice_fact_fields() -> list[dict]:
+    return [
+        {"key": "amount", "label": "Сумма счёта", "type": "number"},
+        {"key": "amount_kzt", "label": "Сумма счёта в KZT", "type": "number"},
+        {"key": "currency", "label": "Валюта", "type": "string"},
+        {"key": "basis", "label": "Основание оплаты", "type": "choice",
+         "options": [{"value": v, "label": label} for v, label in InvoiceBasis.choices]},
+        {"key": "purchase_type", "label": "Тип приобретения", "type": "choice",
+         "options": [{"value": v, "label": label} for v, label in PurchaseType.choices]},
+        {"key": "is_advance", "label": "Аванс (предоплата)", "type": "bool"},
+    ]
+
+
+def _invoice_requirements() -> list[dict]:
+    return [{"key": "bpp:budget", "label": "Бюджет статьи не превышен на текущий момент"}]
+
+
+def _agreement_scopes() -> list[dict]:
+    return [{"scope": "", "label": "Договор"},
+            {"scope": agreement_service.SUPPLEMENTARY, "label": "Дополнительное соглашение"}]
+
+
 def _history_of(model, can_view):
     def check(request, object_id: str) -> bool:
         obj = model.objects.filter(pk=object_id).first()
@@ -161,6 +225,42 @@ def register() -> None:
         facts=_report_facts,
         fact_fields=lambda: _AMOUNT_FIELDS,
     )
+    signoff.register_subject(
+        Agreement.SIGNOFF_SUBJECT_TYPE,
+        label="Договор",
+        model=Agreement,
+        on_started=agreement_service.on_started,
+        on_approved=agreement_service.on_approved,
+        on_rejected=agreement_service.on_rejected,
+        on_rework=agreement_service.on_rework,
+        on_cancelled=agreement_service.on_cancelled,
+        describe=_describe_agreement,
+        facts=agreement_service.facts,
+        fact_fields=_agreement_fact_fields,
+        scope_of=agreement_service.scope_of,
+        scopes=_agreement_scopes,
+    )
+    signoff.register_subject(
+        Invoice.SIGNOFF_SUBJECT_TYPE,
+        label="Счёт на оплату",
+        model=Invoice,
+        on_started=invoice_service.on_started,
+        on_approved=invoice_service.on_approved,
+        on_rejected=invoice_service.on_rejected,
+        on_rework=invoice_service.on_rework,
+        on_cancelled=invoice_service.on_cancelled,
+        describe=_describe_invoice,
+        facts=invoice_service.facts,
+        fact_fields=_invoice_fact_fields,
+        requirement_fields=_invoice_requirements,
+        check_requirement=invoice_service.check_requirement,
+    )
+    audit.register_history_access(
+        Invoice._meta.label_lower,
+        _valid_uuid_guard(_history_of(Invoice, invoice_service.can_view)))
+    audit.register_history_access(
+        Agreement._meta.label_lower,
+        _valid_uuid_guard(_history_of(Agreement, agreement_service.can_view)))
     audit.register_history_access(
         AccountableFundsRequest._meta.label_lower,
         _valid_uuid_guard(_history_of(AccountableFundsRequest, accountable_service.can_view)))

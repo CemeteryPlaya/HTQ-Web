@@ -34,6 +34,7 @@ from apps.refdata import interface as refdata
 from htqweb.errors import DomainError
 
 from . import committed as calc
+from . import notify
 
 COMMENT_MIN = 10
 
@@ -256,6 +257,7 @@ def approve(actor: Actor, budget_id, *, expected_version: int | None) -> Budget:
     _touch(budget, actor.user_id, "status", "active_version")
     audit.record(budget, "approved", actor_id=actor.user_id,
                  changes={"version_no": 1, "total": str(total)})
+    notify.budget_approved(budget, actor_id=actor.user_id)
     return budget
 
 
@@ -369,6 +371,7 @@ def approve_correction(actor: Actor, budget_id, *, expected_version: int | None,
     audit.record(budget, "correction_approved", actor_id=actor.user_id, comment=comment,
                  changes={"version_no": draft.version_no,
                           "lines": {"before": before, "after": _snapshot(draft)}})
+    notify.budget_approved(budget, actor_id=actor.user_id, correction=True)
     return budget
 
 

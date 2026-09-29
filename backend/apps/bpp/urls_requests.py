@@ -28,6 +28,8 @@ urlpatterns = [
     path(f"{R}/copy/", views.request_copy),
     path(f"{R}/execution", views.request_execution),
     path(f"{R}/execution/", views.request_execution),
+    path(f"{R}/print", views.request_print),
+    path(f"{R}/print/", views.request_print),
     path(f"{R}/files", views.request_files),
     path(f"{R}/files/", views.request_files),
     path(f"{R}/files/<uuid:file_id>/version", views.request_file_version),

@@ -48,6 +48,16 @@ def article_brief(ids: list[str]) -> dict[str, dict]:
                         "is_active": a.is_active} for a in rows}
 
 
+def active_articles(group_code: str) -> list[dict]:
+    rows = Article.objects.filter(group__code=group_code, is_active=True).order_by("code")
+    return [{"id": str(a.id), "code": a.code, "name": a.name} for a in rows]
+
+
+def uom_id(code: str) -> str | None:
+    found = Uom.objects.filter(code=code, is_active=True).values_list("id", flat=True).first()
+    return str(found) if found else None
+
+
 def article_groups() -> list[dict]:
     return [{"id": str(g.id), "code": g.code, "name": g.name, "node_key": g.node_key,
              "is_active": g.is_active} for g in ArticleGroup.objects.all()]

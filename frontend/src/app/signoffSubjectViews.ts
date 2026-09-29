@@ -73,6 +73,8 @@ export const SIGNOFF_SUBJECT_VIEWS: Record<string, SubjectView> = {
   'bpp.accountable_funds_request': stringKeyed(
     () => import('@/features/bpp/accountable/AccountableSignoffView'),
   ),
+  'bpp.agreement': stringKeyed(() => import('@/features/bpp/agreements/AgreementSignoffView')),
+  'bpp.invoice': stringKeyed(() => import('@/features/bpp/invoices/InvoiceSignoffView')),
   // Заявка конструктора «Запросы»: тот же движок согласует и её.
   'approvals.request': intKeyed(
     () => import('@/features/requests/components/RequestSubjectView'),

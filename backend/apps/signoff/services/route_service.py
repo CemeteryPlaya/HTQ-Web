@@ -70,6 +70,7 @@ def get_route_or_404(route_id: int) -> ApprovalRoute:
 
 #: Флаги маршрута, которые принимают ручки (мастер-план БЗО, D-21).
 FLAG_FIELDS = ("forbid_self_approval", "reject_comment_min", "lazy_resolution",
+               "skip_unmatched_groups",
                "no_executor_notify_position_ids", "escalation_position_id",
                "self_skip_notify_position_ids")
 
@@ -529,6 +530,7 @@ def _flags_card(route: ApprovalRoute) -> dict:
         "forbid_self_approval": route.forbid_self_approval,
         "reject_comment_min": route.reject_comment_min,
         "lazy_resolution": route.lazy_resolution,
+        "skip_unmatched_groups": route.skip_unmatched_groups,
         "no_executor_notify_position_ids": notify,
         "escalation_position_id": escalation,
         "self_skip_notify_position_ids": skip,

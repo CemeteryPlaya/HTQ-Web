@@ -77,6 +77,16 @@ export interface BppDocumentShellBaseProps<T> {
   fileOwnerType?: string;
   /** У документа есть согласование (ТЗ §05: «где есть»). */
   withApproval?: boolean;
+  /** У документа есть файлы; `false` — вкладки «Файлы» нет (бюджет). */
+  withFiles?: boolean;
+  /**
+   * Режим «только просмотр» явно. По умолчанию — пустой `allowedActions`,
+   * но у части документов в нём всегда есть действия, не меняющие документ
+   * («Печать», «Экспорт», «Копировать»): тогда режим задаёт форма.
+   */
+  readOnly?: boolean;
+  /** Свои вкладки документа после «Файлов» («Версии» бюджета, «Исполнение»). */
+  extraTabs?: { key: string; label: string; content: ReactNode }[];
   draft?: BppDocumentDraft<T>;
   children: ReactNode | ((ctx: { readOnly: boolean }) => ReactNode);
 }
@@ -110,13 +120,16 @@ export function BppDocumentShell<T>({
   actions,
   fileOwnerType,
   withApproval = true,
+  withFiles = true,
+  readOnly: readOnlyProp,
+  extraTabs = [],
   history,
   historyType,
   draft,
   children,
 }: BppDocumentShellProps<T>) {
   const { t } = useTranslation();
-  const readOnly = allowedActions.length === 0;
+  const readOnly = readOnlyProp ?? allowedActions.length === 0;
   const dirty = Boolean(draft?.dirty) && !readOnly;
 
   const stored = useDraftAutosave<T | null>(
@@ -237,12 +250,21 @@ export function BppDocumentShell<T>({
       <div>{typeof children === 'function' ? children({ readOnly }) : children}</div>
 
       {documentId !== null && (
-        <Tabs defaultValue={withApproval ? 'approval' : 'files'}>
+        <Tabs
+          defaultValue={withApproval
+            ? 'approval'
+            : withFiles ? 'files' : (extraTabs[0]?.key ?? 'history')}
+        >
           <TabsList>
             {withApproval && (
               <TabsTrigger value="approval">{t('bpp.document.tabApproval', 'Согласование')}</TabsTrigger>
             )}
-            <TabsTrigger value="files">{t('bpp.document.tabFiles', 'Файлы')}</TabsTrigger>
+            {withFiles && (
+              <TabsTrigger value="files">{t('bpp.document.tabFiles', 'Файлы')}</TabsTrigger>
+            )}
+            {extraTabs.map((tab) => (
+              <TabsTrigger key={tab.key} value={tab.key}>{tab.label}</TabsTrigger>
+            ))}
             {historyContent && (
               <TabsTrigger value="history">{t('bpp.document.tabHistory', 'История изменений')}</TabsTrigger>
             )}
@@ -252,13 +274,18 @@ export function BppDocumentShell<T>({
               <ApprovalTab subjectType={subjectType} subjectId={documentId} />
             </TabsContent>
           )}
-          <TabsContent value="files">
-            <FilesPanel
-              ownerType={fileOwnerType ?? subjectType}
-              ownerId={documentId}
-              readOnly={readOnly}
-            />
-          </TabsContent>
+          {withFiles && (
+            <TabsContent value="files">
+              <FilesPanel
+                ownerType={fileOwnerType ?? subjectType}
+                ownerId={documentId}
+                readOnly={readOnly}
+              />
+            </TabsContent>
+          )}
+          {extraTabs.map((tab) => (
+            <TabsContent key={tab.key} value={tab.key}>{tab.content}</TabsContent>
+          ))}
           {historyContent && <TabsContent value="history">{historyContent}</TabsContent>}
         </Tabs>
       )}

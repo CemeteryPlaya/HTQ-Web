@@ -420,3 +420,52 @@ def test_submitting_an_uncovered_subject_answers_409(approvers):
 
     assert response.status_code == 409
     assert "нет ветки" in response.json()["detail"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Флаг skip_unmatched_groups (мастер-план БЗО, D-18)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _skipping(route):
+    route.skip_unmatched_groups = True
+    route.save(update_fields=["skip_unmatched_groups"])
+    return route
+
+
+def test_skip_flag_drops_the_unmatched_group_and_keeps_the_rest(approvers):
+    _skipping(branching_route(approvers))
+    doc = make_doc(zone=3)
+
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+
+    assert stage_names(process) == ["Проверка", "Утверждение"]
+    assert process.state == "pending"
+
+
+def test_no_stage_left_approves_at_once(approvers):
+    """Допсоглашение без изменения суммы: этап ФД — только при изменении,
+    других этапов нет. Процесс заводится и сразу согласован — с журналом и
+    обычными колбэками предмета."""
+    from apps.signoff.models import ApprovalEvent
+    from apps.signoff.tests.testapp import hooks
+
+    hooks.reset()
+    _skipping(make_route([(1, "ФД", Quorum.ALL, [approvers["boss"].pk],
+                           {"condition": zone(1)})]))
+    doc = make_doc(zone=3)
+
+    process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
+
+    assert process.state == "approved" and not process.stages.exists()
+    assert ApprovalEvent.objects.filter(process=process,
+                                        kind="no_applicable_stages").exists()
+    assert [call[0] for call in hooks.CALLS] == ["started", "approved"]
+    doc.refresh_from_db()
+    assert doc.approval_state == "approved"
+    hooks.reset()
+
+
+def test_without_the_flag_the_empty_group_still_refuses(approvers):
+    make_route([(1, "ФД", Quorum.ALL, [approvers["boss"].pk], {"condition": zone(1)})])
+    with pytest.raises(engine.RouteUnusable):
+        engine.start(subject_type=SUBJECT, subject_id=make_doc(zone=3).pk)

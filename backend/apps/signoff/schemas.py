@@ -68,6 +68,7 @@ class RouteFlags(BaseModel):
     forbid_self_approval: bool = False
     reject_comment_min: int = Field(0, ge=0, le=500)
     lazy_resolution: bool = False
+    skip_unmatched_groups: bool = False
     no_executor_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
     escalation_position_id: Optional[int] = None
     self_skip_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
@@ -89,6 +90,7 @@ class RouteUpdate(BaseModel):
     forbid_self_approval: Optional[bool] = None
     reject_comment_min: Optional[int] = Field(None, ge=0, le=500)
     lazy_resolution: Optional[bool] = None
+    skip_unmatched_groups: Optional[bool] = None
     no_executor_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
     escalation_position_id: Optional[int] = None
     self_skip_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
@@ -249,6 +251,7 @@ class RouteRead(BaseModel):
     forbid_self_approval: bool = False
     reject_comment_min: int = 0
     lazy_resolution: bool = False
+    skip_unmatched_groups: bool = False
     no_executor_notify_position_ids: list[int] = Field(default_factory=list)
     escalation_position_id: Optional[int] = None
     self_skip_notify_position_ids: list[int] = Field(default_factory=list)

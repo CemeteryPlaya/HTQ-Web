@@ -13,6 +13,7 @@ from htqweb.http import api_view, json_error
 
 from .schemas import budget as schemas
 from .services.actor import Actor
+from .services.core import export
 from .services.params import int_param
 from .services.budget import balance as balance_service
 from .services.budget import budgets as service
@@ -24,11 +25,34 @@ def _card(request, budget) -> dict:
     return read.card(actor, service.get_visible(actor, budget.pk))
 
 
+EXPORT_COLUMNS = (
+    export.Column("number", "Номер"),
+    export.Column("project", "Проект"),
+    export.Column("project_name", "Наименование проекта"),
+    export.Column("status", "Статус"),
+    export.Column("version_no", "Версия"),
+    export.Column("currency_code", "Валюта"),
+    export.Column("limit_amount", "Лимит", kind="money"),
+    export.Column("committed", "Задействовано", kind="money"),
+    export.Column("available", "Остаток", kind="money"),
+    export.Column("approved_at", "Утверждён", kind="datetime"),
+    export.Column("approved_by", "Утвердил"),
+)
+
+
 @api_view(methods=("GET",), module="bpp", level="read")
 def budget_list(request):
     params = request.GET
-    return read.registry(Actor(request), status=params.get("status") or None,
-                         project_id=params.get("project_id") or None,
+    actor = Actor(request)
+    filters = {"status": params.get("status") or None,
+               "project_id": params.get("project_id") or None}
+    if params.get("format") == "xlsx":
+        kwargs = {**actor.export_identity(), "filters": filters}
+        return export.respond(
+            request, name="Бюджеты проектов", columns=EXPORT_COLUMNS,
+            rows=read.export_rows(**kwargs), count=read.export_count(**kwargs),
+            rebuild=(read.EXPORT_REBUILD_PATH, kwargs))
+    return read.registry(actor, **filters,
                          page=int_param(params, "page", 1, minimum=1),
                          page_size=int_param(params, "page_size", 50))
 

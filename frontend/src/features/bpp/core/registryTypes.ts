@@ -54,7 +54,9 @@ export interface BulkOutcome {
 export interface RegistryBulkAction {
   key: string;
   label: string;
-  run: (ids: string[]) => Promise<BulkOutcome>;
+  /** `null` — человек передумал в своём диалоге (комментарий, дата):
+   * ничего не выполнено, итога нет, отметки остаются. */
+  run: (ids: string[]) => Promise<BulkOutcome | null>;
   /** Запасной текст тоста, если ручка упала целиком. */
   errorText?: string;
 }

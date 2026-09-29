@@ -12,7 +12,10 @@ from htqweb.http import api_view, json_error
 
 from .schemas import accountable as schemas
 from .services.accountable import accountable as service
+from .services.accountable import read
 from .services.actor import Actor
+from .services.core import export
+from .services.params import int_param
 
 
 def _card(request, req) -> dict:
@@ -20,9 +23,47 @@ def _card(request, req) -> dict:
     return service.card(actor, service.get_visible(actor, req.pk))
 
 
+def _list_param(request, name: str) -> list[str]:
+    return [value for value in request.GET.getlist(name) if value]
+
+
+EXPORT_COLUMNS = (
+    export.Column("number", "Номер"),
+    export.Column("status", "Статус"),
+    export.Column("created_at", "Дата создания", kind="date"),
+    export.Column("accountable", "Подотчётное лицо"),
+    export.Column("project", "Проект"),
+    export.Column("article", "Статья бюджета"),
+    export.Column("goal", "Цель"),
+    export.Column("amount", "Сумма", kind="money"),
+    export.Column("currency", "Валюта"),
+    export.Column("reported_amount", "Подтверждено отчётами", kind="money"),
+    export.Column("current_holder", "Сейчас у"),
+)
+
+
 @api_view(methods=("GET",), module="bpp", level="read")
 def accountable_list(request):
-    return service.registry(Actor(request), status=request.GET.get("status") or None)
+    params = request.GET
+    filters = {
+        "statuses": _list_param(request, "status"),
+        "project_ids": _list_param(request, "project_id"),
+        "article_ids": _list_param(request, "article_id"),
+        "date_from": params.get("date_from") or None,
+        "date_to": params.get("date_to") or None,
+        "search": params.get("search") or None,
+        "awaiting_me": params.get("awaiting_me") == "1",
+    }
+    actor = Actor(request)
+    if params.get("format") == "xlsx":
+        kwargs = {**actor.export_identity(), "filters": filters}
+        return export.respond(
+            request, name="Подотчётные средства", columns=EXPORT_COLUMNS,
+            rows=read.export_rows(**kwargs), count=read.export_count(**kwargs),
+            rebuild=(read.EXPORT_REBUILD_PATH, kwargs))
+    return read.registry(actor, filters=filters,
+                         page=int_param(params, "page", 1, minimum=1),
+                         page_size=int_param(params, "page_size", 50))
 
 
 @api_view(methods=("POST",), module="bpp", level="write", body=schemas.AccountableCreate,
@@ -105,14 +146,14 @@ def accountable_add_report(request, request_id):
     except ArithmeticError as exc:
         raise DomainError("E-VAL-01", "Сумма указана неверно.",
                           fields=[{"field": "amount", "message": "Число"}]) from exc
-    return service.serialize_report(report)
+    return service.serialize_report(report, actor)
 
 
 @api_view(methods=("POST",), module="bpp", level="write", idempotent=True)
 def report_submit(request, report_id):
     actor = Actor(request)
     service.get_visible_report(actor, report_id)
-    return service.serialize_report(service.submit_report(actor, report_id))
+    return service.serialize_report(service.submit_report(actor, report_id), actor)
 
 
 @api_view(methods=("GET",), module="bpp", level="read")

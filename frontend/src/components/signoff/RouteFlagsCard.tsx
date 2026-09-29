@@ -24,6 +24,7 @@ interface Flags {
   forbid_self_approval: boolean;
   reject_comment_min: number;
   lazy_resolution: boolean;
+  skip_unmatched_groups: boolean;
   no_executor_notify_position_ids: number[];
   escalation_position_id: number | null;
   self_skip_notify_position_ids: number[];
@@ -33,6 +34,7 @@ const flagsOf = (route: ApprovalRoute): Flags => ({
   forbid_self_approval: route.forbid_self_approval,
   reject_comment_min: route.reject_comment_min,
   lazy_resolution: route.lazy_resolution,
+  skip_unmatched_groups: route.skip_unmatched_groups ?? false,
   no_executor_notify_position_ids: route.no_executor_notify_position_ids ?? [],
   escalation_position_id: route.escalation_position_id,
   self_skip_notify_position_ids: route.self_skip_notify_position_ids ?? [],
@@ -141,6 +143,21 @@ export function RouteFlagsCard({ route }: { route: ApprovalRoute }) {
         </div>
         <Switch id="flag-lazy" checked={flags.lazy_resolution}
           onCheckedChange={(checked) => set({ lazy_resolution: checked })} />
+      </div>
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Label htmlFor="flag-skip" className="text-sm">
+            Шаг без подходящей ветки пропускается
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Если ни одно условие шага не сошлось и «иначе» нет, шаг пропускается, а не
+            отказывает в отправке. Не осталось ни одного шага — документ согласован
+            сразу (например, допсоглашение без изменения суммы).
+          </p>
+        </div>
+        <Switch id="flag-skip" checked={flags.skip_unmatched_groups}
+          onCheckedChange={(checked) => set({ skip_unmatched_groups: checked })} />
       </div>
 
       {flags.lazy_resolution && (
