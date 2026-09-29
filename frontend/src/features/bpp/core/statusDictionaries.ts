@@ -8,10 +8,8 @@
  *
  * Подпись зависит от вида документа, а не только от кода: `approved` у
  * заявки — «Утверждена», у бюджета — «Утверждён». Коды — те, что отдаёт
- * сервер (`TextChoices` моделей `apps/bpp/models/*`). Договор и счёт
- * (этап 3, B) ещё не заведены на сервере: их коды здесь — предложение по
- * таблицам ТЗ §15.3–15.4, сверить с моделями при их появлении. Коды
- * загрузки выписки и её строк — из `apps/bpp/models/bank.py`.
+ * сервер (`TextChoices` моделей `apps/bpp/models/*`): договор и счёт — из
+ * `agreements.py`/`invoices.py`, загрузка выписки и её строки — из `bank.py`.
  */
 
 /** Тон бейджа — смысл статуса, одинаковый для всех документов. */
@@ -74,28 +72,31 @@ export const STATUS_DICTIONARIES = {
     blocked: s('counterparty.blocked', 'Заблокирован', 'danger'),
     archived: s('counterparty.archived', 'Архив', 'muted'),
   },
-  // ТЗ §15.3 — коды предложены, модели договора ещё нет (этап 3).
+  // ТЗ §15.3; `AgreementStatus` (B3.1).
   contract: {
     draft: s('contract.draft', 'Черновик', 'draft'),
     on_review: s('contract.on_review', 'На согласовании', 'progress'),
     rework: s('contract.rework', 'На доработке', 'attention'),
     rejected: s('contract.rejected', 'Отклонён', 'danger'),
-    replaced_by_alternative: s('contract.replaced_by_alternative', 'Заменён альтернативой', 'muted'),
+    replaced: s('contract.replaced', 'Заменён альтернативой', 'muted'),
     active: s('contract.active', 'Действует', 'success'),
     fulfilled: s('contract.fulfilled', 'Исполнен', 'muted'),
     terminated: s('contract.terminated', 'Расторгнут', 'danger'),
   },
-  // ТЗ §15.4 — коды предложены, модели счёта ещё нет (этап 3).
+  // ТЗ §15.4 с D-13 (закрывающие документы после оплаты); `InvoiceStatus` (B3.2).
   invoice: {
     draft: s('invoice.draft', 'Черновик', 'draft'),
     under_review: s('invoice.under_review', 'На рассмотрении ФД', 'progress'),
     returned: s('invoice.returned', 'Возвращён на доработку', 'attention'),
     not_payable: s('invoice.not_payable', 'Не к оплате', 'danger'),
     to_pay: s('invoice.to_pay', 'К оплате', 'progress'),
-    docs_requested: s('invoice.docs_requested', 'Документы запрошены', 'attention'),
-    docs_provided: s('invoice.docs_provided', 'Документы предоставлены', 'progress'),
+    partially_paid: s('invoice.partially_paid', 'Оплачено частично', 'attention'),
     paid: s('invoice.paid', 'Оплачено', 'success'),
+    awaiting_docs: s('invoice.awaiting_docs', 'Ждёт закрывающих документов', 'attention'),
+    docs_provided: s('invoice.docs_provided', 'Документы предоставлены', 'progress'),
+    closed: s('invoice.closed', 'Закрыт', 'muted'),
     cancelled: s('invoice.cancelled', 'Отменён', 'muted'),
+    replaced: s('invoice.replaced', 'Заменён альтернативой', 'muted'),
   },
   // Загрузка выписки (ТЗ §15.5, A4.1); `BankImportStatus`. «Сверена» —
   // вместе со сверкой (A4.2, этап 4).

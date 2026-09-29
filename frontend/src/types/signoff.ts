@@ -232,6 +232,7 @@ export interface RouteFlagsInput {
   forbid_self_approval?: boolean;
   reject_comment_min?: number;
   lazy_resolution?: boolean;
+  skip_unmatched_groups?: boolean;
   no_executor_notify_position_ids?: number[];
   escalation_position_id?: number | null;
   self_skip_notify_position_ids?: number[];
@@ -251,6 +252,9 @@ export interface ApprovalRoute {
   forbid_self_approval: boolean;
   reject_comment_min: number;
   lazy_resolution: boolean;
+  /** Группа этапов без подходящей ветки пропускается; не осталось ни одной —
+   *  документ согласован сразу (D-18, допсоглашение без изменения суммы). */
+  skip_unmatched_groups?: boolean;
   no_executor_notify_position_ids: number[];
   escalation_position_id: number | null;
   self_skip_notify_position_ids: number[];

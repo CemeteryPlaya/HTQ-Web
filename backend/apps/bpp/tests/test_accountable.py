@@ -5,11 +5,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import io
+
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client
+from openpyxl import load_workbook
 
 from apps.bpp.models import AccountableStatus
 from apps.bpp.services.accountable import accountable as service
+from apps.bpp.services.accountable import read
 from apps.bpp.services.budget import balance
 from apps.bpp.services.budget import committed as calc
 from apps.bpp.tests import stage2 as s
@@ -19,6 +24,7 @@ from htqweb.errors import DomainError
 
 pytestmark = pytest.mark.django_db
 BUH = 907
+BASE = "/api/bpp/v1"
 
 
 def _routes():
@@ -86,7 +92,10 @@ def test_full_path_to_closed_by_reports(company_context):
     assert req.status == AccountableStatus.AWAITING_REPORT
 
     first = service.add_report(sn, req.id, expense_name="Бензин", amount=400, upload=_pdf())
+    assert [r["can_submit"] for r in service.card(sn, req)["reports"]] == [True]
     service.submit_report(sn, first.id)
+    # На согласовании отчёт второй раз не отправить; чужому — не отправить вовсе.
+    assert [r["can_submit"] for r in service.card(sn, req)["reports"]] == [False]
     with pytest.raises(DomainError) as exc:
         service.add_report(sn, req.id, expense_name="Лишнее", amount=700, upload=_pdf())
     assert exc.value.code == "E-ACN-01"
@@ -111,3 +120,34 @@ def test_only_the_owner_and_fd_see_the_request(company_context):
     with pytest.raises(DomainError):
         service.get_visible(s.actor(slug, s.SN2, "bpp-sn"), req.id)
     assert service.get_visible(s.actor(slug, s.FD, "bpp-fd"), req.id) == req
+
+
+def test_registry_is_paged_filtered_and_exported(company_context):
+    """Реестр подотчёта — конверт реестров модуля (ТЗ §19): свои заявки,
+    поиск по номеру и цели, итог по всей выборке; выгрузка — та же выборка."""
+    slug = company_context["slug"]
+    proj, art, sn = _setup(slug)
+    mine = service.create(sn, project_id=proj.id, article_id=art.id, amount=100,
+                          goal="Канцелярия для прорабской")
+    service.create(sn, project_id=proj.id, article_id=art.id, amount=50, goal="Такси")
+
+    page = read.registry(sn, filters={"search": "канц"})
+    assert [row["number"] for row in page["items"]] == [mine.number]
+    assert page["total"] == 1 and page["totals"]["amount"] == Decimal("100.00")
+    row = page["items"][0]
+    assert (row["project_code"], row["article_name"]) == ("П-015", art.name)
+    assert row["reported_amount"] == Decimal("0.00") and row["remaining_amount"] == Decimal("100.00")
+    assert read.registry(sn, filters={})["totals"]["amount"] == Decimal("150.00")
+    assert read.registry(s.actor(slug, s.SN2, "bpp-sn"), filters={})["total"] == 0
+
+    card = service.card(sn, mine)
+    assert card["project"]["code"] == "П-015" and card["accountable_user_name"]
+
+    client = Client()
+    resp = client.get(f"{BASE}/accountable?search=Канц&page_size=25", **s.auth(slug, s.SN))
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["page_size"] == 25 and resp.json()["total"] == 1
+    sheet = client.get(f"{BASE}/accountable?search=Канц&format=xlsx", **s.auth(slug, s.SN))
+    assert sheet.status_code == 200, sheet.content
+    rows = list(load_workbook(io.BytesIO(sheet.content)).active.iter_rows(values_only=True))
+    assert rows[0][0] == "Номер" and [r[0] for r in rows[1:]] == [mine.number]

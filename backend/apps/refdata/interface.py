@@ -13,9 +13,9 @@ from apps.core.services import require_service
 from .services import editing, lookup
 from .services.lookup import RefdataMissing  # noqa: F401 — часть контракта
 
-__all__ = ["RefdataMissing", "article_brief", "article_groups", "can_edit",
+__all__ = ["RefdataMissing", "active_articles", "article_brief", "article_groups", "can_edit",
            "contract_threshold", "country_brief", "exchange_rate", "mrp", "uom_brief",
-           "vat_rate"]
+           "uom_id", "vat_rate"]
 
 
 def vat_rate(country_code: str, on_date: date) -> Decimal | None:
@@ -41,6 +41,19 @@ def exchange_rate(currency: str, on_date: date) -> Decimal | None:
 def article_brief(ids: list[str]) -> dict[str, dict]:
     require_service("refdata")
     return lookup.article_brief(ids)
+
+
+def active_articles(group_code: str) -> list[dict]:
+    """Действующие статьи группы (``supply``, ``pm``) по коду — ``[{id, code,
+    name}]``; демо-данные модуля БЗО берут статьи отсюда."""
+    require_service("refdata")
+    return lookup.active_articles(group_code)
+
+
+def uom_id(code: str) -> str | None:
+    """Ключ действующей единицы измерения по коду (``pcs``, ``t``…)."""
+    require_service("refdata")
+    return lookup.uom_id(code)
 
 
 def article_groups() -> list[dict]:

@@ -2,9 +2,10 @@
  * Раздел «Закупки и оплаты» (ТЗ §05; задача 7 плана этапа 2 A):
  * - меню по правам — пункт подмодуля с `visible === false` не рисуется, а
  *   его маршрут отвечает «Нет доступа»;
- * - ссылки `/bpp/requests/<id>` и `/bpp/accountable/<id>` из колокольчика и
- *   карточки согласования открывают документ внутри раздела — через ту же
- *   таблицу маршрутов, что и приложение (`/bpp/*`).
+ * - ссылки на документы (`/bpp/requests|agreements|invoices|accountable/<id>`)
+ *   из колокольчика и карточки согласования открывают форму внутри раздела —
+ *   через ту же таблицу маршрутов, что и приложение (`/bpp/*`), и без роли
+ *   в модуле (подмодуль `links`).
  */
 import { Suspense } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -25,11 +26,11 @@ import { bppModules } from './modules';
 vi.mock('@/components/Header', () => ({ Header: () => null }));
 vi.mock('@/components/Footer', () => ({ Footer: () => null }));
 
-vi.mock('@/features/bpp/requests/RequestSignoffView', () => ({
-  default: ({ id }: { id: string }) => <div>Заявка {id}</div>,
-}));
-vi.mock('@/features/bpp/accountable/AccountableSignoffView', () => ({
-  default: ({ id }: { id: string }) => <div>Подотчёт {id}</div>,
+vi.mock('@/features/bpp/requests/RequestFormPage', () => ({ default: () => <div>Форма заявки</div> }));
+vi.mock('@/features/bpp/agreements/AgreementFormPage', () => ({ default: () => <div>Форма договора</div> }));
+vi.mock('@/features/bpp/invoices/InvoiceFormPage', () => ({ default: () => <div>Форма счёта</div> }));
+vi.mock('@/features/bpp/accountable/AccountableFormPage', () => ({
+  default: () => <div>Форма подотчёта</div>,
 }));
 
 vi.mock('@/api/signoff', () => ({
@@ -149,16 +150,16 @@ describe('BppLayout — подмодули пакета', () => {
     expect(screen.getByText('Нет доступа')).toBeInTheDocument();
   });
 
-  it('у переходников заявки и подотчёта нет пунктов меню (реестры — B2.5)', () => {
+  it('у документов пункты меню появились с реестрами; у ссылок — нет', () => {
     // Не точный список пунктов: он растёт с каждым подмодулем (справочники,
-    // проекты, контрагенты), а проверяется здесь только отсутствие пунктов
-    // у двух переходников.
+    // проекты, контрагенты), а проверяется здесь только наличие и отсутствие
+    // пунктов у подмодулей документов.
     const keys = bppModules.filter((m) => m.menu).map((m) => m.key);
-    expect(keys).toContain('approvals');
-    expect(keys).not.toContain('requests');
-    expect(keys).not.toContain('accountable');
+    expect(keys).toEqual(expect.arrayContaining(
+      ['approvals', 'budgets', 'requests', 'agreements', 'invoices', 'accountable']));
+    expect(keys).not.toContain('links');
     expect(bppModules.map((m) => m.key)).toEqual(
-      expect.arrayContaining(['approvals', 'requests', 'accountable']),
+      expect.arrayContaining(['approvals', 'requests', 'accountable', 'links']),
     );
   });
 });
@@ -179,9 +180,11 @@ describe('ссылки на документы из колокольчика и 
   });
 
   it.each([
-    [`/bpp/requests/${UUID}`, `Заявка ${UUID}`],
-    [`/bpp/accountable/${UUID}`, `Подотчёт ${UUID}`],
-  ])('%s открывает документ через таблицу маршрутов приложения', async (url, text) => {
+    [`/bpp/requests/${UUID}`, 'Форма заявки'],
+    [`/bpp/agreements/${UUID}`, 'Форма договора'],
+    [`/bpp/invoices/${UUID}`, 'Форма счёта'],
+    [`/bpp/accountable/${UUID}`, 'Форма подотчёта'],
+  ])('%s открывает форму и без роли в модуле (подмодуль links)', async (url, text) => {
     permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));
     const route = protectedRoutes.find((r) => r.path === '/bpp/*')!;
     const Page = route.component;
@@ -197,6 +200,6 @@ describe('ссылки на документы из колокольчика и 
       </QueryClientProvider>,
     );
     expect(await screen.findByText(text)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'К согласованиям' })).toHaveAttribute('href', '/signoff');
+    expect(screen.queryByText('Нет доступа')).not.toBeInTheDocument();
   });
 });

@@ -35,6 +35,7 @@ ROUTE_FLAG_DEFAULTS: dict = {
     "forbid_self_approval": False,
     "reject_comment_min": 0,
     "lazy_resolution": False,
+    "skip_unmatched_groups": False,
     "no_executor_notify_position_ids": [],
     "escalation_position_id": None,
     "self_skip_notify_position_ids": [],

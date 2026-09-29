@@ -182,6 +182,7 @@ export function BppRegistry<Row extends { id: string }>({
     setOutcome(null);
     try {
       const result = await action.run(ids);
+      if (result === null) return;
       setOutcome({ ...result, action: action.label });
       // Прошедшие строки снимаются с отметки, отклонённые остаются — их
       // можно поправить и повторить.

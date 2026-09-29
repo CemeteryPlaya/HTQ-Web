@@ -12,8 +12,11 @@ from htqweb.http import api_view, json_error
 
 from .schemas import requests as schemas
 from .services.actor import Actor
+from .services.core import export
+from .services.core import printing
 from .services.params import int_param
 from .services.requests import files as files_service
+from .services.requests import printing as request_printing
 from .services.requests import read
 from .services.requests import requests as service
 
@@ -24,6 +27,21 @@ def _card(request, req) -> dict:
 
 def _list_param(request, name: str) -> list[str]:
     return [value for value in request.GET.getlist(name) if value]
+
+
+EXPORT_COLUMNS = (
+    export.Column("number", "Номер"),
+    export.Column("status", "Статус"),
+    export.Column("created_at", "Дата создания", kind="date"),
+    export.Column("author", "Автор"),
+    export.Column("project", "Проект"),
+    export.Column("article", "Статья бюджета"),
+    export.Column("purchase_type", "Тип закупки"),
+    export.Column("need_date", "Дата потребности", kind="date"),
+    export.Column("total_amount", "Сумма", kind="money"),
+    export.Column("currency_code", "Валюта"),
+    export.Column("current_holder", "Сейчас у"),
+)
 
 
 @api_view(methods=("GET",), module="bpp", level="read")
@@ -39,7 +57,16 @@ def request_list(request):
         "search": params.get("search") or None,
         "awaiting_me": params.get("awaiting_me") == "1",
     }
-    return read.registry(Actor(request), filters=filters,
+    actor = Actor(request)
+    if params.get("format") == "xlsx":
+        # Та же выборка, что у страницы, без пагинации; права заказчика
+        # едут в пересборку фоновой выгрузки (у задачи нет запроса).
+        kwargs = {**actor.export_identity(), "filters": filters}
+        return export.respond(
+            request, name="Заявки на закупку", columns=EXPORT_COLUMNS,
+            rows=read.export_rows(**kwargs), count=read.export_count(**kwargs),
+            rebuild=(read.EXPORT_REBUILD_PATH, kwargs))
+    return read.registry(actor, filters=filters,
                          page=int_param(params, "page", 1, minimum=1),
                          page_size=int_param(params, "page_size", 50))
 
@@ -137,6 +164,14 @@ def request_copy(request, request_id):
 def request_execution(request, request_id):
     actor = Actor(request)
     return read.execution(service.get_visible(actor, request_id))
+
+
+@api_view(methods=("GET",), module="bpp", level="read")
+def request_print(request, request_id):
+    """Печатная форма заявки с листом согласования — PDF в браузере."""
+    req = service.get_visible(Actor(request), request_id)
+    return printing.pdf_response(request_printing.TEMPLATE, request_printing.context(req),
+                                 filename=f"{req.number}.pdf")
 
 
 # ── документы заявки ────────────────────────────────────────────────────

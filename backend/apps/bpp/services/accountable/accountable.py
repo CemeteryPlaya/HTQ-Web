@@ -40,6 +40,7 @@ from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.money import fmt, money
 from apps.project import interface as projects
 from apps.signoff import interface as signoff
+from apps.users import interface as users
 from htqweb.errors import DomainError
 
 REQUEST_SUBJECT = AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE
@@ -370,38 +371,42 @@ def on_report_approved(report_id) -> None:
 
 # ── чтение ──────────────────────────────────────────────────────────────
 
-def serialize_report(report: AdvanceReport) -> dict:
+def serialize_report(report: AdvanceReport, actor: Actor | None = None) -> dict:
+    """Отчёт для карточки и ответов ручек. ``can_submit`` — только с ``actor``:
+    отправить отчёт может подотчётное лицо, пока заявка ждёт отчётов, а сам
+    отчёт не на согласовании и не одобрен."""
+    req = report.request
+    can_submit = bool(
+        actor is not None and req.accountable_user_id == actor.user_id
+        and req.status == AccountableStatus.AWAITING_REPORT and report.is_editable)
     return {"id": str(report.id), "expense_name": report.expense_name,
             "amount": report.amount, "approval_state": report.approval_state,
-            "created_at": report.created_at, "files": core_files.list_files(report)}
+            "created_at": report.created_at, "files": core_files.list_files(report),
+            "can_submit": can_submit}
 
 
 def card(actor: Actor, req: AccountableFundsRequest) -> dict:
     reported = reported_amount(req)
+    project = projects.project_brief([str(req.project_id)]).get(str(req.project_id)) or {}
+    names = {row["id"]: row["full_name"] for row in users.get_users_brief(
+        [uid for uid in {req.accountable_user_id, req.paid_by} if uid])}
     return {
         "id": str(req.id), "number": req.number, "status": req.status,
         "approval_state": req.approval_state, "version": req.version,
         "project_id": str(req.project_id), "article_id": str(req.article_id),
+        "project": {"id": str(req.project_id), "code": project.get("code"),
+                    "name": project.get("name")},
         "article_name": budget_balance.article_name(req.article_id),
         "amount": req.amount, "currency": req.currency, "goal": req.goal,
         "accountable_user_id": req.accountable_user_id,
+        "accountable_user_name": names.get(req.accountable_user_id),
         "paid_at": req.paid_at, "paid_by": req.paid_by,
+        "paid_by_name": names.get(req.paid_by) if req.paid_by else None,
         "reported_amount": reported, "remaining_amount": req.amount - reported,
-        "reports": [serialize_report(r) for r in req.reports.all()],
+        "reports": [serialize_report(r, actor)
+                    for r in req.reports.select_related("request").order_by("created_at")],
         "current_holders": signoff.current_holders(REQUEST_SUBJECT, [str(req.pk)]).get(
             str(req.pk)),
         "allowed_actions": allowed_actions(actor, req),
         "created_at": req.created_at,
     }
-
-
-def registry(actor: Actor, *, status: str | None = None) -> list[dict]:
-    rows = AccountableFundsRequest.objects.filter(is_migrated=False).order_by("-created_at")
-    if not sees_all(actor):
-        rows = rows.filter(accountable_user_id=actor.user_id)
-    if status:
-        rows = rows.filter(status=status)
-    return [{"id": str(r.id), "number": r.number, "status": r.status, "amount": r.amount,
-             "currency": r.currency, "goal": r.goal, "project_id": str(r.project_id),
-             "article_id": str(r.article_id), "accountable_user_id": r.accountable_user_id,
-             "created_at": r.created_at} for r in rows[:500]]

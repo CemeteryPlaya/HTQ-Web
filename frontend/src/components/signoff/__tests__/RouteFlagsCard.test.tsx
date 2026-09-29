@@ -44,6 +44,7 @@ describe('RouteFlagsCard', () => {
       forbid_self_approval: true,
       reject_comment_min: 10,
       lazy_resolution: false,
+      skip_unmatched_groups: false,
       no_executor_notify_position_ids: [],
       escalation_position_id: null,
       self_skip_notify_position_ids: [],

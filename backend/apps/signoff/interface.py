@@ -101,6 +101,7 @@ __all__ = [
     "pending_step",
     "decision_stats",
     "is_participant",
+    "purge_processes",
 ]
 
 
@@ -441,6 +442,24 @@ def list_decided_subject_ids(user_id: int, subject_type: str) -> list:
             .order_by("-acted_at")
             .values_list("stage__process__subject_id", flat=True))
     return registry.native_ids(subject_type, dict.fromkeys(rows))
+
+
+def purge_processes(subject_type: str, subject_ids) -> int:
+    """Удалить процессы предметов вместе с этапами, задачами и событиями.
+
+    Только для демо-данных (``bpp seed_bpp_demo --purge``): иначе у
+    согласующих остались бы задачи «Ждёт меня» по удалённым документам.
+    История согласования настоящих документов не удаляется никогда — у
+    предметной аппки нет законного повода звать это для них. Возвращает
+    число удалённых процессов."""
+    require_service("signoff")
+    ids = [str(sid) for sid in subject_ids]
+    if not ids:
+        return 0
+    rows = ApprovalProcess.objects.filter(subject_type=subject_type, subject_id__in=ids)
+    count = rows.count()
+    rows.delete()
+    return count
 
 
 def is_participant(user_id: int, subject_type: str, subject_id: int | str) -> bool:

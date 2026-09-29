@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
+from types import SimpleNamespace
 
 from apps.bpp.models import InitiatorRole
 from apps.bpp.services.core import permissions
@@ -28,6 +29,21 @@ ROLE_GROUP = {InitiatorRole.SN: "supply", InitiatorRole.PM: "pm"}
 class Actor:
     request: object
     _flags: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def for_user(cls, user_id: int, *, company: str | None,
+                 is_superuser: bool = False) -> "Actor":
+        """Тот же пользователь без HTTP-запроса — для фоновой пересборки
+        выгрузки (``export.respond``, ``rebuild``): права считаются по его
+        ролям в компании, как в ручке, где он заказал файл."""
+        token = SimpleNamespace(user_id=int(user_id), is_superuser=bool(is_superuser))
+        return cls(SimpleNamespace(token=token, company={"slug": company} if company else None))
+
+    def export_identity(self) -> dict:
+        """Кто заказал выгрузку — JSON для ``rebuild`` (обратно — ``for_user``)."""
+        company = (getattr(self.request, "company", None) or {}).get("slug")
+        return {"user_id": self.user_id, "company": company,
+                "is_superuser": bool(getattr(self.request.token, "is_superuser", False))}
 
     @property
     def user_id(self) -> int:

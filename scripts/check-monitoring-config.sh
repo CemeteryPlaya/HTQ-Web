@@ -48,8 +48,12 @@ ok "синтаксис принят promtool"
 # ─── 2. compose-файлы ────────────────────────────────────────────────────────
 # Значения-заглушки: у прод-файла обязательные переменные объявлены через :?,
 # и без них compose откажется разбирать файл — это фича, а не помеха.
+# DB_HOST — тоже :? (адрес БД умолчания не имеет, см. CLAUDE.md «БД»); на
+# машине разработчика его даёт .env, в CI .env нет — без заглушки прод-файл
+# и test-env «не разбираются», и проверка падает не по делу.
 echo "compose"
 for file in docker-compose.yml docker-compose.test-local.yml docker-compose.test-env.yml; do
+    DB_HOST=ci-placeholder \
     GRAFANA_ADMIN_PASSWORD=ci-placeholder \
     GF_TELEGRAM_BOT_TOKEN="000000:CI-PLACEHOLDER" \
     ALERT_EMAIL_TO="ci@example.invalid" \
