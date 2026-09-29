@@ -1956,7 +1956,19 @@
       "noSitesYet": "No sites yet. Check them below — the work on each will show up here.",
       "registryEmpty": "There are no projects yet —",
       "addFirst": "create a project",
-      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites"
+      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites",
+      "platformProject": "Project",
+      "pickAnother": "Change",
+      "pickProjectSearch": "Project code or name",
+      "noCandidatesSearch": "Nothing found",
+      "noCandidates": "Every project already has a task board",
+      "createInProjects": "The project is not listed — create it under Projects in the procurement module.",
+      "openProjects": "Open Projects",
+      "openInProjects": "project card",
+      "mirroredHint": "Name, status, dates and manager come from the project and are edited under Projects — read-only here.",
+      "addProject": "Add a project to tasks",
+      "addProjectShort": "Add project",
+      "projectRequired": "Choose a project"
     },
     "types": {
       "create": "Create type",

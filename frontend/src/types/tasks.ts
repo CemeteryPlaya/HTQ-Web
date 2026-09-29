@@ -567,11 +567,41 @@ export interface Project {
    * производственному календарю, режим для офисных проектов.
    */
   use_production_calendar: boolean;
+  /**
+   * Связь с «Проектом» модуля БЗО (D-02: «Проект» главный). У связанной
+   * доски название, статус, сроки и владелец — копия «Проекта» и правятся
+   * только в «Проектах» (`/bpp/projects/<project_ref>`); сервер отвечает
+   * 409 на их правку через доску.
+   */
+  project_ref?: string;
+  project_code?: string | null;
+  linked?: boolean;
   task_count: number;
   done_count: number;
   progress: number;
   created_at: string;
   updated_at: string;
+}
+
+/** «Проект» БЗО, к которому ещё можно завести доску задач. */
+export interface ProjectLinkCandidate {
+  id: string;
+  code: string;
+  name: string;
+  /** Статус «Проекта»: `closed` у доски называется `completed`. */
+  status: 'active' | 'closed';
+  date_start: string | null;
+  date_end: string | null;
+  manager_user_id: number | null;
+}
+
+/** Тело создания доски: название, статус, сроки и владелец — из «Проекта». */
+export interface ProjectBoardCreate {
+  project_ref: string;
+  description?: string;
+  color?: string;
+  department_id?: number | null;
+  use_production_calendar?: boolean;
 }
 
 /* ---------- Task types (DB-backed) ---------- */
