@@ -16,9 +16,11 @@ cp866. Первая строка — ``1CClientBankExchange``, без неё ф�
 
 Списание (п.2) — документ, где счёт плательщика = IBAN счёта организации;
 остальные (поступления и чужие платежи) в файле считаются, но не
-загружаются. Нераспознанная дата или сумма — в список ошибок «Строка N:
-…», где N — номер строки файла с этим полем; остальные документы читаются
-дальше.
+загружаются. Нераспознанная дата или сумма списания — в список ошибок
+«Строка N: …», где N — номер строки файла с этим полем; остальные
+документы читаются дальше. Поступления и чужие платежи не проверяются:
+ошибка в том, что не загружается, исправлять некому. Документ без
+плательщика не загружается, но проверяется — чей он, не понять.
 """
 
 from __future__ import annotations
@@ -199,6 +201,14 @@ def parse(content: bytes, *, account, encoding: str = "cp1251") -> ParsedStateme
                              period_to=_date_or_none(header.get("ДатаКонца")))
     for doc in docs:
         row_no = doc["__line"]
+        # Сначала — чей документ: поступление и платёж чужого счёта не
+        # загружаются, и их дата или сумма ошибкой строки не считаются —
+        # иначе карточка звала бы исправлять то, что в базу не попало бы
+        # всё равно. Плательщика нет — списание ли это, не понять: ошибки
+        # такого документа показываются (как и ``NO_PAYER`` ниже).
+        payer, _ = _pick(doc, "payer_account")
+        if payer and normalize_iban(payer) != own:
+            continue  # поступление или чужой платёж — не списание этого счёта
         raw_date, date_line = _pick(doc, "date")
         try:
             doc_date = templates.parse_date(raw_date, DATE_PATTERN)
@@ -209,19 +219,18 @@ def parse(content: bytes, *, account, encoding: str = "cp1251") -> ParsedStateme
         raw_amount, amount_line = _pick(doc, "amount")
         try:
             amount = templates.parse_amount(raw_amount)
-        except ValueError:
-            amount = None
+        except ValueError as exc:
+            result.errors.append(templates.amount_error(amount_line or row_no, raw_amount, exc))
+            continue
         if not amount or amount <= 0:
-            result.errors.append(
-                f"Строка {amount_line or row_no}: не распознана сумма „{raw_amount}“")
+            result.errors.append(templates.amount_error(amount_line or row_no, raw_amount))
             continue
         doc_number, _ = _pick(doc, "doc_number")
         if not doc_number:
             result.errors.append(f"Строка {row_no}: нет номера документа")
             continue
-        payer, _ = _pick(doc, "payer_account")
-        if normalize_iban(payer) != own:
-            continue  # поступление или чужой платёж — не списание этого счёта
+        if not payer:
+            continue  # списание ли это, не понять — не загружается
         currency, _ = _pick(doc, "currency")
         recipient_bin, _ = _pick(doc, "recipient_bin")
         recipient_iban, _ = _pick(doc, "recipient_account")

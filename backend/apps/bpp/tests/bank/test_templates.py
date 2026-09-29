@@ -152,6 +152,45 @@ def test_parse_amount_rejects_garbage(raw):
         templates.parse_amount(raw)
 
 
+@pytest.mark.parametrize("raw", [1e20, 10 ** 16, "10 000 000 000 000 000,00",
+                                 Decimal("-10000000000000000"), "9999999999999999,995",
+                                 Decimal("1E+30")])
+def test_parse_amount_over_sixteen_integer_digits_is_too_large(raw):
+    """``numeric(18, 2)`` строки выписки — 16 цифр до запятой: больше (в
+    том числе после округления) — ``AmountTooLarge``, наследник
+    ``ValueError``."""
+    with pytest.raises(templates.AmountTooLarge):
+        templates.parse_amount(raw)
+    assert templates.parse_amount("9 999 999 999 999 999,99") == Decimal("9999999999999999.99")
+    assert templates.parse_amount(-999999999999999.5) == Decimal("-999999999999999.50")
+
+
+def test_amount_too_large_is_a_row_error_not_a_failed_statement():
+    """Числовая ячейка 1E+20 распознаётся, но в столбец не влезет: ошибка
+    строки «сумма слишком большая» — и в режиме ``signed``, и в дебете или
+    кредите ``split``; остальные строки читаются."""
+    upload = common.xlsx_file([
+        [H["date"], H["doc_number"], H["amount"], H["purpose"]],
+        ["01.09.2026", "1", -1e20, "Опечатка"],
+        ["01.09.2026", "2", "-100", "Обычная"],
+    ])
+    result = templates.preview(upload, common.template())
+    assert [r["doc_number"] for r in result["rows"]] == ["2"]
+    assert result["errors"] == [
+        "Строка 2: сумма слишком большая „-1e+20“ — в сумме не больше 16 цифр до запятой"]
+
+    upload = common.xlsx_file([
+        [H["date"], H["doc_number"], "Дебет", "Кредит", H["purpose"]],
+        ["01.09.2026", "1", None, "100000000000000000", "Кредит"],
+        ["01.09.2026", "2", "1 000,00", None, "Списание"],
+    ])
+    result = templates.preview(upload, _split_template())
+    assert [r["doc_number"] for r in result["rows"]] == ["2"]
+    assert result["errors"] == [
+        "Строка 2: сумма слишком большая „100000000000000000“ — в сумме не больше 16 цифр "
+        "до запятой"]
+
+
 def test_template_amount_string_and_float_cell_both_exact():
     """Review Focus 3: «1 250 000,00» строкой и 1250000.1 числом ячейки."""
     upload = common.xlsx_file([

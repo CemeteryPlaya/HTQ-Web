@@ -97,6 +97,13 @@ LINES_PAGE_SIZES = (25, 50, 100, 200)
 #: или перезапуском; рубильник ``bpp_bank`` выключили, пока задача ждала).
 #: Втрое больше предела времени — живой разбор к этому сроку уже закончен.
 STALE_MINUTES = 15
+#: Разбор, так и не начатый (``started_at`` пуст), считается потерянным
+#: позже: задача стоит в общей очереди воркера, а её забивают выкатка
+#: (воркер перезапускается и разбирает накопившееся), длинные выгрузки и
+#: прочие фоновые задачи. Пятнадцать минут отказывали бы выпискам, которые
+#: просто ждут очереди; час — запас на затор, после которого задачу уже
+#: вероятнее потеряли (брокер перезапущен, рубильник ``bpp_bank`` выключен).
+QUEUED_STALE_MINUTES = 60
 STALE_REASON = ("Загрузка прервана — повторите загрузку. Если ошибка повторится, "
                 "обратитесь к администратору.")
 
@@ -343,7 +350,9 @@ def run_import(import_id) -> None:
 
     Повторная доставка задачи безопасна: разбор «берётся» проставлением
     ``started_at`` одной командой БД, и второй вызов, не взявший его, ничего
-    не делает."""
+    не делает. Итог «Загружена» ставится только загрузке, всё ещё
+    «Обрабатывается»: отказ уборки, случившийся посреди разбора, остаётся
+    отказом."""
     key = _as_uuid(import_id)
     if key is None:
         return
@@ -369,8 +378,20 @@ def run_import(import_id) -> None:
                    "загрузку; если ошибка повторится, обратитесь к администратору.")
         return
     now = timezone.now()
-    BankImport.objects.filter(pk=key).update(status=BankImportStatus.LOADED, finished_at=now,
-                                             source=b"", updated_at=now)
+    finished = BankImport.objects.filter(pk=key, status=BankImportStatus.PROCESSING).update(
+        status=BankImportStatus.LOADED, finished_at=now, source=b"", updated_at=now)
+    if not finished:
+        # Пока шёл разбор, уборка (``reap_stale``) сочла его потерянным и
+        # перевела загрузку в «Ошибка загрузки»: итог её не воскрешает —
+        # ФД уже видит отказ и загружает файл снова. Пачки, записанные после
+        # отмены, отменяются тоже, иначе держали бы ключи дублей (BR-075), и
+        # повтор той же выписки их пропустил бы.
+        BankStatementLine.objects.filter(
+            bank_import_id=key, bank_import__status=BankImportStatus.FAILED,
+            cancelled_at__isnull=True).update(cancelled_at=now)
+        logger.warning("bpp bank import: import=%s разобран, но уже не «Обрабатывается» "
+                       "(уборка отказала раньше) — итог не записан", import_id)
+        return
     imp.refresh_from_db(fields=["rows_total", "debits", "duplicates", "errors"])
     audit.record_for(AUDIT_TYPE, str(key), _FINISHED, actor_id=None, changes={
         "rows_total": imp.rows_total, "debits": imp.debits, "duplicates": imp.duplicates,
@@ -386,13 +407,17 @@ def reap_stale(*, now=None) -> dict:
     выключенном ``bpp_bank``, не начинается вовсе. Такая загрузка висела бы
     «Обрабатывается» вечно, с байтами ``source`` в строке и с ключами
     дублей у строк, успевших записаться. Потерянной считается загрузка в
-    «Обрабатывается», чей разбор начат (``started_at``) — а не начатый
-    создан (``created_at``) — больше ``STALE_MINUTES`` минут назад."""
-    cutoff = (now or timezone.now()) - timedelta(minutes=STALE_MINUTES)
+    «Обрабатывается», чей разбор начат (``started_at``) больше
+    ``STALE_MINUTES`` минут назад, или не начатый, созданная
+    (``created_at``) больше ``QUEUED_STALE_MINUTES`` минут назад: задача,
+    ждущая своей очереди за чужими, не потеряна."""
+    now = now or timezone.now()
+    started_cutoff = now - timedelta(minutes=STALE_MINUTES)
+    queued_cutoff = now - timedelta(minutes=QUEUED_STALE_MINUTES)
     stale = list(BankImport.objects
                  .filter(status=BankImportStatus.PROCESSING)
-                 .filter(Q(started_at__lt=cutoff)
-                         | Q(started_at__isnull=True, created_at__lt=cutoff))
+                 .filter(Q(started_at__lt=started_cutoff)
+                         | Q(started_at__isnull=True, created_at__lt=queued_cutoff))
                  .values_list("pk", flat=True))
     for import_id in stale:
         logger.warning("bpp bank import: разбор import=%s потерян — «Ошибка загрузки»",

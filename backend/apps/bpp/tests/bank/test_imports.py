@@ -573,11 +573,12 @@ def _processing(account, number: str, *, created_ago: int, started_ago: int | No
 def test_reaper_fails_stale_imports_and_cancels_their_lines(slug, onec_account):
     """Разбор, убитый пределом времени или перезапуском воркера, до ``_fail``
     не доходит: уборка переводит в «Ошибка загрузки» загрузки, чей разбор
-    начат (или, не начатый, создан) больше 15 минут назад, — строки
-    отменены, копия файла стёрта. Свежие не трогаются."""
+    начат больше 15 минут назад (или, не начатый, создан больше 60 минут
+    назад), — строки отменены, копия файла стёрта. Свежие не трогаются."""
+    assert (imports.STALE_MINUTES, imports.QUEUED_STALE_MINUTES) == (15, 60)
     started_long_ago = _processing(onec_account, "ВП-2026-0101", created_ago=21,
                                    started_ago=20, lines=2)
-    never_started = _processing(onec_account, "ВП-2026-0102", created_ago=16)
+    never_started = _processing(onec_account, "ВП-2026-0102", created_ago=61)
     fresh = _processing(onec_account, "ВП-2026-0103", created_ago=3, started_ago=2, lines=1)
     queued = _processing(onec_account, "ВП-2026-0104", created_ago=5)
 
@@ -601,6 +602,66 @@ def test_reaper_fails_stale_imports_and_cancels_their_lines(slug, onec_account):
     assert never_started.status == BankImportStatus.FAILED and never_started.lines.count() == 0
     # Повторная уборка — ничего нового.
     assert imports.reap_stale() == {"failed": 0}
+
+
+@pytest.mark.django_db
+def test_reaper_waits_longer_for_imports_stuck_in_the_queue(slug, onec_account):
+    """Два срока уборки. Не начатый разбор ждёт очереди — общий воркер
+    забит выкаткой или длинными выгрузками, — и через 15 минут он не
+    потерян: отказ только после ``QUEUED_STALE_MINUTES`` (60). Начатый и
+    застрявший — по-прежнему после ``STALE_MINUTES`` (15), даже если сама
+    загрузка создана недавно (разбор взяли сразу)."""
+    queued_16 = _processing(onec_account, "ВП-2026-0301", created_ago=16)
+    queued_59 = _processing(onec_account, "ВП-2026-0302", created_ago=59)
+    queued_61 = _processing(onec_account, "ВП-2026-0303", created_ago=61)
+    started_16 = _processing(onec_account, "ВП-2026-0304", created_ago=16, started_ago=16)
+    started_14 = _processing(onec_account, "ВП-2026-0305", created_ago=59, started_ago=14)
+
+    assert imports.reap_stale() == {"failed": 2}
+
+    def status(imp):
+        imp.refresh_from_db()
+        return imp.status
+
+    assert [status(imp) for imp in (queued_16, queued_59, queued_61, started_16, started_14)]         == ["processing", "processing", "failed", "failed", "processing"]
+    # Дождавшаяся очереди загрузка разбирается как обычно.
+    imports.run_import(queued_59.pk)
+    assert status(queued_59) == BankImportStatus.LOADED
+    # Час спустя не начатая — уже потеряна.
+    later = timezone.now() + timedelta(minutes=imports.QUEUED_STALE_MINUTES)
+    assert imports.reap_stale(now=later) == {"failed": 2}  # queued_16 и started_14
+    assert status(queued_16) == status(started_14) == BankImportStatus.FAILED
+
+
+@pytest.mark.django_db
+def test_import_failed_by_the_reaper_mid_parse_stays_failed(
+        slug, onec_account, django_capture_on_commit_callbacks, monkeypatch):
+    """Уборка сочла разбор потерянным и отказала, пока он ещё шёл (воркер
+    завис дольше 15 минут и ожил): итог разбора загрузку не воскрешает —
+    она остаётся «Ошибка загрузки» с причиной уборки, строки, записанные
+    уже после отказа, отменены (ключи дублей свободны), записи «loaded» в
+    истории нет. Повтор той же выписки грузит её целиком."""
+    real_insert = imports._insert
+
+    def reaper_then_insert(imp, lines):
+        later = timezone.now() + timedelta(minutes=imports.STALE_MINUTES + 1)
+        assert imports.reap_stale(now=later) == {"failed": 1}
+        real_insert(imp, lines)  # воркер ожил и дописал строки
+
+    monkeypatch.setattr(imports, "_insert", reaper_then_insert)
+    imp, _ = _start(django_capture_on_commit_callbacks, onec_account,
+                    _onec_upload(onec_account))
+    assert imp.status == BankImportStatus.FAILED and imp.failure == imports.STALE_REASON
+    assert imp.lines.count() == 2 and _live(onec_account) == 0
+    assert bytes(imp.source) == b""
+    actions = list(AuditLog.objects.filter(object_type="bpp.bankimport", object_id=str(imp.pk))
+                   .values_list("action", flat=True))
+    assert "failed" in actions and "loaded" not in actions
+
+    monkeypatch.setattr(imports, "_insert", real_insert)
+    retry, _ = _start(django_capture_on_commit_callbacks, onec_account,
+                      _onec_upload(onec_account))
+    assert (retry.status, retry.duplicates, _live(onec_account)) == ("loaded", 0, 2)
 
 
 @pytest.mark.django_db
