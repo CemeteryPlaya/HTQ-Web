@@ -142,6 +142,8 @@ urlpatterns = [
     # Projects — frontend: 'projects/', 'projects/{id}' and '{id}/',
     # 'projects/{id}/tasks/'.
     path("projects/", views.projects_collection),
+    path("projects/link-candidates", views.project_link_candidates),
+    path("projects/link-candidates/", views.project_link_candidates),
     path("projects/<int:project_id>", views.project_detail),
     path("projects/<int:project_id>/", views.project_detail),
     path("projects/<int:project_id>/tasks", views.project_tasks),

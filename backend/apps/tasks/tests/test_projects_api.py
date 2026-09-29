@@ -30,49 +30,127 @@ def test_projects_require_auth():
     assert Client().get(f"{BASE}/projects/").status_code == 401
 
 
+def _platform(code="П-1", name="Roadmap", **over):
+    """«Проект» БЗО, к которому заводится доска (D-02: доска — только к нему)."""
+    from apps.project.models import Project as Platform
+
+    return Platform.objects.create(code=code, name=name, country_code="KZ", **over)
+
+
 @pytest.mark.django_db
-def test_create_project_defaults_owner_to_caller():
-    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Roadmap"},
+def test_create_board_copies_the_project():
+    """Название, статус, сроки и владелец доски — из «Проекта»: руководитель
+    становится владельцем, «закрыт» — «завершён»."""
+    import datetime as dt
+
+    platform = _platform(manager_user_id=55, status="closed",
+                         date_start=dt.date(2026, 1, 1), date_end=dt.date(2026, 6, 30))
+    resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(platform.pk)},
                      **auth(admin_token()))
-    assert resp.status_code == 201
+    assert resp.status_code == 201, resp.content
     body = resp.json()
-    assert body["owner_id"] == ADMIN
-    assert body["status"] == ProjectStatus.ACTIVE
+    assert (body["name"], body["owner_id"], body["status"]) == (
+        "Roadmap", 55, ProjectStatus.COMPLETED)
+    assert (body["start_date"], body["end_date"]) == ("2026-01-01", "2026-06-30")
+    assert (body["project_ref"], body["project_code"], body["linked"]) == (
+        str(platform.pk), "П-1", True)
     assert body["color"] == "#3b82f6"
     assert body["task_count"] == 0
     assert body["progress"] == 0.0
 
 
 @pytest.mark.django_db
-def test_create_project_respects_explicit_owner():
+def test_create_board_ignores_its_own_name_and_owner():
+    """Тело с прежними полями не переспорит «Проект»: их в схеме нет."""
+    platform = _platform(manager_user_id=55)
     resp = post_json(Client(), f"{BASE}/projects/",
-                     {"name": "P", "owner_id": 55}, **auth(admin_token()))
-    assert resp.json()["owner_id"] == 55
-
-
-@pytest.mark.django_db(transaction=True)
-def test_project_name_must_be_unique():
-    """``transaction=True``, не обычный ``django_db`` — тестовый феномен, не
-    боевой путь. Компания-заголовок (block I, задача 7) заводит
-    ``CompanyContextMiddleware`` в ветку с ``try/finally`` (``apply_search_
-    path`` при выходе). Обычный ``django_db`` оборачивает весь тест в
-    ``atomic()``; необработанный ``IntegrityError`` внутри такого блока
-    помечает ВСЮ транзакцию сломанной, и следующий же запрос —
-    безобидный ``SET search_path`` в ``finally`` middleware — падает
-    ``TransactionManagementError`` раньше, чем успевает уйти уже построенный
-    500-ответ. В проде этого пути нет: ``ATOMIC_REQUESTS`` нигде не задан
-    (``htqweb/settings/base.py``), запрос идёт в autocommit, и один упавший
-    ``INSERT`` не портит ничего, кроме себя. ``transaction=True`` снимает
-    тестовую обёртку — тот же приём и по той же причине, что в
-    ``test_holding_api.py``.
-    """
-    Project.objects.create(name="Dup")
-    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Dup"},
+                     {"project_ref": str(platform.pk), "name": "Другое", "owner_id": 1},
                      **auth(admin_token()))
-    # A unique-violation is an unhandled DB error -> the 500 envelope, which
-    # is exactly what the FastAPI original produced (it had no 409 branch).
-    assert resp.status_code == 500
-    assert resp.json() == {"detail": "Internal Server Error"}
+    assert (resp.json()["name"], resp.json()["owner_id"]) == ("Roadmap", 55)
+
+
+@pytest.mark.django_db
+def test_board_needs_a_project():
+    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Без проекта"},
+                     **auth(admin_token()))
+    assert resp.status_code == 422
+    for ref in ("не-uuid", "00000000-0000-0000-0000-000000000000"):
+        resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": ref},
+                         **auth(admin_token()))
+        assert resp.status_code == 422 and "не найден" in resp.json()["detail"]
+    assert not Project.objects.exists()
+
+
+@pytest.mark.django_db
+def test_one_board_per_project_and_none_for_the_archive():
+    platform = _platform()
+    body = {"project_ref": str(platform.pk)}
+    assert post_json(Client(), f"{BASE}/projects/", body,
+                     **auth(admin_token())).status_code == 201
+    second = post_json(Client(), f"{BASE}/projects/", body, **auth(admin_token()))
+    assert second.status_code == 409 and "уже есть доска" in second.json()["detail"]
+    archived = _platform(code="П-2", name="Архивный", status="archived")
+    resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(archived.pk)},
+                     **auth(admin_token()))
+    assert resp.status_code == 409 and "в архиве" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_board_name_must_be_unique():
+    """Имя доски уникально; занятое имя «Проекта» — 409 с причиной, а не 500
+    от базы, как было, пока доска называлась сама."""
+    Project.objects.create(name="Dup")
+    platform = _platform(name="Dup")
+    resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(platform.pk)},
+                     **auth(admin_token()))
+    assert resp.status_code == 409
+    assert "Dup" in resp.json()["detail"]
+
+
+@pytest.mark.django_db
+def test_link_candidates_skip_linked_and_archived_projects():
+    free = _platform(code="П-1", name="Свободный")
+    taken = _platform(code="П-2", name="Занятый")
+    _platform(code="П-3", name="Архивный", status="archived")
+    Project.objects.create(name="Занятый", project_ref=str(taken.pk))
+    resp = Client().get(f"{BASE}/projects/link-candidates", **auth(admin_token()))
+    assert resp.status_code == 200
+    assert [row["id"] for row in resp.json()] == [str(free.pk)]
+    assert Client().get(f"{BASE}/projects/link-candidates?q=нет",
+                        **auth(admin_token())).json() == []
+    assert Client().get(f"{BASE}/projects/link-candidates",
+                        **auth()).status_code == 403
+
+
+@pytest.mark.django_db
+def test_linked_board_keeps_project_fields_out_of_its_own_edit():
+    """Название, статус, сроки и владелец связанной доски правятся только в
+    «Проектах»: другое значение — 409, то же (форма шлёт все поля) — можно,
+    а свои поля доски правятся как раньше."""
+    platform = _platform(manager_user_id=ADMIN)
+    board = Project.objects.create(name="Roadmap", owner_id=ADMIN,
+                                   project_ref=str(platform.pk))
+    url = f"{BASE}/projects/{board.id}/"
+    refused = patch_json(Client(), url, {"name": "Другое"}, **auth(admin_token()))
+    assert refused.status_code == 409 and "«Проекты»" in refused.json()["detail"]
+    refused = patch_json(Client(), url, {"end_date": "2026-12-31"}, **auth(admin_token()))
+    assert refused.status_code == 409
+    ok = patch_json(Client(), url, {"name": "Roadmap", "status": "active",
+                                    "description": "Новое", "color": "#000000"},
+                    **auth(admin_token()))
+    assert ok.status_code == 200, ok.content
+    board.refresh_from_db()
+    assert (board.name, board.description, board.color) == ("Roadmap", "Новое", "#000000")
+
+
+@pytest.mark.django_db
+def test_unlinked_board_is_edited_as_before():
+    board = Project.objects.create(name="Старая", owner_id=ADMIN)
+    resp = patch_json(Client(), f"{BASE}/projects/{board.id}/", {"name": "Новая"},
+                      **auth(admin_token()))
+    assert resp.status_code == 200 and resp.json()["linked"] is False
+    board.refresh_from_db()
+    assert board.name == "Новая"
 
 
 @pytest.mark.django_db

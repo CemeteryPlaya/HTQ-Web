@@ -188,7 +188,7 @@
     },
     "ProjectResponse": {
       "source": "services/task/app/schemas/project.py::ProjectResponse",
-      "added_after_fastapi": "use_production_calendar — чем меряются длительности плана и факта: календарными днями (по умолчанию, стройка идёт 7/7) или рабочими по производственному календарю. Поле ДОБАВЛЕНО, ничего не переименовано и не выброшено.",
+      "added_after_fastapi": "use_production_calendar — чем меряются длительности плана и факта: календарными днями (по умолчанию, стройка идёт 7/7) или рабочими по производственному календарю. project_ref / project_code / linked — связь доски с «Проектом» модуля БЗО (D-02: у связанной доски название, статус, сроки и владелец — копия «Проекта»). Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено.",
       "fields": {
         "id": "int",
         "name": "str",
@@ -204,6 +204,9 @@
         "sites": "list",
         "site_ids": "list",
         "use_production_calendar": "bool",
+        "project_ref": "str",
+        "project_code": "str|null",
+        "linked": "bool",
         "task_count": "int",
         "done_count": "int",
         "progress": "float",
