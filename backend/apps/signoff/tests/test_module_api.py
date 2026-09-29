@@ -168,8 +168,11 @@ def test_pending_for_user_shows_only_active_stages():
 def test_signoff_is_registered_as_a_tenant_digest_source():
     from apps.notifications.services import digest
 
-    fn, tenant = digest._SOURCES["signoff"]
+    fn, tenant, section, _landing = digest._SOURCES["signoff"]
     assert fn is holders.digest_items and tenant is True
+    # Сводка считает пункты без раздела пунктами согласования: заголовок
+    # «Ждут вашего решения» и ссылка /signoff держатся на этом.
+    assert section is None
 
 
 def test_digest_items_name_the_document_and_the_stage():
