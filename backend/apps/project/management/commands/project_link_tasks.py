@@ -1,59 +1,44 @@
-"""Связать доски задач с «Проектами» БЗО (A1.3; D-02: «Проект» главный).
+"""Связать проекты доски задач с «Проектами» БЗО (A1.3).
 
-Существующие доски связала миграция ``tasks/0023``, а новые заводятся только
-к «Проекту», поэтому команда — ремонтная: для доски, заведённой мимо
-сервиса (ORM, старый сид), заводит «Проект» из её полей (название, статус,
-сроки, руководитель — владелец доски; страна — KZ, заказчика заполняет
-человек потом) и пишет ссылку. Код — ``TP-<id доски>``: своего кода у доски
-нет. Код занят «Проектом», заведённым человеком (``created_by`` не пуст) или
-уже отданным другой доске, — берётся ``TP-<id>-2``, ``-3``… и печатается;
-«Проект», заведённый самой командой и ещё ничей (повтор после сбоя между
-созданием «Проекта» и записью ссылки), переиспользуется. Идемпотентна.
-Читает и пишет ``tasks`` через ``apps.tasks.interface`` — межаппный импорт
-моделей запрещён; те же правила — в миграции ``tasks/0023``.
+Для каждого ``tasks.Project`` без ``project_ref`` заводит «Проект» (код —
+``TP-<id доски>``: своего кода у доски нет; имя — имя доски; страна — KZ;
+руководителя и заказчика заполняет человек потом) и пишет ссылку.
+Идемпотентна: уже связанные доски пропускаются, а повтор после сбоя между
+созданием «Проекта» и записью ссылки находит «Проект» по коду. Переиспользуется
+только «Проект», заведённый самой командой (``created_by`` пуст): «Проект»,
+который человек сам создал с кодом ``TP-<n>``, чужой — доска ``n`` тогда не
+связывается, а код печатается как конфликт. Читает и пишет
+``tasks`` через ``apps.tasks.interface`` — межаппный импорт моделей запрещён.
 """
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
 
 from apps.project.models import Project
-from apps.project.services import projects
 from apps.tasks import interface as tasks
 from htqweb.tenancy.db import use_company
 
 
 class Command(BaseCommand):
-    help = "Связать доски задач с «Проектами» модуля БЗО."
+    help = "Связать проекты доски задач с «Проектами» модуля БЗО."
 
     def add_arguments(self, parser):
         parser.add_argument("--company", required=True)
 
     def handle(self, *args, company, **options):
+        conflicts: list[str] = []
         with use_company(company):
             linked = 0
-            taken = tasks.linked_project_refs()
             for board in tasks.projects_without_ref():
-                with transaction.atomic():
-                    project = self._project_for(board, taken)
-                    tasks.set_project_ref(board["id"], str(project.id))
-                taken.add(str(project.id))
+                code = f"TP-{board['id']}"
+                project, _ = Project.objects.get_or_create(
+                    code=code, defaults={"name": board["name"], "country_code": "KZ"})
+                if project.created_by is not None:
+                    conflicts.append(code)
+                    continue
+                tasks.set_project_ref(board["id"], str(project.id))
                 linked += 1
-        self.stdout.write(self.style.SUCCESS(f"Связано досок: {linked}"))
-
-    def _project_for(self, board: dict, taken: set[str]) -> Project:
-        fields = {key: board[key] for key in
-                  ("name", "status", "date_start", "date_end", "manager_user_id")}
-        base = f"TP-{board['id']}"
-        code, n = base, 1
-        while True:
-            existing = Project.objects.filter(code=code).first()
-            if existing is None:
-                break
-            if existing.created_by is None and str(existing.id) not in taken:
-                return projects.update(existing, actor_id=None, **fields)
-            n += 1
-            code = f"{base}-{n}"
-        if code != base:
+        self.stdout.write(self.style.SUCCESS(f"Связано проектов: {linked}"))
+        for code in conflicts:
             self.stdout.write(self.style.WARNING(
-                f"Код {base} занят — доска {board['id']} связана с «Проектом» {code}."))
-        return projects.create(code=code, country_code="KZ", actor_id=None, **fields)
+                f"Код {code} занят «Проектом», заведённым вручную, — доска не связана. "
+                f"Свяжите её руками или переименуйте тот «Проект»."))

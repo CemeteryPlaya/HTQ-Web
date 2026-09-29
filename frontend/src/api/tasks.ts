@@ -13,7 +13,6 @@ import type {
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
   ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
-  ProjectBoardCreate, ProjectLinkCandidate,
 } from '@/types/tasks';
 import i18next from '@/i18n';
 
@@ -163,16 +162,9 @@ export const fetchProject = async (id: number): Promise<Project> => {
   return normalizeProject(res.data);
 };
 
-/** Доска заводится к «Проекту» БЗО — название, статус, сроки и владелец из него. */
-export const createProject = async (data: ProjectBoardCreate): Promise<Project> => {
+export const createProject = async (data: Partial<Project>): Promise<Project> => {
   const res = await api.post(`${BASE}projects/`, toBackendRecord(data as Record<string, any>, PROJECT_FIELD_ALIASES));
   return normalizeProject(res.data);
-};
-
-/** «Проекты» БЗО без доски задач (не в архиве) — выбор при создании доски. */
-export const fetchProjectLinkCandidates = async (q = ''): Promise<ProjectLinkCandidate[]> => {
-  const res = await api.get(`${BASE}projects/link-candidates`, { params: q ? { q } : undefined });
-  return res.data;
 };
 
 export const updateProject = async (id: number, data: Partial<Project>): Promise<Project> => {

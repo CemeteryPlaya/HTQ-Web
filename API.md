@@ -495,9 +495,8 @@ business logic).
 | `/api/tasks/v1/tasks/{id}/progress/`              | PATCH  | `{percent}`                   |
 | `/api/tasks/v1/labels/`                           | GET, POST |                           |
 | `/api/tasks/v1/versions/`                         | GET, POST | Project versions          |
-| `/api/tasks/v1/projects/`                         | GET, POST | Доска задач заводится только к «Проекту» БЗО (D-02: «Проект» главный): `POST {project_ref, description?, color?, department_id?, use_production_calendar?}` — название, статус, сроки и владелец (руководитель проекта) берутся из «Проекта». Нет такого — 422; в архиве, уже с доской или название занято другой доской — 409. В ответе `project_ref`, `project_code`, `linked` |
-| `/api/tasks/v1/projects/link-candidates`          | GET    | `?q=` — «Проекты» без доски и не в архиве (до 20), для выбора при создании доски. Гейт как у создания (`tasks:admin`) |
-| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE | У связанной доски `name`/`status`/`start_date`/`end_date`/`owner_id` — копия «Проекта»: в PATCH можно прислать только те же значения, другое — 409 (правятся в «Проектах», оттуда приезжают на доску в той же транзакции). Доска без связи правится целиком |
+| `/api/tasks/v1/projects/`                         | GET, POST |                            |
+| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE |                  |
 | `/api/tasks/v1/projects/{id}/tasks/`              | GET    |                              |
 | `/api/tasks/v1/roadmaps/`                         | GET, POST | Пакеты работ **на блоке**: проект → площадка → блок → **роудмап** → задача. Тело принимает `site_block_id`; площадки колонкой нет, `?site_id=` фильтрует джойном |
 | `/api/tasks/v1/roadmaps/{id}/`                    | GET, PATCH, DELETE | Правка — владелец или админ. DELETE непустого пакета → 409 |
@@ -1489,7 +1488,7 @@ schema the platform can run on.
 |---|---|
 | `GET projects` (`?q=`, `?mine=1`) | Поиск без архива; `mine=1` — только где я участник |
 | `POST projects` | Создать; повтор кода — 422 `E-PRJ-01` |
-| `GET` / `PATCH projects/<id>` | Карточка (со сроками `date_start`/`date_end`) / правка (смена руководителя добавляет его в участники). Название, статус, сроки и руководителя повторяет доска задач проекта: правка, которую доска принять не может (название занято другой доской, конец раньше начала), отклоняется целиком — 409 `E-PRJ-04` |
+| `GET` / `PATCH projects/<id>` | Карточка / правка (смена руководителя добавляет его в участники) |
 | `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
 | `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
 

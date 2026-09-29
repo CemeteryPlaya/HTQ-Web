@@ -43,7 +43,6 @@ from .services import holding_service
 from .services import link_service
 from .services import notification_service
 from .services import plan_fact_service
-from .services import project_link
 from .services import project_service
 from .services import reference_service as ref_svc
 from .services import resource_service
@@ -1568,20 +1567,8 @@ def _list_projects(request):
 
 @api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
-    try:
-        project = project_service.create_project(data.model_dump())
-    except project_link.ProjectLinkError as exc:
-        return json_error(str(exc), exc.status)
-    return project_service.build_response(project)
-
-
-@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
-def project_link_candidates(request):
-    """«Проекты» БЗО, к которым ещё можно завести доску, — выбор в диалоге
-    создания доски. Уровень — как у самого создания доски."""
-    return [schemas.ProjectLinkCandidate.model_validate(row)
-            for row in project_link.candidates(request.GET.get("q", "").strip(),
-                                               user_id=request.token.user_id)]
+    return project_service.build_response(project_service.create_project(
+        data.model_dump(), creator_id=request.token.user_id))
 
 
 def projects_collection(request):
@@ -1627,8 +1614,6 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     try:
         project = project_service.update_project(
             project_id, data.model_dump(exclude_unset=True))
-    except project_link.ProjectLinkError as exc:
-        return json_error(str(exc), exc.status)
     except date_rules.DatesOutOfOrder as exc:
         # У проекта нет ни CheckConstraint, ни валидатора до этой правки:
         # перепутанные даты просто сохранялись.

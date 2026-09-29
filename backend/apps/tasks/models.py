@@ -653,10 +653,8 @@ class Project(models.Model):
     owner_id = models.IntegerField(null=True, blank=True, db_index=True)
     department_id = models.IntegerField(null=True, blank=True, db_index=True)
     # Ссылка на «Проект» модуля БЗО (apps.project, D-02): строка UUID, не FK —
-    # межаппный FK запрещён. Одна доска на «Проект» (uq_task_project_ref).
-    # Название, статус, сроки и владелец связанной доски — копия «Проекта»
-    # (services/project_link.py). Пусто только у досок, заведённых мимо
-    # сервиса после миграции 0023, — их связывает manage.py project_link_tasks.
+    # межаппный FK запрещён. Пусто у проектов, ещё не связанных командой
+    # manage.py project_link_tasks.
     project_ref = models.CharField(max_length=36, default="", blank=True, db_default="")
 
     # Объекты, на которых идёт проект. Многие-ко-многим, а не FK на Site:
@@ -672,10 +670,6 @@ class Project(models.Model):
     class Meta:
         verbose_name = "Проект"
         verbose_name_plural = "Проекты"
-        constraints = [
-            models.UniqueConstraint(fields=["project_ref"], condition=~models.Q(project_ref=""),
-                                    name="uq_task_project_ref"),
-        ]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Project id={self.id} name={self.name!r}>"

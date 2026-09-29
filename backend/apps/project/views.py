@@ -73,12 +73,8 @@ def _get(request, project_id: str):
 @api_view(methods=("PATCH",), module="project", level="write", body=schemas.ProjectPatch)
 def _patch(request, project_id: str, data: schemas.ProjectPatch):
     _need(request, "project.projects", "edit")
-    try:
-        project = projects.update(_project(request, project_id), actor_id=request.token.user_id,
-                                  **data.model_dump(exclude_unset=True))
-    except projects.ProjectChangeRejected as exc:
-        # Правку не принял сосед, повторяющий поля «Проекта» (доска задач).
-        raise DomainError("E-PRJ-04", str(exc), status=409) from exc
+    project = projects.update(_project(request, project_id), actor_id=request.token.user_id,
+                              **data.model_dump(exclude_unset=True))
     return projects.brief(project)
 
 

@@ -13,32 +13,6 @@ class ProjectError(Exception):
     pass
 
 
-class ProjectChangeRejected(ProjectError):
-    """Подписчик отказал в правке «Проекта» (текст — для человека): например,
-    у доски задач проекта конфликт названия. Правка откатывается целиком —
-    данные связанных сущностей не расходятся с «Проектом»."""
-
-
-#: Подписчики на правку «Проекта» — соседи, чьи данные повторяют его поля
-#: (доска задач, D-02: «Проект» главный). Приём тот же, что у реестров
-#: signoff и files: «Проект» не импортирует соседей, соседи подписываются из
-#: своего ``ready()`` через ``project.interface.register_change_listener``.
-_LISTENERS: list = []
-
-
-def add_change_listener(listener) -> None:
-    if listener not in _LISTENERS:
-        _LISTENERS.append(listener)
-
-
-def _changed(project: Project) -> None:
-    """Сообщить подписчикам о правке — в той же транзакции: отказ подписчика
-    (``ProjectChangeRejected``) откатывает и саму правку."""
-    snapshot = brief(project)
-    for listener in list(_LISTENERS):
-        listener(snapshot)
-
-
 def _ensure_member(project: Project, user_id: int | None, actor_id: int | None) -> None:
     if user_id:
         ProjectMember.objects.get_or_create(project=project, user_id=user_id,
@@ -65,7 +39,6 @@ def update(project: Project, *, actor_id: int, **fields) -> Project:
         setattr(project, key, value)
     project.save()
     _ensure_member(project, project.manager_user_id, actor_id)
-    _changed(project)
     return project
 
 
@@ -84,8 +57,7 @@ def brief(project: Project) -> dict:
             "kind": project.kind, "status": project.status,
             "country_code": project.country_code, "manager_user_id": project.manager_user_id,
             "customer_name": project.customer_name,
-            "customer_counterparty_id": project.customer_counterparty_id or None,
-            "date_start": project.date_start, "date_end": project.date_end}
+            "customer_counterparty_id": project.customer_counterparty_id or None}
 
 
 def search(query: str, *, user_id: int, only_member: bool, limit: int = 20) -> list[dict]:

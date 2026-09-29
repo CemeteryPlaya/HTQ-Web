@@ -667,29 +667,17 @@ class RoadmapMetricsResponse(BaseModel):
     equipment: ResourceComparison
 
 
-class ProjectCreate(BaseModel):
-    """Доска заводится к «Проекту» модуля БЗО (D-02): название, статус, сроки
-    и руководитель берутся из него (``services/project_link.py``), поэтому в
-    теле их нет — лишние ключи Pydantic отбрасывает."""
-
-    project_ref: str = Field(..., min_length=1, max_length=36)
+class ProjectCreate(OrderedDates):
+    name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=5000)
+    status: ProjectStatus = Field(default=ProjectStatus.ACTIVE)
     color: str = Field(default="#3b82f6", max_length=20)
+    start_date: date | None = None
+    end_date: date | None = None
+    owner_id: int | None = None
     department_id: int | None = None
     # False = календарные дни (стройка идёт 7/7), True = рабочие.
     use_production_calendar: bool = False
-
-
-class ProjectLinkCandidate(BaseModel):
-    """«Проект», к которому ещё можно завести доску задач."""
-
-    id: str
-    code: str
-    name: str
-    status: str
-    date_start: date | None = None
-    date_end: date | None = None
-    manager_user_id: int | None = None
 
 
 class ProjectUpdate(OrderedDates):
@@ -719,11 +707,6 @@ class ProjectResponse(BaseModel):
     sites: list[ProjectSiteRef] = []
     site_ids: list[int] = []
     use_production_calendar: bool = False
-    # Связь с «Проектом» БЗО: у связанной доски название, статус, сроки и
-    # руководитель — его копия и правятся в «Проектах» (D-02).
-    project_ref: str = ""
-    project_code: str | None = None
-    linked: bool = False
     task_count: int = 0
     done_count: int = 0
     progress: float = 0.0
