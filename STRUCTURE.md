@@ -368,7 +368,10 @@ frontend/src/
 │   │                   #   ?format=xlsx), BppDocumentShell (тип истории = label_lower модели, не тип signoff),
 │   │                   #   HistoryTab, StatusBadge+statusDictionaries, useIdempotentAction, useDraftAutosave,
 │   │                   #   useUnsavedChangesGuard; подмодули approvals, requests, accountable, exports
-│   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog)
+│   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog),
+│   │                   #   bank («Оплаты факт»: реестр L-07, форма загрузки выписки, экран загрузки с
+│   │                   #   опросом раз в 2 с), settings («Настройки»: счета организации, шаблоны выписок —
+│   │                   #   TemplateEditor с «Проверить на образце»)
 │   ├── messenger/      # MessengerPage + api/ + hooks/ + types.ts (feature-sliced)
 │   └── requests/       # ⭐ RequestsLayout + pages/ + components/ + hooks.ts + types.ts
 ├── components/

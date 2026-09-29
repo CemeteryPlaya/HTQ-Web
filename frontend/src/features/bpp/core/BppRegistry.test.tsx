@@ -182,6 +182,13 @@ describe('BppRegistry', () => {
       'Реестр не поддерживает выгрузку в xlsx. Сообщите администратору.'));
   });
 
+  it('ручка без быстрого поиска — поля поиска нет', async () => {
+    get.mockResolvedValue({ data: page([row('1', 'ВП-01')], 1) });
+    setup({ searchable: false });
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(screen.queryByRole('textbox', { name: 'Быстрый поиск' })).toBeNull();
+  });
+
   it('первая колонка — настоящая ссылка на документ (клавиатура, новая вкладка)', async () => {
     get.mockResolvedValue({ data: page([row('1', 'ЗЗ-01')], 1) });
     setup({ rowHref: (r) => `/bpp/requests/${r.id}` });

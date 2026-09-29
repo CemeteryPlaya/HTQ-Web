@@ -79,6 +79,9 @@ interface Props<Row extends { id: string }> {
   /** Параметр быстрого поиска сервера (`search` у заявок B). */
   searchParam?: string;
   searchPlaceholder?: string;
+  /** Есть ли у ручки быстрый поиск (по умолчанию да). `false` — поля поиска
+   * нет: поле, которое ничего не ищет, хуже его отсутствия. */
+  searchable?: boolean;
   defaultSort?: RegistrySort | null;
   defaultHidden?: string[];
   /** Куда ведёт клик по строке (форма документа). */
@@ -103,8 +106,8 @@ const sortField = <Row,>(column: RegistryColumn<Row>): string | null =>
 
 export function BppRegistry<Row extends { id: string }>({
   registryKey, endpoint, columns, filters = [], bulkActions = [], exportName,
-  searchParam, searchPlaceholder, defaultSort, defaultHidden, rowHref, rowLabel, toolbarExtra,
-  syncUrl = true,
+  searchParam, searchPlaceholder, searchable = true, defaultSort, defaultHidden, rowHref,
+  rowLabel, toolbarExtra, syncUrl = true,
 }: Props<Row>) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -253,17 +256,19 @@ export function BppRegistry<Row extends { id: string }>({
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">
-        <div className="relative w-full sm:w-72">
-          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={state.search}
-            onChange={(event) => state.setSearch(event.target.value)}
-            placeholder={searchPlaceholder
-              ?? t('bpp.registry.searchPlaceholder', 'Поиск по номеру и наименованию')}
-            aria-label={t('bpp.registry.search', 'Быстрый поиск')}
-            className="pl-8"
-          />
-        </div>
+        {searchable && (
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={state.search}
+              onChange={(event) => state.setSearch(event.target.value)}
+              placeholder={searchPlaceholder
+                ?? t('bpp.registry.searchPlaceholder', 'Поиск по номеру и наименованию')}
+              aria-label={t('bpp.registry.search', 'Быстрый поиск')}
+              className="pl-8"
+            />
+          </div>
+        )}
 
         {filters.map((filter) => (
           <div key={filter.key} className="min-w-40">

@@ -8,10 +8,10 @@
  *
  * Подпись зависит от вида документа, а не только от кода: `approved` у
  * заявки — «Утверждена», у бюджета — «Утверждён». Коды — те, что отдаёт
- * сервер (`TextChoices` моделей `apps/bpp/models/*`). Договор, счёт и
- * выписка (этапы 3–4) ещё не заведены на сервере: их коды здесь —
- * предложение по таблицам ТЗ §15.3–15.5, сверить с моделями при их
- * появлении.
+ * сервер (`TextChoices` моделей `apps/bpp/models/*`). Договор и счёт
+ * (этап 3, B) ещё не заведены на сервере: их коды здесь — предложение по
+ * таблицам ТЗ §15.3–15.4, сверить с моделями при их появлении. Коды
+ * загрузки выписки и её строк — из `apps/bpp/models/bank.py`.
  */
 
 /** Тон бейджа — смысл статуса, одинаковый для всех документов. */
@@ -96,6 +96,18 @@ export const STATUS_DICTIONARIES = {
     docs_provided: s('invoice.docs_provided', 'Документы предоставлены', 'progress'),
     paid: s('invoice.paid', 'Оплачено', 'success'),
     cancelled: s('invoice.cancelled', 'Отменён', 'muted'),
+  },
+  // Загрузка выписки (ТЗ §15.5, A4.1); `BankImportStatus`. «Сверена» —
+  // вместе со сверкой (A4.2, этап 4).
+  bank_import: {
+    processing: s('bankImport.processing', 'Обрабатывается', 'progress'),
+    loaded: s('bankImport.loaded', 'Загружена', 'success'),
+    failed: s('bankImport.failed', 'Ошибка загрузки', 'danger'),
+    cancelled: s('bankImport.cancelled', 'Отменена', 'muted'),
+  },
+  // Строка выписки; `LineMatchStatus`. Остальные статусы — со сверкой (A4.2).
+  bank_line: {
+    unmatched: s('bankLine.unmatched', 'Не сопоставлена', 'attention'),
   },
   // Фоновая выгрузка реестра (задача 6); `ExportStatus`.
   export: {
