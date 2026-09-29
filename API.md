@@ -1732,6 +1732,20 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 `bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
 `bpp.orgbankaccount`, `bpp.statementtemplate`, `bpp.bankimport` — загрузка,
 файл, итог разбора), читает тот, кто видит документ.
+**Параметры модуля** — вкладка «Параметры модуля» экрана «Настройки» (ТЗ §05
+п.10), `views_settings.py`; подмодуля нет, гасятся вместе с модулем. Реестр
+правимых ключей — на сервере (`services/core/settings.EDITABLE`); значение
+лежит в `ModuleSetting` схемы компании, строки нет — умолчание модуля.
+Служебные строки (итог ночной сверки `committed_check_last`) ручки не
+показывают и не принимают. Чтение — `bpp.settings` view (ФД, АДМ), правка —
+`bpp.settings` edit (АДМ), иначе 403 `E-ACC-01`. Смена пишется в журнал:
+`GET history/bpp.modulesetting/<ключ>` — тому, кто видит параметры.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET settings` | Параметры `[{key, label, value, default, kind: integer, min, max, help, updated_at}]` в порядке реестра; `updated_at: null` — параметр не меняли, действует умолчание. Сейчас один — `counterparty_verified_threshold` (порог метки «Проверенный» контрагента, 1…100, по умолчанию 3) |
+| `PATCH settings/<ключ>` (`{value}`) | Сменить параметр; ответ — параметр в том же виде. Не целое или вне `min`…`max` — 422 `E-VAL-01` с полем `value`; ключ вне реестра (в том числе служебный) — 404 `E-NOT-FOUND`. То же значение — без записи и строки журнала. Идемпотентна (`Idempotency-Key`) |
+
 
 `GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
 ["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в
