@@ -37,6 +37,7 @@ import { errorCode, errorStatus } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDateTime, formatMoney, parseMoneyInput } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
@@ -634,9 +635,10 @@ export function BudgetCardPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(BUDGETS_BASE);
   return (
     <Link
-      to={BUDGETS_BASE}
+      to={back}
       className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
     >
       <ArrowLeft className="h-4 w-4" />

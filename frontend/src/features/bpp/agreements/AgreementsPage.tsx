@@ -12,9 +12,8 @@ import { useTranslation } from 'react-i18next';
 
 import { Badge } from '@/components/ui/badge';
 
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type { RegistryColumn, RegistryFilter } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
 import { formatDate } from '../format';
@@ -52,10 +51,11 @@ export function AgreementsPage() {
     { key: 'counterparty_name', title: t('bpp.agreements.counterparty', 'Контрагент') },
     { key: 'project_code', title: t('bpp.agreements.project', 'Проект') },
     { key: 'article_name', title: t('bpp.agreements.article', 'Статья') },
+    // У открытого договора суммы нет (`amount: null`) — колонка покажет «—».
     moneyColumn<AgreementRow>('amount', t('bpp.agreements.amount', 'Сумма'),
-      (row) => (row.is_open ? null : row.amount), { currency: (row) => row.currency_code }),
+      { currency: 'currency_code' }),
     moneyColumn<AgreementRow>('remaining', t('bpp.agreements.remaining', 'Остаток по договору'),
-      (row) => row.remaining, { currency: (row) => row.currency_code }),
+      { currency: 'currency_code' }),
     statusColumn<AgreementRow>(t, 'contract'),
     currentHoldersColumn<AgreementRow>(t),
     {

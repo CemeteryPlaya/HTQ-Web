@@ -36,6 +36,7 @@ import { errorStatus } from '@/lib/apiError';
 
 import { lessThan } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { StatusBadge } from '../core/StatusBadge';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatMoney, parseMoneyInput } from '../format';
@@ -46,7 +47,7 @@ import {
   AGREEMENT_HISTORY_TYPE, AGREEMENT_SUBJECT, AGREEMENTS_BASE, agreementApi, agreementKey,
   type AgreementCard, type AgreementType,
 } from './api';
-import { formOf, overPlan, patchOf, submitErrors, type AgreementFormState } from './agreementForm';
+import { AGREEMENT_HISTORY_FIELDS, formOf, overPlan, patchOf, submitErrors, type AgreementFormState } from './agreementForm';
 import { CounterpartyPicker } from './CounterpartyPicker';
 
 const COMMENT_MIN = 10;
@@ -263,6 +264,7 @@ export function AgreementFormPage() {
         actions={actions}
         readOnly={!editable}
         historyType={AGREEMENT_HISTORY_TYPE}
+        historyFields={AGREEMENT_HISTORY_FIELDS}
         extraTabs={showExecution ? [{
           key: 'execution', label: t('bpp.requests.execution', 'Исполнение'),
           content: <ExecutionTab id={card.id} />,
@@ -495,8 +497,9 @@ export function AgreementFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(AGREEMENTS_BASE);
   return (
-    <Link to={AGREEMENTS_BASE} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={back} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.agreements.back', 'К договорам')}
     </Link>

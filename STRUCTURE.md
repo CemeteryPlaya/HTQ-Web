@@ -370,7 +370,7 @@ frontend/src/
 │   │                   #   useUnsavedChangesGuard; подмодули approvals, accountable, exports
 │   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog);
 │   │                   #   экраны B2.5: budgets (L-01, F-01 с корректировкой; budgetForm.ts, cents.ts —
-│   │                   #   деньги в копейках BigInt, money.tsx — денежная колонка), requests (L-02, F-02:
+│   │                   #   деньги в копейках BigInt; денежная колонка — общая `moneyColumn` из core), requests (L-02, F-02:
 │   │                   #   requestForm.ts — CALC-004, «остаток после заявки», вставка из Excel; ItemsEditor),
 │   │                   #   plan (L-04 + мастер F-03, planSelection.ts), links — /bpp/requests/:id без гейта
 │   │                   #   по узлу (туда ведут согласование и колокольчик);

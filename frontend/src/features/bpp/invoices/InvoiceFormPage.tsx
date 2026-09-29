@@ -52,6 +52,7 @@ import { agreementApi } from '../agreements/api';
 import { CounterpartyPicker } from '../agreements/CounterpartyPicker';
 import { lessThan, sumMoney } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatDateTime, formatMoney, parseMoneyInput } from '../format';
 import { shownQty } from '../plan/planSelection';
@@ -62,7 +63,7 @@ import {
   type InvoiceCard,
 } from './api';
 import {
-  COMMENT_MAX, formOf, localToday, overThreshold, patchOf, submitErrors,
+  INVOICE_HISTORY_FIELDS, COMMENT_MAX, formOf, localToday, overThreshold, patchOf, submitErrors,
   type InvoiceFormState,
 } from './invoiceForm';
 import { usePrompt, type PromptValues } from './PromptDialog';
@@ -463,6 +464,7 @@ export function InvoiceFormPage() {
         actions={actions}
         readOnly={!editable}
         historyType={INVOICE_HISTORY_TYPE}
+        historyFields={INVOICE_HISTORY_FIELDS}
         extraTabs={showPayments ? [{
           key: 'payments', label: t('bpp.invoices.payments', 'Оплаты'),
           content: <PaymentsTab card={card} canUnmark={canUnmark} onUnmark={unmark} />,
@@ -809,8 +811,9 @@ export function InvoiceFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(INVOICES_BASE);
   return (
-    <Link to={INVOICES_BASE} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={back} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.invoices.back', 'К счетам')}
     </Link>

@@ -28,10 +28,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
 import { exportRegistry } from '../core/registryExport';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type {
   BulkOutcome, RegistryBulkAction, RegistryColumn, RegistryFilter,
 } from '../core/registryTypes';
@@ -114,9 +113,9 @@ export function InvoicesPage() {
     { key: 'project_code', title: t('bpp.invoices.projectShort', 'Проект') },
     { key: 'article_name', title: t('bpp.invoices.article', 'Статья') },
     moneyColumn<InvoiceRow>('amount', t('bpp.invoices.amount', 'Сумма'),
-      (row) => row.amount, { currency: (row) => row.currency_code }),
+      { currency: 'currency_code' }),
     moneyColumn<InvoiceRow>('amount_kzt', t('bpp.invoices.amountKzt', 'В тенге'),
-      (row) => row.amount_kzt, { total: 'amount_kzt' }),
+      { totalKey: 'amount_kzt', totalCurrency: 'KZT' }),
     {
       key: 'due_date',
       title: t('bpp.invoices.dueDate', 'Срок оплаты'),
@@ -144,7 +143,7 @@ export function InvoicesPage() {
       },
     },
     moneyColumn<InvoiceRow>('paid_bank_amount', t('bpp.invoices.paidBank', 'Оплачено по банку'),
-      (row) => row.paid_bank_amount, { total: 'paid_bank_amount' }),
+      { totalKey: 'paid_bank_amount' }),
   ], [t]);
 
   const filters = useMemo<RegistryFilter[]>(() => [

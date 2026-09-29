@@ -29,9 +29,8 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
 import { lessThan } from '../budgets/cents';
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type { RegistryColumn, RegistryFilter } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
 import { formatMoney, parseMoneyInput } from '../format';
@@ -225,9 +224,9 @@ export function AccountablePage() {
       render: (row) => <span className="line-clamp-2 max-w-xs">{row.goal}</span>,
     },
     moneyColumn<AccountableRow>('amount', t('bpp.accountable.amount', 'Сумма'),
-      (row) => row.amount, { currency: (row) => row.currency, total: 'amount' }),
+      { currency: 'currency', totalKey: 'amount' }),
     moneyColumn<AccountableRow>('reported_amount', t('bpp.accountable.reported', 'Подтверждено отчётами'),
-      (row) => row.reported_amount, { currency: (row) => row.currency }),
+      { currency: 'currency' }),
     statusColumn<AccountableRow>(t, 'accountable'),
     currentHoldersColumn<AccountableRow>(t),
   ], [t]);
