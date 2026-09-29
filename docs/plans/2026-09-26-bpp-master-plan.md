@@ -363,10 +363,10 @@ def pending_for_user(user_id: int) -> list[dict]: ...        # [{task_id, subjec
 # services/core/permissions.py(A1.4): allowed_actions(request, obj) -> list[str]; article_groups_for(request) -> list[str]
 # services/budget/balance.py (B2.1): balance(project_id: str, article_id: str, *, exclude_request_id: str | None = None) -> dict  # {limit, committed, available, as_of}
 # services/bank/recon.py     (A4.2): recalc_invoice(invoice_id: str) -> None   # пишет Invoice.paid_bank_amount / recon_status
-# services/invoices/lookup.py(B3.2): find_by_number(number: str) -> Invoice | None
+# apps/bpp/interface.py      (B3.2): find_by_number(number: str) -> dict | None  # services/invoices/read.py; {id, number, status, amount, currency_code, counterparty_reg_number, paid_bank_amount, recon_status}; номер — уже чистый «СЧ-ГГГГ-NNNNNN»: нормализацию назначения (латиница C/X, пробелы, регистр) делает сверка A4.2 до вызова
 
 # apps/bpp/interface.py  (B3.2) — для раздела ежедневной сводки (A3.2)
-def closing_docs_pending_for_user(user_id: int) -> list[dict]: ...  # [{invoice_id, number, title, url, since}] — счета автора в «Ждёт закрывающих документов»
+def closing_docs_pending_for_user(user_id: int) -> list[dict]: ...  # [{invoice_id, number, title, url, since, days}] — счета автора в «Ждёт закрывающих документов»; потребитель — bpp/digest.py (A3.2)
 ```
 
 ### 2.7 Владение файлами
