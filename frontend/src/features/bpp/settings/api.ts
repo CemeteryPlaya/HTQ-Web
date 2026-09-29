@@ -95,7 +95,8 @@ export interface TemplatePreview {
 
 /** Экран настроек внутри раздела `/bpp`; вкладка — в `?tab=`. */
 export const SETTINGS_BASE = '/bpp/settings';
-export const settingsTabHref = (tab: 'accounts' | 'templates') => `${SETTINGS_BASE}?tab=${tab}`;
+export const settingsTabHref = (tab: 'accounts' | 'templates' | 'params') =>
+  `${SETTINGS_BASE}?tab=${tab}`;
 
 const path = (suffix: string) => apiPath('bpp', `bank/${suffix}`);
 const keyed = (key: string) => ({ headers: { 'Idempotency-Key': key } });
@@ -133,3 +134,40 @@ export const bankSettingsApi = {
 /** Ключи кеша: общие для вкладок настроек и формы загрузки выписки. */
 export const ACCOUNTS_KEY = ['bpp', 'bank', 'accounts'] as const;
 export const TEMPLATES_KEY = ['bpp', 'bank', 'templates'] as const;
+
+// ── параметры модуля (`/api/bpp/v1/settings…`) ─────────────────────────
+
+/**
+ * Параметр модуля из серверного реестра (`services/core/settings.EDITABLE`):
+ * значение — из таблицы, а строки нет — умолчание модуля (`default`).
+ * Служебных строк (итог ночной сверки) сервер не отдаёт и не принимает.
+ */
+export interface ModuleParam {
+  key: string;
+  label: string;
+  /** Пока только целое в границах `min`…`max` включительно. */
+  kind: 'integer';
+  value: number;
+  default: number;
+  min: number | null;
+  max: number | null;
+  help: string;
+  /** Когда параметр меняли; `null` — действует умолчание. */
+  updated_at: string | null;
+}
+
+export const MODULE_PARAMS_KEY = ['bpp', 'module-params'] as const;
+
+/**
+ * Читают `bpp.settings` `view` (ФД, АДМ), правит `bpp.settings` `edit`
+ * (АДМ). Неверное значение — 422 `E-VAL-01` с полем `value`, ключ вне
+ * реестра — 404. Запись идемпотентна (`Idempotency-Key`).
+ */
+export const moduleParamsApi = {
+  list: () => api.get<ModuleParam[]>(apiPath('bpp', 'settings')).then((r) => r.data),
+
+  update: (key: string, idempotencyKey: string, value: number) =>
+    api.patch<ModuleParam>(
+      apiPath('bpp', `settings/${encodeURIComponent(key)}`), { value }, keyed(idempotencyKey),
+    ).then((r) => r.data),
+};

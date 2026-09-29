@@ -174,6 +174,55 @@ def test_archived_parent_article_is_refused(holding):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("group_id", ["not-a-uuid", "00000000-0000-0000-0000-000000000000"])
+@pytest.mark.parametrize("with_parent", [False, True])
+def test_unknown_or_malformed_group_is_422_about_the_group(holding, group_id, with_parent):
+    """Кривой или несуществующий ``group_id`` — понятный отказ про группу
+    (поле ``group_id``), а не «родитель из другой группы» и не «запись с
+    таким кодом уже есть» (нарушение внешнего ключа при сохранении)."""
+    from apps.refdata.models import Article
+
+    assign(holding.slug, 7, "refdata", "full")
+    supply, _ = _groups()
+    body = {"code": "150", "name": "Кабель", "group_id": group_id}
+    if with_parent:
+        parent = _post("articles", {"code": "149", "name": "Кабельная продукция",
+                                    "group_id": supply}, holding.slug)
+        assert parent.status_code == 201, parent.content
+        body["parent_id"] = parent.json()["id"]
+
+    response = _post("articles", body, holding.slug)
+
+    assert response.status_code == 422, response.content
+    payload = response.json()
+    assert payload["code"] == "E-VAL-01"
+    assert [item["field"] for item in payload["fields"]] == ["group_id"]
+    assert "Группа статей не найдена" in payload["detail"]
+    assert not Article.objects.filter(code="150").exists()
+
+
+@pytest.mark.django_db
+def test_archived_group_is_refused_for_a_new_article(holding):
+    """Архивная группа в новые статьи не годится — как и архивный родитель:
+    новые записи архивные данные справочника не берут."""
+    from apps.refdata.models import Article, ArticleGroup
+
+    assign(holding.slug, 7, "refdata", "full")
+    supply, _ = _groups()
+    ArticleGroup.objects.filter(pk=supply).update(is_active=False)
+
+    response = _post("articles", {"code": "160", "name": "Кабель", "group_id": supply},
+                     holding.slug)
+
+    assert response.status_code == 422, response.content
+    payload = response.json()
+    assert payload["code"] == "E-VAL-01"
+    assert [item["field"] for item in payload["fields"]] == ["group_id"]
+    assert "в архиве — выберите действующую" in payload["detail"]
+    assert not Article.objects.filter(code="160").exists()
+
+
+@pytest.mark.django_db
 def test_model_clean_holds_the_parent_rule_for_django_admin():
     """django-admin сохраняет через ``full_clean()``, а не через ручку API:
     правило родителя живёт в ``Article.clean()``, иначе админка его обходит."""

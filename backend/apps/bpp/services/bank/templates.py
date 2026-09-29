@@ -13,7 +13,9 @@ openpyxl как ``float`` и переводится через ``repr`` (кра�
 
 Строка с нераспознанной датой или суммой уходит в список ошибок «Строка 17:
 не распознана дата „31.02.2026“» (текст ТЗ §11.3 п.1), остальные строки
-читаются дальше.
+читаются дальше. Сумма, которую не вместит столбец строки выписки (больше
+``AMOUNT_MAX_DIGITS`` цифр до запятой), — тоже ошибка строки, а не отказ
+всей выписки при записи.
 
 Выписка 1С сюда не относится: её поля задаёт стандарт формата, разбор —
 ``parsers/onec.py`` (задача 3). Предпросмотр шаблона 1С поэтому отвечает
@@ -39,10 +41,13 @@ from htqweb.errors import DomainError
 
 __all__ = [
     "AMOUNT_FIELDS",
+    "AMOUNT_MAX_DIGITS",
+    "AmountTooLarge",
     "EXTENSIONS",
     "FIELDS",
     "HEADER_SCAN_ROWS",
     "PREVIEW_ROWS",
+    "amount_error",
     "check_extension",
     "date_pattern",
     "find_header",
@@ -161,6 +166,28 @@ def parse_date(value, pattern: str) -> date:
 
 # ── суммы ──────────────────────────────────────────────────────────────
 
+#: Цифр в целой части суммы — не больше: столбец ``amount`` строки выписки
+#: — ``numeric(18, 2)``. Сумма крупнее (числовая ячейка xlsx «1E+20»,
+#: опечатка в выгрузке) переполнила бы его при записи, и отказом стала бы
+#: вся выписка с «внутренней ошибкой», а не одна строка.
+AMOUNT_MAX_DIGITS = 16
+_AMOUNT_LIMIT = Decimal(10) ** AMOUNT_MAX_DIGITS
+
+
+class AmountTooLarge(ValueError):
+    """Сумма распознана, но в ней больше ``AMOUNT_MAX_DIGITS`` цифр до
+    запятой — ошибка строки со своим текстом (``amount_error``)."""
+
+
+def amount_error(row_no: int, shown: str, exc: ValueError | None = None) -> str:
+    """Текст ошибки строки о сумме «Строка N: …»: слишком большая
+    (``AmountTooLarge``) или не распознана."""
+    if isinstance(exc, AmountTooLarge):
+        return (f"Строка {row_no}: сумма слишком большая „{shown}“ — в сумме не больше "
+                f"{AMOUNT_MAX_DIGITS} цифр до запятой")
+    return f"Строка {row_no}: не распознана сумма „{shown}“"
+
+
 _SPACES = re.compile(r"[\s   '’]+")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -180,6 +207,9 @@ def parse_amount(value) -> Decimal | None:
     пробелом; американская запись «1,250» без точки в их выгрузках не
     встречается, и угадывать по числу цифр после запятой опаснее, чем
     держаться местного правила.
+
+    Больше ``AMOUNT_MAX_DIGITS`` цифр до запятой (после округления) —
+    ``AmountTooLarge``: такую сумму не вместит столбец строки выписки.
     """
     if value is None:
         return None
@@ -209,10 +239,17 @@ def parse_amount(value) -> Decimal | None:
         if not _NUMBER.fullmatch(text):
             raise ValueError(value)
         number = Decimal(text)
+    # До округления — иначе «1E+30» упал бы в ``quantize`` как не число
+    # (точности контекста не хватает на 33 знака), а не как большая сумма.
+    if number.is_finite() and abs(number) >= _AMOUNT_LIMIT:
+        raise AmountTooLarge(value)
     try:
-        return number.quantize(CENT, rounding=ROUND_HALF_UP)
+        number = number.quantize(CENT, rounding=ROUND_HALF_UP)
     except InvalidOperation as exc:  # nan, бесконечность
         raise ValueError(value) from exc
+    if abs(number) >= _AMOUNT_LIMIT:  # 9999999999999999,995 округлилось вверх
+        raise AmountTooLarge(value)
+    return number
 
 
 # ── формат файла ────────────────────────────────────────────────────────
@@ -431,9 +468,8 @@ def read_row(row: list, columns: dict[str, int], template, pattern: str,
         for field in ("debit", "credit"):
             try:
                 amounts[field] = abs(parse_amount(cell(field)) or Decimal("0.00"))
-            except ValueError:
-                raise ValueError(f"Строка {row_no}: не распознана сумма "
-                                 f"„{_quote(cell(field))}“") from None
+            except ValueError as exc:
+                raise ValueError(amount_error(row_no, _quote(cell(field)), exc)) from None
         if amounts["debit"] and amounts["credit"]:
             raise ValueError(f"Строка {row_no}: сумма и в дебете, и в кредите — "
                              f"у операции должна быть одна")
@@ -447,10 +483,10 @@ def read_row(row: list, columns: dict[str, int], template, pattern: str,
         raw_amount = cell("amount")
         try:
             signed = parse_amount(raw_amount)
-        except ValueError:
-            signed = None
+        except ValueError as exc:
+            raise ValueError(amount_error(row_no, _quote(raw_amount), exc)) from None
         if signed is None:
-            raise ValueError(f"Строка {row_no}: не распознана сумма „{_quote(raw_amount)}“")
+            raise ValueError(amount_error(row_no, _quote(raw_amount)))
         if not signed:
             raise ValueError(f"Строка {row_no}: нулевая сумма")
         direction = "debit" if signed < 0 else "credit"

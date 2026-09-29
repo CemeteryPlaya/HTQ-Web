@@ -62,13 +62,18 @@ def delete(notification_id: str, user_id: int) -> None:
     center.delete(notification_id, user_id)
 
 
-def register_digest_source(key: str, fn: Callable[[int], list[dict]], *, tenant: bool) -> None:
+def register_digest_source(key: str, fn: Callable[[int], list[dict]], *, tenant: bool,
+                           section: str | None = None, landing_url: str = "") -> None:
     """Зарегистрировать источник ежедневной сводки: ``fn(user_id)`` возвращает
     ``[{title, url, since}]``; ``tenant=True`` — вызывается в контексте каждой
-    действующей компании пользователя.
+    действующей компании пользователя. ``section`` — заголовок раздела, под
+    которым позиции источника идут в письме (без него — общим списком, это
+    решения: «Ждут вашего решения», ссылка ``/signoff``); ``landing_url`` —
+    страница раздела, на которую ведёт сводка из одних разделов, когда в ней
+    больше одной позиции.
 
     Зовётся из ``AppConfig.ready()`` источника. ``require_service`` здесь нет
     намеренно: регистрация не трогает БД, а выключенный центр не должен ронять
     старт соседней аппки — сводку гейтит сама задача ``send_daily_digest``.
     """
-    digest.register(key, fn, tenant=tenant)
+    digest.register(key, fn, tenant=tenant, section=section, landing_url=landing_url)

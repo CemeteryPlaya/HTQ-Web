@@ -1,8 +1,9 @@
 /**
  * Реестр L-07 «Загрузки выписок»: сортировки у ручки нет — заголовки не
  * кнопки; «Кто загрузил» виден сразу, «Сопоставлено / Не сопоставлено» —
- * скрытые колонки; «Загрузить выписку» — только держателю `bpp.bank` `edit`
- * и уносит место в реестре, куда вернёт «Отмена» формы.
+ * скрытые колонки; быстрый поиск — номер или комментарий, параметр `q`;
+ * «Загрузить выписку» — только держателю `bpp.bank` `edit` и уносит место в
+ * реестре, куда вернёт «Отмена» формы.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -85,6 +86,20 @@ describe('BankImportsPage', () => {
     expect(within(table).getByText('Тест Фд')).toBeInTheDocument();
     expect(within(table).queryByRole('columnheader', { name: 'Сопоставлено' })).toBeNull();
     expect(within(table).queryByRole('columnheader', { name: 'Не сопоставлено' })).toBeNull();
+  });
+
+  it('быстрый поиск — номер или комментарий, уходит в запрос параметром `q`', async () => {
+    const user = userEvent.setup();
+    renderRegistry();
+    await screen.findByRole('link', { name: 'ВП-2026-0001' });
+
+    const search = screen.getByRole('textbox', { name: 'Быстрый поиск' });
+    expect(search).toHaveAttribute('placeholder', 'Номер или комментарий');
+    await user.type(search, 'вп-2026');
+
+    const registryCalls = () => get.mock.calls.filter(([url]) => String(url).endsWith('bank/imports'));
+    await waitFor(() => expect(registryCalls().at(-1)?.[1].params).toMatchObject({ q: 'вп-2026', page: 1 }));
+    expect(registryCalls().at(-1)?.[1].params).not.toHaveProperty('search');
   });
 
   it('без права загрузки кнопки «Загрузить выписку» нет', async () => {

@@ -175,3 +175,53 @@ def test_onec_without_any_payer_account_says_so_instead_of_zero_debits():
     # Хоть у одного документа плательщик есть — строки ошибки нет.
     docs.append(common.onec_doc("3", "06.09.2026", "30.00", OTHER))
     assert onec.parse(common.onec_bytes(OWN, docs), account=ACCOUNT).errors == []
+
+
+def test_onec_malformed_credit_or_foreign_payment_is_not_a_row_error():
+    """Поступление и платёж чужого счёта не загружаются — их битая дата,
+    сумма или пустой номер ошибкой строки не считаются: исправлять то, что
+    в базу не попало бы всё равно, некому. Ошибки — только у списаний
+    своего счёта."""
+    docs = [common.onec_doc("1", "31.02.2026", "100.00", OTHER, recipient_iban=OWN),
+            common.onec_doc("2", "05.09.2026", "сто", OTHER),
+            common.onec_doc("", "05.09.2026", "10.00", OTHER),
+            common.onec_doc("4", "05.09.2026", "1e20", OTHER),
+            common.onec_doc("5", "31.02.2026", "50.00", OWN),
+            common.onec_doc("6", "06.09.2026", "60.00", OWN)]
+    content = common.onec_bytes(OWN, docs)
+    result = onec.parse(content, account=ACCOUNT)
+    assert result.rows_total == 6
+    assert [line["doc_number"] for line in result.lines] == ["6"]
+    # Строка «Дата=31.02.2026» — первая у поступления, вторая у списания.
+    lines = content.decode("cp1251").split("\r\n")
+    own_bad = [n for n, text in enumerate(lines, start=1) if text == "Дата=31.02.2026"][1]
+    assert result.errors == [f"Строка {own_bad}: не распознана дата „31.02.2026“"]
+
+
+def test_onec_document_without_payer_keeps_its_row_errors():
+    """Плательщика нет — списание ли это, не понять: ошибки такого
+    документа показываются, а сам он (и исправный без плательщика) не
+    загружается."""
+    docs = [common.onec_doc("1", "31.02.2026", "10.00", ""),
+            common.onec_doc("2", "05.09.2026", "20.00", ""),
+            common.onec_doc("3", "05.09.2026", "30.00", OWN)]
+    content = common.onec_bytes(OWN, docs)
+    result = onec.parse(content, account=ACCOUNT)
+    assert [line["doc_number"] for line in result.lines] == ["3"]
+    assert result.errors == [f"Строка {_line_of(content, 'Дата=31.02.2026')}: "
+                             f"не распознана дата „31.02.2026“"]
+
+
+@pytest.mark.parametrize("raw", ["100000000000000000000", "10000000000000000.00",
+                                 "9999999999999999.995"])
+def test_onec_amount_too_large_is_a_row_error(raw):
+    """Сумма, которую не вместит ``numeric(18, 2)`` строки выписки, — ошибка
+    строки «сумма слишком большая», а не отказ всей выписки при записи."""
+    docs = [common.onec_doc("1", "05.09.2026", raw, OWN),
+            common.onec_doc("2", "05.09.2026", "9999999999999999.99", OWN)]
+    content = common.onec_bytes(OWN, docs)
+    result = onec.parse(content, account=ACCOUNT)
+    assert [line["amount"] for line in result.lines] == [Decimal("9999999999999999.99")]
+    assert result.errors == [
+        f"Строка {_line_of(content, f'Сумма={raw}')}: сумма слишком большая „{raw}“ — "
+        f"в сумме не больше 16 цифр до запятой"]

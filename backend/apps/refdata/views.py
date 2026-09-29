@@ -80,6 +80,7 @@ def _collection(model, schema_in, order: str):
     def create(request, data):
         _deny_unless_editor(request)
         if model is models.Article:
+            article_rules.check_group(data.group_id)
             article_rules.check_parent(data.group_id, data.parent_id)
         obj = model(**data.model_dump())
         if model is models.ExchangeRate:

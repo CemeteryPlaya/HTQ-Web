@@ -1,4 +1,4 @@
-"""Бизнес-метрики модуля БЗО (задача A3.2, часть 1).
+"""Бизнес-метрики модуля БЗО (задача A3.2, части 1 и 2).
 
 Собирается по расписанию через ``apps.core.metrics`` — см. докстринг там:
 ``bpp`` — тенантная аппка, поэтому ``collect()`` зовётся в схеме КАЖДОЙ
@@ -31,6 +31,24 @@
 * ``bpp_bank_imports_failed`` — загрузки выписок в «Ошибка загрузки» за
   ``FAILED_IMPORTS_DAYS`` дней. Справочная: автор загрузки видит ошибку на
   экране сразу, алерт не нужен.
+* ``bpp_invoices_awaiting_fd`` — счета «На рассмотрении ФД», очередь ФД
+  (вкладка реестра «На решение ФД»). Справочная: решение ФД — задача
+  ``signoff``, и её адресно показывает ежедневная сводка «ждут вашего
+  решения».
+* ``bpp_invoices_to_pay`` — очередь БУХ: «К оплате» И «Оплачено частично» —
+  ровно вкладка реестра «К оплате» (``services/invoices/read.py::TABS``).
+  Частично оплаченный счёт ещё ждёт бухгалтера — остаток платит он же, и
+  вне очереди такой счёт выпал бы из обеих цифр. Справочная.
+* ``bpp_invoices_closing_docs_overdue`` — «Ждёт закрывающих документов»
+  дольше ``CLOSING_DOCS_OVERDUE_DAYS`` дней (Q-C29, D-13). Дни КАЛЕНДАРНЫЕ и
+  по дате в поясе TIME_ZONE — те же «N дн.», что карточка счёта и раздел сводки
+  автора (``services/invoices/payments.py::closing_docs_pending_for_user``):
+  метрика и экран не должны расходиться в счёте. Отсчёт — с запроса
+  документов ``docs_requested_at``; возврат документов на доработку его не
+  сбрасывает — ждём тех же документов. Бизнес-правило в отдельном чате.
+
+Технические строки переноса из ``contracts`` (``is_migrated``) не входят ни
+в одну метрику — их не показывают и реестры модуля.
 """
 
 from __future__ import annotations
@@ -38,12 +56,15 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta
 
 from django.db import connection
+from django.db.models import Count, Q
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.core.services import ServiceDisabled, service_enabled
 from apps.signoff import interface as signoff
 
 from .models.bank import BankImport, BankImportStatus
+from .models.invoices import Invoice, InvoiceStatus
 from .models.requests import PurchaseRequest, RequestStatus
 from .services.budget.check import RESULT_KEY
 from .services.core.settings import get_setting
@@ -53,6 +74,8 @@ STALE_WORKING_DAYS = 5
 # Окно «загрузки с ошибкой»: неделя — с запасом на выходные, не больше, чтобы
 # старая починенная ошибка не висела на панели месяц.
 FAILED_IMPORTS_DAYS = 7
+# «Ждёт закрывающих дольше 5 дней» — Q-C29, мастер-план A3.2.
+CLOSING_DOCS_OVERDUE_DAYS = 5
 
 
 def _stale_before(now: datetime) -> datetime:
@@ -158,10 +181,61 @@ def _bank(now: datetime) -> dict:
     }
 
 
+def _docs_overdue_before(now: datetime) -> datetime:
+    """Начало местного дня, отстоящего от сегодня на
+    ``CLOSING_DOCS_OVERDUE_DAYS`` календарных.
+
+    Запрос раньше этой границы — прошло больше пяти дней по счёту карточки
+    («ждёт закрывающих 6 дн.»); запрос ровно пять дней назад, в любое время
+    суток, — ещё нет.
+    """
+    day = timezone.localdate(now) - timedelta(days=CLOSING_DOCS_OVERDUE_DAYS)
+    return timezone.make_aware(datetime.combine(day, time.min))
+
+
+def _invoices(now: datetime) -> dict:
+    # Счета — этап 3; до ``migrate_companies`` на выкатке таблицы нет (см.
+    # ``_table_exists``).
+    if not _table_exists(Invoice):
+        return {}
+    # Без даты запроса «Ждёт закрывающих» не бывает штатно (её ставит
+    # ``request_docs``); строку, поправленную руками, считаем от последнего
+    # изменения, чтобы она не пропала из счёта навсегда.
+    counts = (Invoice.objects.filter(is_migrated=False)
+              .annotate(docs_since=Coalesce("docs_requested_at", "updated_at"))
+              .aggregate(
+                  fd=Count("pk", filter=Q(status=InvoiceStatus.UNDER_REVIEW)),
+                  to_pay=Count("pk", filter=Q(status__in=[InvoiceStatus.TO_PAY,
+                                                          InvoiceStatus.PARTIALLY_PAID])),
+                  overdue=Count("pk", filter=Q(status=InvoiceStatus.AWAITING_DOCS,
+                                               docs_since__lt=_docs_overdue_before(now))),
+              ))
+    return {
+        "bpp_invoices_awaiting_fd": {
+            "help": "Счета «На рассмотрении ФД» — очередь финансового директора",
+            "values": [((), counts["fd"])],
+        },
+        "bpp_invoices_to_pay": {
+            "help": "Счета «К оплате» и «Оплачено частично» — очередь бухгалтера",
+            "values": [((), counts["to_pay"])],
+        },
+        "bpp_invoices_closing_docs_overdue": {
+            "help": ("Счета «Ждёт закрывающих документов» дольше %d календарных дней"
+                     % CLOSING_DOCS_OVERDUE_DAYS),
+            "values": [((), counts["overdue"])],
+        },
+    }
+
+
 def collect() -> dict:
     now = timezone.now()
     result = _requests(now)
     if service_enabled("bpp"):
         result.update(_committed_check(now))
     result.update(_bank(now))
+    # Счета выключены у компании — очередей нет и действовать некому (экран
+    # отвечает 503): метрики не отдаём, иначе правило о закрывающих горело бы
+    # неделями, а сводка (bpp/digest.py) у этой компании при этом молчит.
+    if service_enabled("bpp_invoices"):
+        result.update(_invoices(now))
     return result

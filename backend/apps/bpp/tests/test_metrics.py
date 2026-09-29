@@ -1,4 +1,4 @@
-"""Бизнес-метрики модуля БЗО (задача A3.2, часть 1; Review Focus 5).
+"""Бизнес-метрики модуля БЗО (задача A3.2, части 1 и 2; Review Focus 5).
 
 Сама метрика — ``apps/bpp/metrics.py::collect`` в схеме одной компании;
 веер по компаниям и метка ``company`` — ``apps.core.metrics.collect_all``.
@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -16,7 +17,8 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from apps.bpp import metrics
-from apps.bpp.models import PurchaseRequest, RequestStatus
+from apps.bpp.interface import closing_docs_pending_for_user
+from apps.bpp.models import Invoice, InvoiceStatus, PurchaseRequest, RequestStatus
 from apps.bpp.models.bank import (
     BankImport,
     BankImportStatus,
@@ -27,8 +29,12 @@ from apps.bpp.models.bank import (
 from apps.bpp.models.settings import ModuleSetting
 from apps.bpp.services.budget import check
 from apps.bpp.services.budget import committed as calc
+from apps.bpp.services.invoices import decisions, payments
 from apps.bpp.services.requests import requests as service
 from apps.bpp.tests import stage2 as s
+# Счёт — модель B (B3.2); проводим его настоящими сервисами через фабрики
+# его тестов, а не собираем руками только нужные метрике поля.
+from apps.bpp.tests import test_invoices as invoice_flow
 from apps.companies.models import Company, CompanyModule
 from apps.signoff.models import ApprovalProcessStage
 from htqweb.fallback import FallbackNotAllowed
@@ -186,6 +192,111 @@ def test_failed_bank_imports_of_the_last_week(company_context):
     made("ВП-2026-0004", BankImportStatus.LOADED, 1)
 
     assert _value(metrics.collect(), "bpp_bank_imports_failed") == 2
+
+
+# ── очереди счетов и закрывающие документы (часть 2) ─────────────────────
+
+_INVOICE_METRICS = ("bpp_invoices_awaiting_fd", "bpp_invoices_to_pay",
+                    "bpp_invoices_closing_docs_overdue")
+
+
+def _invoice_values() -> tuple:
+    collected = metrics.collect()
+    return tuple(_value(collected, name) for name in _INVOICE_METRICS)
+
+
+def test_invoice_queues_follow_the_real_lifecycle(company_context):
+    slug = company_context["slug"]
+    _, _, inv = invoice_flow._submitted(slug, 1000)
+    assert _invoice_values() == (1, 0, 0)          # на рассмотрении ФД
+
+    decisions.decide(invoice_flow._fd(slug), inv.id, decision="pay")
+    assert _invoice_values() == (0, 1, 0)          # к оплате — очередь БУХ
+
+    buh, today = invoice_flow._buh(slug), timezone.localdate()
+    payments.mark_paid(buh, inv.id, pay_date=today, amount=400)
+    # «Оплачено частично» остаётся в очереди БУХ — как вкладка «К оплате».
+    assert _invoice_values() == (0, 1, 0)
+    payments.mark_paid(buh, inv.id, pay_date=today, amount=600)
+    assert _invoice_values() == (0, 0, 0)
+
+    payments.request_docs(buh, inv.id)
+    assert _invoice_values() == (0, 0, 0)          # только что запрошены
+    Invoice.objects.filter(pk=inv.pk).update(
+        docs_requested_at=timezone.now() - timedelta(days=6))
+    assert _invoice_values() == (0, 0, 1)
+    # Метрика считает дни так же, как раздел сводки автора и карточка счёта.
+    assert closing_docs_pending_for_user(s.SN)[0]["days"] == 6
+
+
+def _raw_invoice(n, status, *, requested=None, migrated=False, updated=None):
+    inv = Invoice.objects.create(number=f"СЧ-2026-{n:06d}", project_id=uuid.uuid4(),
+                                 article_id=uuid.uuid4(), author_id=1, status=status,
+                                 docs_requested_at=requested, is_migrated=migrated)
+    if updated is not None:
+        Invoice.objects.filter(pk=inv.pk).update(updated_at=updated)
+    return inv
+
+
+def test_invoices_off_at_the_company_drop_the_invoice_metrics(company_context):
+    """Счета выключены у компании — очередей нет и действовать некому: метрики
+    счетов не отдаются (иначе правило о закрывающих горело бы неделями), а
+    остальные метрики модуля — на месте."""
+    _raw_invoice(1, InvoiceStatus.AWAITING_DOCS,
+                 requested=timezone.now() - timedelta(days=30))
+    CompanyModule.objects.create(company_id=company_context["id"],
+                                 app_label="bpp_invoices", enabled=False)
+    cache.clear()          # module_enabled кэширует рубильник на 5 с
+
+    collected = metrics.collect()
+    assert not set(_INVOICE_METRICS) & set(collected)
+    assert _value(collected, "bpp_requests_in_approval") == 0
+
+
+def _local(days_ago: int, at: time) -> datetime:
+    return timezone.make_aware(datetime.combine(
+        timezone.localdate() - timedelta(days=days_ago), at))
+
+
+def test_invoice_metrics_by_status_boundary_and_migration(company_context):
+    st = InvoiceStatus
+    _raw_invoice(1, st.UNDER_REVIEW)
+    _raw_invoice(2, st.UNDER_REVIEW)
+    _raw_invoice(3, st.TO_PAY)
+    _raw_invoice(4, st.PARTIALLY_PAID)
+    # Ровно пять дней — в любое время суток — ещё не просрочка; шесть — да.
+    _raw_invoice(5, st.AWAITING_DOCS, requested=_local(5, time(0, 0, 1)))
+    _raw_invoice(6, st.AWAITING_DOCS, requested=_local(6, time(23, 59)))
+    # Без даты запроса (строку правили руками) — отсчёт от последней правки.
+    _raw_invoice(7, st.AWAITING_DOCS, updated=timezone.now() - LONG_AGO)
+    # Не в счёт: другие статусы и технические строки переноса из contracts.
+    for n, status in enumerate((st.DRAFT, st.RETURNED, st.NOT_PAYABLE, st.PAID,
+                                st.DOCS_PROVIDED, st.CLOSED, st.CANCELLED, st.REPLACED),
+                               start=10):
+        _raw_invoice(n, status, requested=_local(30, time(12)))
+    _raw_invoice(20, st.UNDER_REVIEW, migrated=True)
+    _raw_invoice(21, st.TO_PAY, migrated=True)
+    _raw_invoice(22, st.AWAITING_DOCS, migrated=True, requested=_local(30, time(12)))
+
+    assert _invoice_values() == (2, 2, 2)
+
+
+def test_empty_invoice_queues_are_zero_not_absent(company_context):
+    assert _invoice_values() == (0, 0, 0)
+
+
+@pytest.mark.parametrize(("today", "requested", "overdue"), [
+    # Пн 28.09.2026: запрос в среду 23.09 — пять календарных дней, ещё нет.
+    (date(2026, 9, 28), datetime(2026, 9, 23, 23, 59), False),
+    (date(2026, 9, 28), datetime(2026, 9, 22, 23, 59), True),
+    # Выходные считаются: дни календарные, а не рабочие.
+    (date(2026, 10, 5), datetime(2026, 9, 30, 9, 0), False),
+    (date(2026, 10, 5), datetime(2026, 9, 29, 18, 0), True),
+])
+def test_closing_docs_threshold_counts_calendar_days(today, requested, overdue):
+    now = timezone.make_aware(datetime.combine(today, time(8)))
+    since = timezone.make_aware(requested)
+    assert (since < metrics._docs_overdue_before(now)) is overdue
 
 
 # ── веер по компаниям (Review Focus 5) ───────────────────────────────────
