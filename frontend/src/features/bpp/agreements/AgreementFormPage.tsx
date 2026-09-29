@@ -10,8 +10,10 @@
  *   остатка — «Отправить» закрыта (ТЗ §9.3 п.5, BR-034).
  * - Ставка НДС — из справочника страны на дату; её можно поправить (D-14),
  *   ручная ставка подсвечена для ФД.
- * - Вкладки «Файлы» пока нет: владелец файлов договора в `apps.files`
- *   появится со сведением задачи 1 этапа 3 A.
+ * - Вкладка «Файлы» — папка владельца `bpp.agreement` в `apps.files`: скан
+ *   договора (обязателен для отправки — без него сервер отвечает `E-FIL-04`,
+ *   ТЗ §21) и приложения до 30. Менять их может автор в «Черновике» и «На
+ *   доработке»; правила — у владельца (`services/agreements/file_owner.py`).
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -260,7 +262,6 @@ export function AgreementFormPage() {
         allowedActions={shellActions}
         actions={actions}
         readOnly={!editable}
-        withFiles={false}
         historyType={AGREEMENT_HISTORY_TYPE}
         extraTabs={showExecution ? [{
           key: 'execution', label: t('bpp.requests.execution', 'Исполнение'),

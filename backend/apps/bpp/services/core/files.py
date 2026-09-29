@@ -18,7 +18,10 @@ user-agent) — в ``apps.files``. Документы модуля — её вл
   версии ``file_id``;
 - ``list_files(owner)`` — действующие версии живых документов;
 - ``download_url(file_id, *, user_id)`` — ссылка через журнал скачиваний;
-- ``get_file(owner, file_id)`` — версия этого документа или ``None``.
+- ``get_file(owner, file_id)`` — версия этого документа или ``None``;
+- ``require_files(owner, *, action)`` — обязательные файлы приложены, иначе
+  422 ``E-FIL-04`` (отправка договора и счёта);
+- ``count_files(owner, file_type)`` — сколько документов типа (закрывающие).
 
 Права на документ проверяет вызывающий сервис документа — подсистема при
 загрузке из кода их не спрашивает. Отказ подсистемы (``FilesError``) —
@@ -143,6 +146,24 @@ def get_file(owner, file_id) -> dict | None:
             or version["owner_id"] != str(owner.pk):
         return None
     return _serialize(version)
+
+
+def require_files(owner, *, action: str) -> None:
+    """Обязательные типы файлов документа (``FileTypeSpec(required=True)``
+    его владельца) приложены — иначе 422 ``E-FIL-04`` с перечнем (ТЗ §21:
+    «Договор — обязателен»). ``action`` — что не удалось, в инфинитиве:
+    «отправить договор». Звать в переходе «Отправить» под блокировкой строки
+    документа, до запуска согласования."""
+    missing = files.missing_required(owner_type_of(owner), owner.pk)
+    if missing:
+        body = files.required_files_error(missing, action=action)
+        raise FilesDomainError(files.FilesError(
+            body["code"], 422, body["detail"], fields=body["fields"], details=body["details"]))
+
+
+def count_files(owner, file_type: str) -> int:
+    """Сколько у документа действующих документов этого типа (версии не в счёт)."""
+    return files.live_document_count(owner_type_of(owner), owner.pk, file_type)
 
 
 def owner_deleted(owner, *, actor_id: int | None) -> None:

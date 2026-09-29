@@ -37,6 +37,7 @@ from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.budget import committed as committed_calc
 from apps.bpp.services.core import audit
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.counterparties import lookup as counterparties
@@ -407,6 +408,7 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
     require_status(inv, (InvoiceStatus.DRAFT,), "удалить")
     check_version(inv, expected_version)
     audit.record(inv, "deleted", actor_id=actor.user_id, changes={"number": inv.number})
+    core_files.owner_deleted(inv, actor_id=actor.user_id)
     inv.delete()
 
 
@@ -565,6 +567,7 @@ def submit(actor: Actor, invoice_id, *, expected_version: int | None,
     require_status(inv, EDITABLE, "отправить")
     check_version(inv, expected_version)
     _check_required(inv)
+    core_files.require_files(inv, action=f"отправить счёт {inv.number}")  # ТЗ §21
     counterparties.assert_usable(inv.counterparty_id)       # BR-030, E-CTR-01
     if (inv.basis == InvoiceBasis.NO_CONTRACT and not counterparty_confirmed
             and counterparties.needs_confirmation(inv.counterparty_id)):

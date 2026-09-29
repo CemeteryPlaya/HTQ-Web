@@ -17,6 +17,8 @@ from apps.bpp.models import (
     PurchaseRequest,
 )
 from apps.bpp.tests import stage2 as s
+from apps.bpp.tests.test_files import memory_storage  # noqa: F401  (фикстура)
+from apps.files.models import FileObject
 from apps.project import interface as projects
 from apps.signoff import interface as signoff
 
@@ -71,6 +73,10 @@ def test_seed_walks_every_status_and_purge_removes_only_its_own(company_context)
     assert set(Invoice.objects.values_list("status", flat=True)) == {
         "partially_paid", "draft", "under_review", "awaiting_docs"}
     assert AccountableFundsRequest.objects.get().status == "awaiting_report"
+    # Договор и счета отправлены с файлами (ТЗ §21 — обязательны для отправки).
+    live = FileObject.objects.filter(owner_type__in=["bpp.agreement", "bpp.invoice"],
+                                     deleted_at__isnull=True)
+    assert set(live.values_list("file_type_id", flat=True)) == {"agreement", "invoice"}
 
     # Повторный запуск ничего не пишет.
     assert "уже есть" in _run(slug, **people)
@@ -83,6 +89,7 @@ def test_seed_walks_every_status_and_purge_removes_only_its_own(company_context)
     assert not (Invoice.objects.exists() or Agreement.objects.exists()
                 or PurchaseRequest.objects.exists() or AccountableFundsRequest.objects.exists())
     assert signoff.get_process_for("bpp.invoice", str(pending_invoice.pk)) is None
+    assert not live.exists()                    # файлы демо-документов убраны вместе с ними
     assert not Counterparty.objects.filter(reg_number__startswith="99").exists()
     assert projects.project_ids_by_code(["П-777"]) == {"П-777": str(foreign.id)}
 

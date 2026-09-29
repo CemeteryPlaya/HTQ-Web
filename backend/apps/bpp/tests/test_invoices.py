@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.utils import timezone
 
@@ -23,10 +25,14 @@ from apps.bpp.models import (
 )
 from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.budget import committed as calc
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.invoices import decisions, payments, read
 from apps.bpp.services.invoices import invoices as service
 from apps.bpp.services.requests import requests as request_service
 from apps.bpp.tests import stage2 as s
+from apps.bpp.tests.test_files import PDF, memory_storage  # noqa: F401  (фикстура)
+from apps.files import interface as files_interface
+from apps.files.services import registry as files_registry
 from apps.refdata.models import ExchangeRate
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
@@ -85,7 +91,15 @@ def _invoice(slug, *amounts, counterparty=None, limit=20_000_000, ext_date=None,
     inv, _ = service.update_draft(sn, inv.id, expected_version=None, data={
         "counterparty_id": str(cp.pk), "ext_number": "145",
         "ext_date": ext_date or timezone.localdate()})
+    _attach(inv)
     return sn, proj, inv
+
+
+def _attach(doc, file_type="invoice", name="schet.pdf"):
+    """Файл документа (счёт обязателен для «Отправить ФД», договор — для
+    отправки, ТЗ §21) — загрузкой из кода, как это делают сервисы модуля."""
+    return core_files.attach(doc, file_type, data=PDF, filename=name, mime="application/pdf",
+                             actor_id=doc.author_id)
 
 
 def _submitted(slug, *amounts, **kwargs):
@@ -152,6 +166,7 @@ def _active_agreement(slug, amount):
     agr, _ = agreement_service.update_draft(sn, agr.id, expected_version=None, data={
         "counterparty_id": str(_counterparty("100000000009").pk), "ext_number": "Д-1",
         "ext_date": timezone.localdate()})
+    _attach(agr, "agreement", "dogovor.pdf")
     agreement_service.submit(sn, agr.id, expected_version=None)
     for user_id in (s.FD, GD):
         process = signoff.get_process_for("bpp.agreement", str(agr.pk))
@@ -171,6 +186,7 @@ def test_ac008_invoice_over_agreement_remaining(company_context):
     first, _ = service.update_draft(sn, first.id, expected_version=None, data={
         "ext_number": "1", "amount": 9_700_000,
         "lines": [{"id": str(item.pk), "qty": "0.5", "amount": 9_700_000}]})
+    _attach(first)
     service.submit(sn, first.id, expected_version=None)
 
     second = service.create_from_agreement(sn, agr.id)
@@ -178,6 +194,7 @@ def test_ac008_invoice_over_agreement_remaining(company_context):
     second, _ = service.update_draft(sn, second.id, expected_version=None, data={
         "ext_number": "2", "amount": 500_000,
         "lines": [{"id": str(line.pk), "qty": "0.5", "amount": 500_000}]})
+    _attach(second)
     with pytest.raises(DomainError) as exc:
         service.submit(sn, second.id, expected_version=None)
     assert exc.value.code == "E-INV-02"
@@ -192,6 +209,7 @@ def test_terminated_agreement_takes_no_new_invoices(company_context):
     assert "create_invoice" in agreement_service.allowed_actions(sn, agr)
     inv = service.create_from_agreement(sn, agr.id)
     inv, _ = service.update_draft(sn, inv.id, expected_version=None, data={"ext_number": "9"})
+    _attach(inv)
     agreement_service.terminate(_fd(slug), agr.id, expected_version=None,
                                 comment="Поставщик сорвал сроки")
     agr.refresh_from_db()
@@ -325,6 +343,9 @@ def test_closing_docs_after_payment_only(company_context):
     assert [row["number"] for row in pending] == [inv.number]
     assert closing_docs_pending_for_user(s.SN2) == []
 
+    # Запрошенная накладная не вложена — «Документы предоставлены» нельзя.
+    assert _code(lambda: payments.submit_docs(sn, inv.id)) == "E-INV-04"
+    _attach(inv, "waybill", "nakladnaya.pdf")
     inv = payments.submit_docs(sn, inv.id)
     assert inv.status == InvoiceStatus.DOCS_PROVIDED
     inv = payments.return_docs(buh, inv.id, comment="Накладная без подписи")
@@ -332,6 +353,38 @@ def test_closing_docs_after_payment_only(company_context):
     payments.submit_docs(sn, inv.id)
     inv = payments.accept_docs(buh, inv.id)
     assert inv.status == InvoiceStatus.CLOSED
+
+
+def _token(user_id):
+    return SimpleNamespace(user_id=user_id, is_superuser=False)
+
+
+def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company_context):
+    """ТЗ §21: счёт видят автор, ФД, БУХ, ТД, ОД, ГД, а АВР и накладную —
+    только автор, ФД и БУХ; закрывающие вкладываются по запросу БУХ и только
+    запрошенных типов, файл счёта после отправки не меняется."""
+    slug = company_context["slug"]
+    sn, _, inv = _to_pay(slug, 1000)
+    buh = _buh(slug)
+    payments.mark_paid(buh, inv.id, pay_date=timezone.localdate(), amount=1000)
+    payments.request_docs(buh, inv.id, docs={"avr": False, "waybill": True,
+                                             "vat_invoice": False})
+    s.grant(slug, s.TD, "bpp-td")
+    entry = files_registry.get_owner("bpp.invoice")
+
+    def sees(user_id, file_type):
+        return entry.can_view_type(inv.pk, _token(user_id), file_type)
+
+    assert sees(s.SN, "waybill") and sees(BUH, "waybill") and sees(s.FD, "waybill")
+    assert sees(s.TD, "invoice") and not sees(s.TD, "waybill")
+
+    with pytest.raises(files_interface.FilesLocked):          # счёт уже у ФД и оплачен
+        entry.can_modify_type(inv.pk, _token(s.SN), "invoice")
+    assert entry.can_modify_type(inv.pk, _token(s.SN), "waybill") is True
+    with pytest.raises(files_interface.FilesLocked):          # АВР не запрашивали
+        entry.can_modify_type(inv.pk, _token(s.SN), "act")
+    with pytest.raises(files_interface.FilesForbidden):       # не автор и не от его имени
+        entry.can_modify(inv.pk, _token(s.TD))
 
 
 def test_cancel_by_author_before_decision_and_by_fd_before_payment(company_context):
@@ -417,6 +470,15 @@ def test_http_create_patch_and_registry_tabs(company_context):
         "version": card["version"], "counterparty_id": str(cp.pk), "ext_number": "7"},
         **s.auth(slug, s.SN))
     assert patched.status_code == 200, patched.content
+    without_file = client.post(f"{BASE}/invoices/{card['id']}/submit",
+                               data={"version": patched.json()["version"]}, **s.auth(slug, s.SN))
+    assert without_file.status_code == 422 and without_file.json()["code"] == "E-FIL-04"
+    multipart = {k: v for k, v in s.auth(slug, s.SN).items() if k != "content_type"}
+    uploaded = client.post(f"/api/files/v1/bpp.invoice/{card['id']}/files/", data={
+        "file_type": "invoice",
+        "file": SimpleUploadedFile("schet.pdf", PDF, content_type="application/pdf")},
+        **multipart)
+    assert uploaded.status_code in (200, 201), uploaded.content
     submitted = client.post(f"{BASE}/invoices/{card['id']}/submit",
                             data={"version": patched.json()["version"]}, **s.auth(slug, s.SN))
     assert submitted.status_code == 200, submitted.content

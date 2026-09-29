@@ -16,8 +16,11 @@
  *   создаётся договор.
  * - «Оплатить» ФД спрашивает плановую дату оплаты (по умолчанию — срок
  *   оплаты), «Оплачено» БУХ — дату, сумму и номер платёжного поручения.
- * - Вкладки «Файлы» пока нет: владелец файлов счёта в `apps.files` появится
- *   со сведением задачи 1 этапа 3 A; тогда же проверка вложенных закрывающих.
+ * - Вкладка «Файлы» — папка владельца `bpp.invoice` в `apps.files`: файл
+ *   счёта (обязателен для «Отправить ФД», `E-FIL-04`) и закрывающие — АВР,
+ *   накладная, счёт-фактура. Закрывающие видят только автор, ФД и БУХ и
+ *   вкладываются по запросу БУХ; «Документы предоставлены» без файла
+ *   запрошенного типа — `E-INV-04` (`services/invoices/file_owner.py`).
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -459,7 +462,6 @@ export function InvoiceFormPage() {
         allowedActions={shellActions}
         actions={actions}
         readOnly={!editable}
-        withFiles={false}
         historyType={INVOICE_HISTORY_TYPE}
         extraTabs={showPayments ? [{
           key: 'payments', label: t('bpp.invoices.payments', 'Оплаты'),
@@ -712,6 +714,12 @@ export function InvoiceFormPage() {
                 </p>
               )}
               {card.docs_comment && <p className="text-muted-foreground">{card.docs_comment}</p>}
+              {allowed.includes('submit_docs') && (
+                <p className="text-muted-foreground">
+                  {t('bpp.invoices.docsHowTo',
+                    'Вложите запрошенные документы на вкладке «Файлы» и нажмите «Документы предоставлены».')}
+                </p>
+              )}
             </section>
           )}
 

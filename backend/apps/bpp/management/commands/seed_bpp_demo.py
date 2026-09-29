@@ -19,6 +19,8 @@
   согласования, сами проекты и демо-контрагентов (если на них не ссылаются
   чужие документы). Журнал изменений неизменяем (триггер ``bpp/0001``) —
   его строки о демо-документах остаются, как и израсходованные номера.
+- К договору и счетам прикладывается файл-заглушка ``DEMO_PDF`` — без файла
+  их не отправить (ТЗ §21); ``--purge`` убирает файлы вместе с документами.
 - Уведомления — как при ручной работе: согласующие получат колокольчик и
   письма о демо-документах. На пилоте запускать до подключения людей.
 - Статьи бюджета — действующие статьи групп «Снабжение» и «Проектное
@@ -76,6 +78,11 @@ ROUTES = (("bpp.purchase_request", "заявки на закупку"), ("bpp.ag
           ("bpp.invoice", "счёта на оплату"))
 #: Сколько решений подряд ждать закрытия маршрута — страховка от петли.
 MAX_DECISIONS = 12
+#: Файл-заглушка для договора и счетов: минимальный PDF (подсистема файлов
+#: проверяет сигнатуру содержимого, а не только расширение).
+DEMO_PDF = (b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+            b"trailer\n<< /Root 1 0 R >>\n%%EOF\n")
 
 
 def bin_with_checksum(body11: str) -> str:
@@ -285,6 +292,7 @@ class Command(BaseCommand):
         agr, _ = agreement_service.update_draft(sn, agr.id, expected_version=None, data={
             "counterparty_id": str(metal_cp.pk), "ext_number": "Д-2026/17",
             "ext_date": today, "name": "Поставка металлопроката для рампы"})
+        self._attach(agr, "agreement", "dogovor-D-2026-17.pdf")
         agreement_service.submit(sn, agr.id, expected_version=None)
         self._approve_all("bpp.agreement", agr.pk)
         agr.refresh_from_db()
@@ -298,6 +306,7 @@ class Command(BaseCommand):
         by_agr = invoice_service.create_from_agreement(sn, agr.id)
         by_agr, _ = invoice_service.update_draft(sn, by_agr.id, expected_version=None, data={
             "ext_number": "145", "ext_date": today})
+        self._attach(by_agr, "invoice", "schet-145.pdf")
         invoice_service.submit(sn, by_agr.id, expected_version=None)
         self._fd_decide(slug, by_agr, "pay")
         by_agr.refresh_from_db()
@@ -336,10 +345,18 @@ class Command(BaseCommand):
         inv, _ = invoice_service.update_draft(sn, inv.id, expected_version=None, data={
             "counterparty_id": str(counterparty.pk), "ext_number": ext_number,
             "ext_date": timezone.localdate()})
+        self._attach(inv, "invoice", f"schet-{ext_number}.pdf")
         if submit:
             inv = invoice_service.submit(sn, inv.id, expected_version=None,
                                          counterparty_confirmed=True)
         return inv
+
+    @staticmethod
+    def _attach(doc, file_type: str, filename: str) -> None:
+        """Файл документа (договор и счёт обязательны для отправки, ТЗ §21) —
+        загрузкой из кода от имени автора."""
+        core_files.attach(doc, file_type, data=DEMO_PDF, filename=filename,
+                          mime="application/pdf", actor_id=doc.author_id)
 
     def _fd_decide(self, slug: str, inv: Invoice, decision: str) -> None:
         """Решение ФД — доменной ручкой от имени держателя ждущей задачи:
@@ -375,6 +392,8 @@ class Command(BaseCommand):
             "счета": invoices.count(), "договоры": agreements.count(),
             "заявки": requests.count(), "подотчёт": accountable.count(),
         }
+        for doc in [*invoices, *agreements]:
+            core_files.owner_deleted(doc, actor_id=None)
         invoices.delete()
         # Допсоглашения держат основной договор (PROTECT) — сначала они.
         agreements.filter(parent_agreement__isnull=False).delete()

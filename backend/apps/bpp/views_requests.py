@@ -15,7 +15,6 @@ from .services.actor import Actor
 from .services.core import export
 from .services.core import printing
 from .services.params import int_param
-from .services.requests import files as files_service
 from .services.requests import printing as request_printing
 from .services.requests import read
 from .services.requests import requests as service
@@ -172,36 +171,3 @@ def request_print(request, request_id):
     req = service.get_visible(Actor(request), request_id)
     return printing.pdf_response(request_printing.TEMPLATE, request_printing.context(req),
                                  filename=f"{req.number}.pdf")
-
-
-# ── документы заявки ────────────────────────────────────────────────────
-
-@api_view(methods=("GET",), module="bpp", level="read")
-def request_files_list(request, request_id):
-    return files_service.list_files(Actor(request), request_id)
-
-
-@api_view(methods=("POST",), module="bpp", level="write", status=201, idempotent=True)
-def request_files_upload(request, request_id):
-    return files_service.attach(Actor(request), request_id, request.FILES.get("file"))
-
-
-def request_files(request, request_id):
-    if request.method == "GET":
-        return request_files_list(request, request_id)
-    if request.method == "POST":
-        return request_files_upload(request, request_id)
-    return json_error("Method Not Allowed", 405)
-
-
-@api_view(methods=("POST",), module="bpp", level="write", status=201, idempotent=True)
-def request_file_version(request, request_id, file_id):
-    return files_service.replace(Actor(request), request_id, file_id,
-                                 request.FILES.get("file"))
-
-
-@api_view(methods=("GET",), module="bpp", level="read")
-def request_file_link(request, request_id, file_id):
-    """Ссылка на скачивание — на каждое скачивание своя, с записью в журнал
-    (ТЗ §25.2)."""
-    return files_service.link(Actor(request), request_id, file_id)

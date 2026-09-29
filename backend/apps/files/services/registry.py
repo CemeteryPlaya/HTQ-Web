@@ -36,6 +36,20 @@
 Загрузка из кода (``attach_bytes``/``replace_bytes``) их не спрашивает —
 права проверил сам владелец.
 
+**Новая версия — своё правило** (ТЗ §21 у заявки: «удаление — в Черновике /
+На доработке; далее только новая версия»). ``can_modify`` отвечает за папку
+целиком, и документ, отправленный на согласование, закрыт им для всех
+правок — а новая версия документа заявки допустима и после отправки.
+Необязательный ``can_version(owner_id, token, file_type) -> bool`` отвечает
+только за новую версию уже приложенного документа и, если он есть,
+проверяется ВМЕСТО ``can_modify``/``can_modify_type`` на этом пути (ранняя
+проверка, после разбора тела и под блокировкой владельца). Отказ — как у
+``can_modify_type``: ``FilesForbidden``/``FilesLocked`` со своим текстом или
+ложное значение (403 с общим текстом). Без него новая версия подчиняется
+тем же правилам, что добавление и удаление. Папка отдаёт у каждого
+документа ``can_version`` и ``can_delete`` — чтобы интерфейс не предлагал
+то, что сервер отвергнет.
+
 **Политика ошибок колбэков.** ``can_view``/``can_modify``/``was_sent``/
 ``lock`` (и уточнения по типу) решают доступ и судьбу байтов, поэтому их
 исключения НЕ глушатся: упавший колбэк — это 500, а не молча открытый или
@@ -133,6 +147,9 @@ class OwnerEntry:
     # докстринг модуля; None — тип на доступ не влияет.
     can_view_type: Callable | None = None
     can_modify_type: Callable | None = None
+    # (owner_id, token, file_type) -> bool. Новая версия документа — своё
+    # правило вместо can_modify/can_modify_type; None — те же правила.
+    can_version: Callable | None = None
     _by_code: dict = field(default_factory=dict, compare=False, repr=False)
 
     def spec(self, code: str) -> FileTypeSpec | None:
@@ -168,14 +185,15 @@ def register_owner(owner_type: str, *, label: str, service: str, tenant: bool,
                    on_event: Callable | None = None,
                    model: type | None = None,
                    can_view_type: Callable | None = None,
-                   can_modify_type: Callable | None = None) -> OwnerEntry:
+                   can_modify_type: Callable | None = None,
+                   can_version: Callable | None = None) -> OwnerEntry:
     """Зарегистрировать тип владельца. Повторная регистрация перезаписывает:
     ``ready()`` может выполниться дважды.
 
     ``model`` нужна владельцу с НЕцелым ключом (UUID у документов модуля
     БЗО): по ней подсистема приводит ключ к типу модели. Без неё ключ целый.
-    ``can_view_type``/``can_modify_type`` — права по типу файла (см.
-    докстринг модуля), необязательны.
+    ``can_view_type``/``can_modify_type`` — права по типу файла, ``can_version``
+    — правило новой версии (см. докстринг модуля); все необязательны.
     """
     if not _OWNER_TYPE_RE.fullmatch(owner_type):
         raise ValueError(f"owner_type должен иметь вид '<аппка>.<модель>': {owner_type!r}")
@@ -202,7 +220,8 @@ def register_owner(owner_type: str, *, label: str, service: str, tenant: bool,
         folder=folder, file_types=tuple(file_types), quotas=quotas,
         can_view=can_view, can_modify=can_modify, was_sent=was_sent,
         lock=lock, on_event=on_event, model=model,
-        can_view_type=can_view_type, can_modify_type=can_modify_type, _by_code=by_code,
+        can_view_type=can_view_type, can_modify_type=can_modify_type,
+        can_version=can_version, _by_code=by_code,
     )
     _OWNERS[owner_type] = entry
     return entry

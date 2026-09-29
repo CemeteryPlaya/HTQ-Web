@@ -220,6 +220,39 @@ describe('FilesPanel', () => {
     expect(screen.getByText(/меняются только в статусах/)).toBeInTheDocument();
   });
 
+  it('правило документа сильнее папки: после отправки — только новая версия', async () => {
+    // Заявка отправлена: добавлять и удалять нельзя (`can_modify: false`), а
+    // новую версию её документа владелец разрешает (`can_version`, ТЗ §21).
+    const base = folder({ can_modify: false });
+    files.list.mockResolvedValue({
+      ...base,
+      documents: base.documents.map((doc) => ({ ...doc, can_version: true, can_delete: false })),
+    });
+    render();
+
+    await screen.findByText('КП v2.pdf');
+    expect(screen.getAllByRole('button', { name: /Новая версия/ })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /Удалить/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Приложить файл/ })).not.toBeInTheDocument();
+  });
+
+  it('и в обратную сторону: папка открыта, а тип документа закрыт', async () => {
+    const base = folder();
+    files.list.mockResolvedValue({
+      ...base,
+      documents: base.documents.map((doc) => (doc.document_id === DOC
+        ? { ...doc, can_version: false, can_delete: false }
+        : { ...doc, can_version: true, can_delete: true })),
+    });
+    render();
+
+    const item = (await screen.findByText('КП v2.pdf')).closest('li') as HTMLElement;
+    expect(within(item).queryByRole('button', { name: /Новая версия/ })).not.toBeInTheDocument();
+    expect(within(item).queryByRole('button', { name: /Удалить/ })).not.toBeInTheDocument();
+    const spec = screen.getByText('Спецификация.xlsx').closest('li') as HTMLElement;
+    expect(within(spec).getByRole('button', { name: /Новая версия/ })).toBeInTheDocument();
+  });
+
   it('readOnly перекрывает can_modify (карточка согласования)', async () => {
     files.list.mockResolvedValue(folder());
     render({ readOnly: true });
