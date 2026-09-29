@@ -15,3 +15,6 @@ app.autodiscover_tasks()
 # сам проверяет наличие модуля в каждой аппке (``module_has_submodule``) до
 # импорта, поэтому вызов безопасен и для аппок без ``tasks_export.py``.
 app.autodiscover_tasks(related_name="tasks_export")
+# Третий — ``apps/bpp/tasks_bank.py`` (разбор выписки, этап 3 A, задача 3),
+# по той же причине: отдельный файл подмодуля ``bpp_bank``.
+app.autodiscover_tasks(related_name="tasks_bank")

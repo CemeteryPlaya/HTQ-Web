@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.functions import Now
 
@@ -130,3 +131,59 @@ class Article(_Base):
         ordering = ("code",)
         verbose_name = "Статья бюджета"
         verbose_name_plural = "Статьи бюджета"
+
+    def parent_problem(self, parent: "Article | None") -> tuple[str, str] | None:
+        """Почему ``parent`` не годится в родители этой статьи: ``(текст, коротко
+        для поля)``; ``None`` — годится.
+
+        Одно правило на оба входа — ручку API (``services/articles.py``,
+        ошибка E-REF-05) и django-admin (``clean()`` ниже): иначе админка
+        обходила бы то, что держит API.
+
+        - родитель — из той же группы: группа открывает статьи по узлу прав
+          (BR-010), и статья одной группы в дереве другой показывалась бы тем,
+          кому её группа закрыта;
+        - не сама статья и не её потомок — дерево без циклов;
+        - не архивная — но только когда родителя ставят сейчас: статья,
+          чей родитель ушёл в архив позже, остаётся редактируемой.
+        """
+        if parent is None:
+            return None
+        if parent.pk == self.pk:
+            return ("Статья не может быть родителем самой себе.", "Та же статья")
+        if self.group_id is not None and str(parent.group_id) != str(self.group_id):
+            return (f"Статья „{parent.name}“ относится к группе „{parent.group.name}“. "
+                    f"Родительская статья выбирается из той же группы, что и сама статья.",
+                    "Статья другой группы")
+        # Цикл: поднимаемся от родителя к корню; встретили себя — родитель
+        # оказался бы собственным потомком. ``seen`` страхует от уже
+        # испорченного дерева.
+        seen = {parent.pk}
+        ancestor_id = parent.parent_id
+        while ancestor_id is not None and ancestor_id not in seen:
+            if ancestor_id == self.pk:
+                return (f"Статья „{parent.name}“ вложена в эту статью — родителем "
+                        f"она быть не может.", "Вложенная статья")
+            seen.add(ancestor_id)
+            ancestor_id = (Article.objects.filter(pk=ancestor_id)
+                           .values_list("parent_id", flat=True).first())
+        if not parent.is_active and self._parent_changes(parent):
+            return (f"Статья „{parent.name}“ в архиве. Родителем может быть только "
+                    f"действующая статья — выберите другую или верните эту из архива.",
+                    "Статья в архиве")
+        return None
+
+    def _parent_changes(self, parent: "Article") -> bool:
+        if self._state.adding:
+            return True
+        stored = (Article.objects.filter(pk=self.pk)
+                  .values_list("parent_id", flat=True).first())
+        return stored != parent.pk
+
+    def clean(self):
+        super().clean()
+        if self.parent_id is None:
+            return
+        problem = self.parent_problem(self.parent)
+        if problem is not None:
+            raise ValidationError({"parent": problem[0]})

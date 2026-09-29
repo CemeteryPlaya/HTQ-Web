@@ -104,9 +104,10 @@ def _domain_app_configs():
 #: 6), отдельный файл от ``apps/bpp/tasks.py`` (ночная сверка «Задействовано»,
 #: зона B), чтобы задачи модуля не конфликтовали правками в одном файле,
 #: пока обе части пишутся параллельно (см. докстринг ``tasks_export.py``).
-#: Список держим в паре с ``htqweb/celery.py``: новый related_name там —
+#: ``tasks_bank`` — bpp: разбор выписки (этап 3 A, задача 3), по той же
+#: причине. Список держим в паре с ``htqweb/celery.py``: новый related_name там —
 #: новое имя и здесь, иначе его задачи молча выпадут из обоих сторожей ниже.
-_TASK_MODULE_RELATED_NAMES = ("tasks", "tasks_export")
+_TASK_MODULE_RELATED_NAMES = ("tasks", "tasks_export", "tasks_bank")
 
 
 def _iter_domain_tasks():

@@ -6,7 +6,14 @@
  *   сортировка, фильтры, поиск и страницы считает СЕРВЕР (строки, доступные
  *   пользователю, тоже фильтрует он — ТЗ §19);
  * - пагинация 25/50/100, по умолчанию 50; фильтры, набор колонок, размер
- *   страницы и сортировка помнятся в `localStorage` (`useRegistryState`);
+ *   страницы и сортировка помнятся в `localStorage` (`useRegistryState`),
+ *   номер страницы и быстрый поиск — в адресе (`?page=`, `?q=`): возврат со
+ *   строки документа кнопкой «Назад» не сбрасывает место в реестре. Голый
+ *   адрес реестра — «открыли из меню», место сбрасывается; поэтому ссылка
+ *   «К списку» на форме документа строится хуком `useRegistryBackHref(base)`
+ *   из `registryBack.ts`: открывая строку, реестр кладёт свой `?page=&q=` в
+ *   состояние перехода, и ссылка возвращает туда же. Формам исполнителя B —
+ *   тот же хук, а не голый `<Link to={BASE}>`;
  * - флажки и массовые действия с результатом по каждой строке: сколько
  *   прошло и какие отклонены с причиной (ТЗ §10.5);
  * - итоговая строка — по `totals` сервера, то есть по всей выборке, а не по
@@ -24,7 +31,7 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Columns3, Download, Search,
@@ -50,6 +57,7 @@ import {
 import { reportApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
+import { registryOpenState } from './registryBack';
 import { exportRegistry } from './registryExport';
 import type {
   BulkOutcome, RegistryBulkAction, RegistryColumn, RegistryFilter, RegistryPage,
@@ -71,6 +79,9 @@ interface Props<Row extends { id: string }> {
   /** Параметр быстрого поиска сервера (`search` у заявок B). */
   searchParam?: string;
   searchPlaceholder?: string;
+  /** Есть ли у ручки быстрый поиск (по умолчанию да). `false` — поля поиска
+   * нет: поле, которое ничего не ищет, хуже его отсутствия. */
+  searchable?: boolean;
   defaultSort?: RegistrySort | null;
   defaultHidden?: string[];
   /** Куда ведёт клик по строке (форма документа). */
@@ -79,6 +90,9 @@ interface Props<Row extends { id: string }> {
   rowLabel?: (row: Row) => string;
   /** Правее кнопки «Экспорт» — «Создать» и т.п. */
   toolbarExtra?: ReactNode;
+  /** Держать страницу и поиск в адресе (по умолчанию да). Выключать, если
+   * на одной странице два реестра: параметры адреса у них общие. */
+  syncUrl?: boolean;
 }
 
 const cellValue = (row: object, key: string): ReactNode => {
@@ -92,14 +106,18 @@ const sortField = <Row,>(column: RegistryColumn<Row>): string | null =>
 
 export function BppRegistry<Row extends { id: string }>({
   registryKey, endpoint, columns, filters = [], bulkActions = [], exportName,
-  searchParam, searchPlaceholder, defaultSort, defaultHidden, rowHref, rowLabel, toolbarExtra,
+  searchParam, searchPlaceholder, searchable = true, defaultSort, defaultHidden, rowHref,
+  rowLabel, toolbarExtra, syncUrl = true,
 }: Props<Row>) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
+  const [urlParams, setUrlParams] = useSearchParams();
   const filterKeys = useMemo(() => filters.map((filter) => filter.key), [filters]);
   const state = useRegistryState(registryKey, {
     defaultSort, defaultHidden, searchParam, filterKeys,
+    url: syncUrl ? { params: urlParams, setParams: setUrlParams } : undefined,
   });
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [outcome, setOutcome] = useState<(BulkOutcome & { action: string }) | null>(null);
@@ -213,19 +231,24 @@ export function BppRegistry<Row extends { id: string }>({
 
   const colSpan = visible.length + (hasBulk ? 1 : 0);
 
+  // Место в реестре уходит с переходом на форму: ссылка «К списку» там
+  // (`useRegistryBackHref`) вернёт на ту же страницу и поиск. Без синхронизации
+  // с адресом строка запроса реестру не принадлежит — не передаём.
+  const openState = syncUrl ? registryOpenState(location.search) : undefined;
+
   // Клик мышью по строке — переход; клик по самой ссылке и клик с
   // модификатором (новая вкладка) браузер обрабатывает сам.
   const onRowClick = (row: Row) => (event: MouseEvent<HTMLTableRowElement>) => {
     if (!rowHref) return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     if ((event.target as HTMLElement).closest('a, button, input, [role="checkbox"]')) return;
-    navigate(rowHref(row));
+    navigate(rowHref(row), { state: openState });
   };
   const cellContent = (row: Row, column: RegistryColumn<Row>, index: number): ReactNode => {
     const content = column.render ? column.render(row) : cellValue(row, column.key);
     if (!rowHref || index !== 0) return content;
     return (
-      <Link to={rowHref(row)} className="font-medium text-primary hover:underline">
+      <Link to={rowHref(row)} state={openState} className="font-medium text-primary hover:underline">
         {content}
       </Link>
     );
@@ -234,17 +257,19 @@ export function BppRegistry<Row extends { id: string }>({
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">
-        <div className="relative w-full sm:w-72">
-          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={state.search}
-            onChange={(event) => state.setSearch(event.target.value)}
-            placeholder={searchPlaceholder
-              ?? t('bpp.registry.searchPlaceholder', 'Поиск по номеру и наименованию')}
-            aria-label={t('bpp.registry.search', 'Быстрый поиск')}
-            className="pl-8"
-          />
-        </div>
+        {searchable && (
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={state.search}
+              onChange={(event) => state.setSearch(event.target.value)}
+              placeholder={searchPlaceholder
+                ?? t('bpp.registry.searchPlaceholder', 'Поиск по номеру и наименованию')}
+              aria-label={t('bpp.registry.search', 'Быстрый поиск')}
+              className="pl-8"
+            />
+          </div>
+        )}
 
         {filters.map((filter) => (
           <div key={filter.key} className="min-w-40">

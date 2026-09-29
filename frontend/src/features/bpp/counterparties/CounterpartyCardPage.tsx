@@ -13,7 +13,7 @@
  * `bpp.counterparty` в `apps.files` нет). Шапка и кнопки собраны из тех же
  * частей — `StatusBadge`, `DocumentActionButton`, `HistoryTab`.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
@@ -31,6 +31,7 @@ import { errorStatus, reportApiError } from '@/lib/apiError';
 import { DocumentActionButton, type BppDocumentAction } from '../core/DocumentActionButton';
 import { HistoryTab } from '../core/HistoryTab';
 import { StatusBadge } from '../core/StatusBadge';
+import { useRegistryBackHref } from '../core/registryBack';
 import { useIdempotentAction } from '../core/useIdempotentAction';
 import { formatDateTime } from '../format';
 
@@ -40,7 +41,7 @@ import {
 } from './api';
 import { BankAccountsPanel } from './BankAccountsPanel';
 import { CounterpartyForm } from './CounterpartyForm';
-import { kindLabel, regNumberLabel } from './labels';
+import { historyFieldLabels, kindLabel, regNumberLabel } from './labels';
 import { VerifiedMark } from './VerifiedMark';
 
 /** Тип объекта журнала изменений контрагента (`audit` сервера). */
@@ -118,6 +119,8 @@ export function CounterpartyCardPage() {
   const [tab, setTab] = useState('details');
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  // Назад — на то место реестра, откуда открыли карточку (`registryBack.ts`).
+  const backHref = useRegistryBackHref(COUNTERPARTIES_BASE);
 
   const { data: card, isLoading, error } = useQuery({
     queryKey: counterpartyKey(id),
@@ -140,9 +143,11 @@ export function CounterpartyCardPage() {
     setBusy((current) => (current[key] === pending ? current : { ...current, [key]: pending }));
   }, []);
   const onDone = useCallback(() => undefined, []);
+  const countryCode = card?.country_code ?? '';
+  const fieldLabels = useMemo(() => historyFieldLabels(t, countryCode), [t, countryCode]);
 
   const back = (
-    <Link to={COUNTERPARTIES_BASE} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={backHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.counterparties.backToList', 'К списку контрагентов')}
     </Link>
@@ -314,7 +319,7 @@ export function CounterpartyCardPage() {
         </TabsContent>
 
         <TabsContent value="history">
-          <HistoryTab objectType={HISTORY_TYPE} objectId={card.id} />
+          <HistoryTab objectType={HISTORY_TYPE} objectId={card.id} fieldLabels={fieldLabels} />
         </TabsContent>
       </Tabs>
     </div>

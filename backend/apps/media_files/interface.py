@@ -103,10 +103,16 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
     mean "the calling domain has already checked its own role/ownership
     rules for this write and vouches for it". Without it, a restricted-scope
     call raises ``django.core.exceptions.PermissionDenied`` — loud failure
-    instead of a silent privileged write. Open scopes (``avatar``/``news``/
-    ``chat``/``generic``) and unknown scopes are unaffected — same seam,
-    same open/unknown behaviour as the HTTP path. The current only caller
-    (the avatar path, an open scope) never needs the flag.
+    instead of a silent privileged write. Every scope outside
+    ``RESTRICTED_SCOPES`` (``avatar``/``news``/``chat``/``generic``/
+    ``signoff_doc``/``file_object``) and unknown scopes are unaffected — same
+    seam, same open/unknown behaviour as the HTTP path — so the flag means
+    something only for a restricted scope: the ``hr`` document and
+    department-file services pass it (no in-process caller writes
+    ``task_attachment`` today — task attachments arrive through the HTTP
+    upload); callers writing an open scope (``apps.files``, ``contracts``,
+    ``mail``, the ``bpp`` export, avatars) don't need it and shouldn't pass
+    it "just in case".
 
     Raises ``apps.media_files.services.upload_service.UploadValidationError``
     for oversize/wrong-mime/undecodable-image inputs — same contract as

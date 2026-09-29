@@ -141,6 +141,13 @@ export const counterpartyApi = {
     accountId: string, key: string, body: Partial<BankAccountInput> & { is_active?: boolean },
   ) => api.patch<BankAccount>(path(`accounts/${accountId}`), body, keyed(key)).then((r) => r.data),
 
+  /** Поиск для выбора контрагента в чужих формах (заказчик проекта):
+   * первая страница реестра, только действующие. */
+  search: (q: string) =>
+    api.get<{ items: CounterpartyRow[]; total: number }>(COUNTERPARTIES_ENDPOINT, {
+      params: { q: q || undefined, status: 'active', page_size: 25 },
+    }).then((r) => r.data),
+
   countries: () =>
     api.get<CountryOption[]>(apiPath('refdata', 'countries'), { params: { active: 1 } })
       .then((r) => r.data),

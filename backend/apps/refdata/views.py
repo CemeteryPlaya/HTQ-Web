@@ -15,6 +15,7 @@ from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error, uuid_or_404
 
 from . import models, schemas
+from .services import articles as article_rules
 from .services import editing
 
 READ_ONLY_FIELDS = {"id", "created_at", "updated_at"}
@@ -78,6 +79,8 @@ def _collection(model, schema_in, order: str):
     @api_view(methods=("POST",), module="refdata", level="write", body=schema_in, status=201)
     def create(request, data):
         _deny_unless_editor(request)
+        if model is models.Article:
+            article_rules.check_parent(data.group_id, data.parent_id)
         obj = model(**data.model_dump())
         if model is models.ExchangeRate:
             obj.source = models.RateSource.MANUAL

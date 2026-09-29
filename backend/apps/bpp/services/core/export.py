@@ -70,7 +70,7 @@ REBUILD_PREFIX = "apps.bpp."
 #: Тип объекта выгрузки в журнале ``AuditLog`` (``app_label.model``).
 AUDIT_OBJECT_TYPE = "bpp.exportjob"
 
-_KINDS = ("text", "money", "decimal", "date", "datetime")
+_KINDS = ("text", "money", "decimal", "integer", "date", "datetime")
 # Коды форматов в файле — всегда в синтаксисе en-US: запятая — разделитель
 # разрядов, точка — дробной части. Excel и LibreOffice показывают их в
 # региональных настройках читателя: в русской локали «#,##0.00» выглядит как
@@ -80,6 +80,8 @@ _KINDS = ("text", "money", "decimal", "date", "datetime")
 _NUMBER_FORMAT = {
     "money": "#,##0.00",
     "decimal": "#,##0.00",
+    # Счётчики (строк, дублей): целое с разрядами, без «,00».
+    "integer": "#,##0",
     "date": "dd.mm.yyyy",
     "datetime": "dd.mm.yyyy hh:mm",
 }
@@ -91,7 +93,7 @@ _SHEET_FORBIDDEN = set('[]:*?/\\')
 class Column:
     """Колонка выгрузки: ``key`` — поле строки, ``title`` — заголовок,
     ``kind`` определяет и приведение значения, и числовой формат ячейки
-    (``text|money|decimal|date|datetime``)."""
+    (``text|money|decimal|integer|date|datetime``)."""
 
     key: str
     title: str
@@ -136,6 +138,15 @@ def _coerce(raw, kind: str):
         except InvalidOperation:
             # Не число — показываем как есть, а не роняем весь экспорт.
             return str(raw)
+    if kind == "integer":
+        if isinstance(raw, bool):
+            return str(raw)
+        if isinstance(raw, int):
+            return raw
+        try:
+            return int(Decimal(str(raw)))
+        except (InvalidOperation, ValueError, OverflowError):
+            return str(raw)  # не число — как есть, а не падение всего экспорта
     if kind == "date":
         if isinstance(raw, datetime):
             return _local_naive(raw).date()
@@ -308,10 +319,11 @@ def run_background(*, job_id: str, columns: list[dict], rebuild_path: str,
         from apps.media_files import interface as media
 
         # scope generic приватный: байты — только по подписанной ссылке,
-        # которую выдаёт ручка выгрузки заказчику (``download``).
+        # которую выдаёт ручка выгрузки заказчику (``download``). Scope
+        # открытый (не в ``RESTRICTED_SCOPES``), поручительство
+        # ``internal_authorized`` ему ничего не добавляет.
         stored = media.store_file(data=data, filename=_filename(job.name), mime=XLSX_MIME,
-                                  scope="generic", owner_id=job.requested_by,
-                                  internal_authorized=True)
+                                  scope="generic", owner_id=job.requested_by)
     except DomainError as exc:
         _fail(job, exc.message)
         return

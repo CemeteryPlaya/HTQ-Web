@@ -70,6 +70,9 @@ _CONDITIONAL = {
     PREFIX + "mail_sync_lag_seconds",              # apps/mail/metrics.py
     PREFIX + "signoff_oldest_pending_seconds",     # apps/signoff/metrics.py
     PREFIX + "messenger_last_message_age_seconds", # apps/messenger/metrics.py
+    # Итог ночной сверки «Задействовано»: нет, пока сверка не бежала.
+    PREFIX + "bpp_committed_mismatches",           # apps/bpp/metrics.py
+    PREFIX + "bpp_committed_check_age_seconds",    # apps/bpp/metrics.py
 }
 
 # Метрики, которые сознательно нигде не наблюдаются. Каждая запись здесь —
@@ -265,6 +268,8 @@ def test_dashboards_use_provisioned_datasource_uids():
 _CONDITIONAL_TENANT = {
     PREFIX + "daily_report_staleness_days",        # apps/tasks/metrics.py
     PREFIX + "signoff_oldest_pending_seconds",     # apps/signoff/metrics.py
+    PREFIX + "bpp_committed_mismatches",           # apps/bpp/metrics.py
+    PREFIX + "bpp_committed_check_age_seconds",    # apps/bpp/metrics.py
 }
 
 

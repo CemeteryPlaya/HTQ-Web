@@ -4,9 +4,11 @@
 задача 1): байты, версии, квоты, форматы и размеры, антивирус и журнал
 файловых операций (``FileEvent``: загрузка, версия, скачивание — кто, IP,
 user-agent) — в ``apps.files``. Документы модуля — её владельцы,
-зарегистрированные в ``apps/bpp/file_owners.py``; там же правила ТЗ §21
-(``FileTypeSpec``), а форматы и размеры — в справочнике «Типы файлов»
-(миграция ``files/0003_bpp_file_types``).
+зарегистрированные в ``apps/bpp/file_owners.py`` и в
+``services/<подмодуль>/file_owner.py`` подмодулей (подключаются сами);
+там же правила ТЗ §21 (``FileTypeSpec``), а форматы и размеры — в
+справочнике «Типы файлов» (миграции ``files/0003_bpp_file_types`` и
+``files/0004_bpp_stage3_file_types``).
 
 Здесь — прежние функции модуля с прежними сигнатурами, чтобы заявка и
 подотчёт звали их как раньше:
@@ -39,7 +41,8 @@ from apps.files import interface as files
 from htqweb.errors import DomainError
 
 #: Модель документа (``_meta.label_lower``) → владелец в ``apps.files``.
-#: Заполняет ``apps/bpp/file_owners.py::register`` при запуске.
+#: Заполняют ``apps/bpp/file_owners.py::register`` и ``register()`` модулей
+#: ``services/<подмодуль>/file_owner.py`` при запуске.
 _OWNER_TYPES: dict[str, str] = {}
 
 
@@ -66,8 +69,9 @@ def owner_type_of(owner) -> str:
         return _OWNER_TYPES[owner._meta.label_lower]
     except KeyError:
         raise LookupError(
-            f"{owner._meta.label_lower}: документ не зарегистрирован владельцем файлов "
-            f"(apps/bpp/file_owners.py)") from None
+            f"{owner._meta.label_lower}: документ не зарегистрирован владельцем файлов — "
+            f"нужен register_owner_type(<Модель>, <владелец>) в apps/bpp/file_owners.py "
+            f"или в register() модуля services/<подмодуль>/file_owner.py") from None
 
 
 def _serialize(version: dict) -> dict:

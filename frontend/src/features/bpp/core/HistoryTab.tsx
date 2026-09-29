@@ -10,6 +10,10 @@
  * Кто — `actor_name`, если сервер его прислал; иначе «Пользователь №id»:
  * ручки «имя по id» на платформе нет, а журнал пишет только `actor_id`.
  * Пусто — действие системы (ночная сверка, фоновые задачи).
+ *
+ * Поля журнала — имена полей модели (`total_amount`); подписи и список
+ * денежных полей даёт экран документа (`fieldLabels`, `moneyFields`): он
+ * знает свою модель, вкладка — нет. Без подписи поле показывается именем.
  */
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -69,13 +73,20 @@ const ACTIONS: Record<string, [string, string]> = {
   file_downloaded: ['bpp.history.action.file_downloaded', 'Скачан файл'],
 };
 
-interface Props {
+export interface HistoryFieldOptions {
+  /** Подписи полей журнала: `{total_amount: 'Сумма'}`. */
+  fieldLabels?: Record<string, string>;
+  /** Поля-суммы — показываются как `1 250 000,00`. */
+  moneyFields?: readonly string[];
+}
+
+interface Props extends HistoryFieldOptions {
   /** Тип объекта журнала — `app_label.model`: `bpp.purchaserequest`. */
   objectType: string;
   objectId: string;
 }
 
-export function HistoryTab({ objectType, objectId }: Props) {
+export function HistoryTab({ objectType, objectId, fieldLabels, moneyFields }: Props) {
   const { t } = useTranslation();
   const { data = [], isLoading, error } = useQuery({
     queryKey: ['bpp', 'history', objectType, objectId],
@@ -135,7 +146,7 @@ export function HistoryTab({ objectType, objectId }: Props) {
         </TableHeader>
         <TableBody>
           {entries.map((entry) => {
-            const rows = changeRows(entry.changes);
+            const rows = changeRows(entry.changes, { moneyFields });
             return (
               <TableRow key={entry.id}>
                 <TableCell className="whitespace-nowrap tabular-nums">
@@ -148,7 +159,7 @@ export function HistoryTab({ objectType, objectId }: Props) {
                     <ul className="space-y-0.5 text-xs">
                       {rows.map((row) => (
                         <li key={row.field}>
-                          <span className="font-medium">{row.field}</span>
+                          <span className="font-medium">{fieldLabels?.[row.field] ?? row.field}</span>
                           {': '}
                           {row.before !== undefined && (
                             <>
