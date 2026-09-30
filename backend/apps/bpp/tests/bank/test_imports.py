@@ -155,9 +155,9 @@ def _error(fn, *args, **kwargs) -> DomainError:
 def test_upload_parses_in_background_and_card_shows_totals(
         slug, onec_account, django_capture_on_commit_callbacks):
     """Review Focus 1 целиком: грязный файл 1С (cp1251, CRLF, «31.02.2026»)
-    — загрузка «Обрабатывается», после разбора «Загружена»: 4 документа,
-    2 списания, ошибка строки с номером, строки выписки — «Не
-    сопоставлена», файл — в apps.files."""
+    — загрузка «Обрабатывается», после разбора и автосверки «Сверена»:
+    4 документа, 2 списания, ошибка строки с номером, строки выписки (счёта
+    с их номером нет) — «Не сопоставлена», файл — в apps.files."""
     client = Client()
     upload = _onec_upload(onec_account, bad_date=True)
     with django_capture_on_commit_callbacks(execute=True):
@@ -172,7 +172,7 @@ def test_upload_parses_in_background_and_card_shows_totals(
         day.isoformat() for day in PERIOD)  # период — из заголовка файла
 
     card = client.get(f"{BASE}/{created['id']}", **_headers(slug, FD)).json()
-    assert card["status"] == "loaded" and card["progress"] == 100
+    assert card["status"] == "reconciled" and card["progress"] == 100
     assert (card["rows_total"], card["debits"], card["duplicates"]) == (4, 2, 0)
     assert len(card["errors"]) == 1
     assert re.fullmatch(r"Строка \d+: не распознана дата „31\.02\.2026“", card["errors"][0])
@@ -220,12 +220,12 @@ def test_reupload_skips_duplicates(slug, onec_account, django_capture_on_commit_
     новых строк нет; форма предупреждает о пересечении периода."""
     first, warnings = _start(django_capture_on_commit_callbacks, onec_account,
                              _onec_upload(onec_account))
-    assert (first.status, first.debits, first.duplicates, warnings) == ("loaded", 2, 0, [])
+    assert (first.status, first.debits, first.duplicates, warnings) == ("reconciled", 2, 0, [])
     assert _live(onec_account) == 2
 
     second, warnings = _start(django_capture_on_commit_callbacks, onec_account,
                               _onec_upload(onec_account))
-    assert (second.status, second.debits, second.duplicates) == ("loaded", 2, 2)
+    assert (second.status, second.debits, second.duplicates) == ("reconciled", 2, 2)
     assert second.lines.count() == 0 and _live(onec_account) == 2
     assert len(warnings) == 1 and first.number in warnings[0]
 
@@ -272,7 +272,7 @@ def test_parallel_upload_no_duplicates(monkeypatch):
 
     assert crashes == []
     rows = list(BankImport.objects.filter(pk__in=ids).order_by("number"))
-    assert [row.status for row in rows] == ["loaded", "loaded"], [row.failure for row in rows]
+    assert [row.status for row in rows] == ["reconciled", "reconciled"], [row.failure for row in rows]
     assert sorted(row.duplicates for row in rows) == [0, 2]
     assert BankStatementLine.objects.filter(cancelled_at__isnull=True).count() == 2
 
@@ -301,7 +301,7 @@ def test_failed_import_cancels_its_lines_and_frees_the_keys(
     monkeypatch.setattr(imports, "_insert", real_insert)
     retry, warnings = _start(django_capture_on_commit_callbacks, onec_account,
                              _onec_upload(onec_account))
-    assert (retry.status, retry.duplicates, _live(onec_account)) == ("loaded", 0, 2)
+    assert (retry.status, retry.duplicates, _live(onec_account)) == ("reconciled", 0, 2)
     assert warnings == []  # неудавшаяся загрузка пересечением не считается
 
 
@@ -332,7 +332,7 @@ def test_xlsx_only_own_debits_numeric_amount_exact(slug, xlsx_account,
     ])
     imp, _ = _start(django_capture_on_commit_callbacks, xlsx_account, upload,
                     period_from=PERIOD[0].isoformat(), period_to=PERIOD[1].isoformat())
-    assert (imp.status, imp.rows_total, imp.debits, imp.errors) == ("loaded", 3, 1, [])
+    assert (imp.status, imp.rows_total, imp.debits, imp.errors) == ("reconciled", 3, 1, [])
     line = imp.lines.get()
     assert line.amount == Decimal("1250000.10") and line.recipient_bin == "050140000656"
     assert line.doc_date == _ago(5) and line.purpose == "Оплата металла"
@@ -440,7 +440,7 @@ def test_registry_filters_and_xlsx_export(slug, onec_account, xlsx_account,
     item = page["items"][1]
     assert item["bank_name"] == "Halyk Bank" and item["account"]["iban"] == onec_account.iban
     assert (item["rows_total"], item["debits"], item["unmatched"]) == (3, 2, 2)
-    assert item["author_id"] == FD and item["status"] == "loaded"
+    assert item["author_id"] == FD and item["status"] == "reconciled"
 
     by_account = client.get(BASE, {"account_id": str(xlsx_account.pk)}, **headers).json()
     assert [i["number"] for i in by_account["items"]] == [earlier.number]
@@ -626,7 +626,7 @@ def test_reaper_waits_longer_for_imports_stuck_in_the_queue(slug, onec_account):
     assert [status(imp) for imp in (queued_16, queued_59, queued_61, started_16, started_14)]         == ["processing", "processing", "failed", "failed", "processing"]
     # Дождавшаяся очереди загрузка разбирается как обычно.
     imports.run_import(queued_59.pk)
-    assert status(queued_59) == BankImportStatus.LOADED
+    assert status(queued_59) == BankImportStatus.RECONCILED
     # Час спустя не начатая — уже потеряна.
     later = timezone.now() + timedelta(minutes=imports.QUEUED_STALE_MINUTES)
     assert imports.reap_stale(now=later) == {"failed": 2}  # queued_16 и started_14
@@ -661,7 +661,7 @@ def test_import_failed_by_the_reaper_mid_parse_stays_failed(
     monkeypatch.setattr(imports, "_insert", real_insert)
     retry, _ = _start(django_capture_on_commit_callbacks, onec_account,
                       _onec_upload(onec_account))
-    assert (retry.status, retry.duplicates, _live(onec_account)) == ("loaded", 0, 2)
+    assert (retry.status, retry.duplicates, _live(onec_account)) == ("reconciled", 0, 2)
 
 
 @pytest.mark.django_db

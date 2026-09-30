@@ -16,13 +16,21 @@
  * `q` (как реестр контрагентов), выгрузка идёт по той же выборке.
  *
  * «Загрузить выписку» — по узлу `bpp.bank` `edit` (ФД); БУХ смотрит.
+ *
+ * Отбор ссылкой (показатель «Несопоставленные списания» дашборда «Оплаты»):
+ * `period_from`/`period_to` адреса страницы уходят в запрос реестра как есть
+ * — загрузки, чей период выписки пересекается с периодом дашборда. В таком
+ * режиме сохранённые фильтры панели не подмешиваются (свой ключ
+ * `localStorage`, панели фильтров нет — они сузили бы выборку молча): над
+ * таблицей плашка «Отбор по ссылке» с кнопкой «Показать все загрузки».
  */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Upload } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/hooks/usePermissions';
 
@@ -36,9 +44,27 @@ import { ACCOUNTS_KEY, bankSettingsApi } from '../settings/api';
 
 import { BANK_BASE, BANK_IMPORTS_ENDPOINT, bankImportHref, type BankImportRow } from './api';
 
+/** Параметры адреса, которые приходят ссылкой (дашборд «Оплаты») и уходят в
+ * запрос реестра как есть — имена совпадают с параметрами `GET bank/imports`. */
+const BANK_LINK_PARAMS = ['period_from', 'period_to'] as const;
+
+/** Отбор ссылки из адреса страницы; пусто — отбора нет. */
+function bankLinkParams(search: URLSearchParams): URLSearchParams {
+  const out = new URLSearchParams();
+  for (const key of BANK_LINK_PARAMS) {
+    const value = search.get(key);
+    if (value) out.set(key, value);
+  }
+  return out;
+}
+
 export function BankImportsPage() {
   const { t } = useTranslation();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const link = useMemo(() => bankLinkParams(searchParams), [searchParams]);
+  const linkKey = link.toString();
+  const fromLink = linkKey !== '';
   const permissions = usePermissions();
   const canUpload = permissions.can('bpp.bank', 'edit');
 
@@ -103,14 +129,42 @@ export function BankImportsPage() {
     },
   ], [accounts.data, t]);
 
+  /** Выйти из отбора ссылки: убрать его параметры (и номер страницы) из адреса. */
+  const dropLink = () => setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    for (const key of BANK_LINK_PARAMS) next.delete(key);
+    next.delete('page');
+    return next;
+  }, { replace: true });
+  const linkFrom = link.get('period_from');
+  const linkTo = link.get('period_to');
+  const linkPeriod = [
+    linkFrom && t('bpp.bank.link.from', 'с {{date}}', { date: formatDate(linkFrom) }),
+    linkTo && t('bpp.bank.link.to', 'по {{date}}', { date: formatDate(linkTo) }),
+  ].filter(Boolean).join(' ');
+
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-bold tracking-tight">{t('bpp.bank.title', 'Оплаты факт')}</h2>
+      {fromLink && (
+        <div role="note" className="flex flex-wrap items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+          <span className="font-medium">{t('bpp.bank.link.title', 'Отбор по ссылке')}</span>
+          <Badge variant="secondary">
+            {t('bpp.bank.link.period', 'Период выписки: {{period}}', { period: linkPeriod })}
+          </Badge>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={dropLink}>
+            {t('bpp.bank.link.reset', 'Показать все загрузки')}
+          </Button>
+        </div>
+      )}
       <BppRegistry<BankImportRow>
-        registryKey="bank-imports"
-        endpoint={BANK_IMPORTS_ENDPOINT}
+        key={linkKey}
+        // Отбор ссылкой — свой ключ настроек: сохранённые фильтры панели
+        // (счёт, статус, другой период) не должны молча сужать его выборку.
+        registryKey={fromLink ? 'bank-imports-link' : 'bank-imports'}
+        endpoint={fromLink ? `${BANK_IMPORTS_ENDPOINT}?${linkKey}` : BANK_IMPORTS_ENDPOINT}
         columns={columns}
-        filters={filters}
+        filters={fromLink ? [] : filters}
         exportName="bank-imports"
         searchParam="q"
         searchPlaceholder={t('bpp.bank.search', 'Номер или комментарий')}

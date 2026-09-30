@@ -17,6 +17,12 @@
 A4.1): загрузка — ``bpp.bank:edit`` (ФД), реестр, карточка и строки —
 ``bpp.bank:view`` (ФД, БУХ). Разбор идёт в фоне
 (``services/bank/imports.py``), экран опрашивает карточку загрузки.
+
+**Сверка** (``bank/imports/<id>/…``, ``bank/lines/<id>/…``, ТЗ §11.2–11.4,
+A4.2, задача 3): все действия — ``bpp.bank:edit`` (ФД), каждое
+идемпотентно; кандидаты, строки по вкладкам, охват отмены и «Экспорт
+результата» — ``bpp.bank:view`` (ФД, БУХ). Логика и блокировки —
+``services/bank/matching.py``.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error, uuid_or_404
 
 from .schemas import bank as schemas
-from .services.bank import imports
+from .services.bank import imports, matching
 from .services.bank import settings as service
 from .services.bank import templates
 from .services.core import audit, export, permissions
@@ -214,7 +220,9 @@ IMPORTS_EXPORT_COLUMNS = (
     export.Column("duplicates", "Пропущено дублей", kind="integer"),
     export.Column("errors_count", "Ошибок", kind="integer"),
     export.Column("matched", "Сопоставлено", kind="integer"),
+    export.Column("needs_review", "Требуют проверки", kind="integer"),
     export.Column("unmatched", "Не сопоставлено", kind="integer"),
+    export.Column("excluded", "Исключено", kind="integer"),
     export.Column("status_label", "Статус"),
 )
 
@@ -285,11 +293,105 @@ def import_get(request, import_id):
 @api_view(methods=("GET",), module="bpp", level="read")
 def import_lines(request, import_id):
     """Строки загрузки по порядку в файле — ``{items, total, page, page_size}``;
-    отменённые — только с ``?include_cancelled=1``."""
+    отменённые — только с ``?include_cancelled=1``; вкладка экрана —
+    ``?tab=matched|review|unmatched|excluded`` (или ``?match_status=``)."""
     _need_bank(request, "view", "просмотр загрузок выписок")
     imp = imports.get_import(uuid_or_404(import_id))
     params = request.GET
     return imports.lines(imp, match_status=params.get("match_status") or None,
+                         tab=params.get("tab") or None,
                          include_cancelled=params.get("include_cancelled") in ("1", "true"),
                          page=int_param(params, "page", 1, minimum=1),
                          page_size=int_param(params, "page_size", imports.DEFAULT_PAGE_SIZE))
+
+
+# ── сверка: загрузка (A4.2, задача 3) ───────────────────────────────────
+
+@api_view(methods=("POST",), module="bpp", level="write", idempotent=True)
+def import_reconcile(request, import_id):
+    """«Сверить» — автосверка загрузки «Загружена» (после разбора она
+    идёт сама; ручка — повтор, если автосверка упала). Ответ — карточка."""
+    _need_bank(request, "edit", "сверка выписки")
+    key = uuid_or_404(import_id)
+    matching.reconcile(request.token.user_id, key)
+    return imports.card(imports.get_import(key))
+
+
+@api_view(methods=("GET",), module="bpp", level="read")
+def import_impact(request, import_id):
+    """Для диалога «Отменить загрузку»: ``{invoices, lines}`` — сколько
+    счетов и строк она затронет."""
+    _need_bank(request, "view", "просмотр загрузок выписок")
+    return matching.impact(uuid_or_404(import_id))
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.ActionComment,
+          idempotent=True)
+def import_cancel(request, import_id, data):
+    """«Отменить загрузку» (мягко): строки и сопоставления аннулируются,
+    статусы сверки счетов пересчитываются. Ответ — карточка."""
+    _need_bank(request, "edit", "отмена загрузки выписки")
+    imp = matching.cancel_import(request.token.user_id, uuid_or_404(import_id),
+                                 comment=data.comment)
+    return imports.card(imports.get_import(imp.pk))
+
+
+@api_view(methods=("GET",), module="bpp", level="read")
+def import_export(request, import_id):
+    """«Экспорт результата» — xlsx из трёх листов: «Сопоставлены»,
+    «Требуют проверки», «Не сопоставлены»."""
+    _need_bank(request, "view", "выгрузка результата сверки")
+    imp = imports.get_import(uuid_or_404(import_id))
+    name = f"Сверка {imp.number}"
+    return export.xlsx_response(name, export.write_xlsx_sheets(name, imports.result_sheets(imp)))
+
+
+# ── сверка: строка выписки ──────────────────────────────────────────────
+
+@api_view(methods=("GET",), module="bpp", level="read")
+def line_candidates(request, line_id):
+    """До 5 счетов для «Сопоставить вручную»: без ``q`` — тот же БИН и
+    сумма ±10 %; с ``q`` — поиск по номеру, контрагенту и сумме."""
+    _need_bank(request, "view", "просмотр загрузок выписок")
+    return {"items": matching.candidates(uuid_or_404(line_id), request.GET.get("q") or "")}
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.MatchLine,
+          idempotent=True)
+def line_match(request, line_id, data):
+    """«Сопоставить вручную» — ``{allocations: [{invoice_id, amount?}], comment?}``."""
+    _need_bank(request, "edit", "ручное сопоставление строки выписки")
+    line = matching.match_line(
+        request.token.user_id, uuid_or_404(line_id),
+        [item.model_dump() for item in data.allocations], comment=data.comment)
+    return imports.line_card(line.pk)
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.ActionComment,
+          idempotent=True)
+def line_confirm(request, line_id, data):
+    """«Подтвердить сопоставление» строки «Требует проверки» — комментарий
+    обязателен (BR-060)."""
+    _need_bank(request, "edit", "подтверждение сопоставления")
+    line = matching.confirm(request.token.user_id, uuid_or_404(line_id), data.comment)
+    return imports.line_card(line.pk)
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.ActionComment,
+          idempotent=True)
+def line_cancel_match(request, line_id, data):
+    """«Отменить сопоставление» (или исключение строки) — комментарий
+    обязателен (BR-060)."""
+    _need_bank(request, "edit", "отмена сопоставления")
+    line = matching.cancel_match(request.token.user_id, uuid_or_404(line_id),
+                                 comment=data.comment)
+    return imports.line_card(line.pk)
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.ActionComment,
+          idempotent=True)
+def line_exclude(request, line_id, data):
+    """«Исключить — не относится к закупкам» — комментарий обязателен (BR-060)."""
+    _need_bank(request, "edit", "исключение строки выписки")
+    line = matching.exclude(request.token.user_id, uuid_or_404(line_id), data.comment)
+    return imports.line_card(line.pk)

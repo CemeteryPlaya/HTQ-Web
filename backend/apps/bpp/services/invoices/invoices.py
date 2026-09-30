@@ -27,6 +27,7 @@ from apps.bpp.models import (
     InvoiceBasis,
     InvoiceLine,
     InvoiceStatus,
+    PaymentMatchState,
     PurchaseRequestItem,
     RateSource,
 )
@@ -143,7 +144,8 @@ def allowed_actions(actor: Actor, inv: Invoice) -> list[str]:
     if (author and inv.status in BEFORE_DECISION and inv.status != InvoiceStatus.DRAFT) or (
             fd and inv.status in (InvoiceStatus.UNDER_REVIEW, InvoiceStatus.TO_PAY)
             and not _has_payments(inv)):
-        actions.append("cancel")
+        if inv.paid_bank_amount <= 0:
+            actions.append("cancel")
     if fd and inv.status == InvoiceStatus.UNDER_REVIEW:
         actions += ["pay", "not_payable", "return"]
     if buh and inv.status in (InvoiceStatus.TO_PAY, InvoiceStatus.PARTIALLY_PAID):
@@ -169,6 +171,21 @@ def qty_available(figures: dict, basis: str) -> Decimal:
 
 def _has_payments(inv: Invoice) -> bool:
     return inv.payments.filter(cancelled_at__isnull=True).exists()
+
+
+def _refuse_while_bank_paid(inv: Invoice) -> None:
+    """Счёт, по которому сверка выписки держит деньги (``paid_bank_amount`` —
+    действующие сопоставления, A4.2), не отменяется: отменённый счёт статью
+    бюджета освобождает, а «Оплачено факт» и графики платёж продолжали бы
+    считать. Выписка часто приходит раньше отметки БУХ, поэтому одной
+    проверки отметок мало. То же правило, что у отмены отметки оплаты
+    (``payments.unmark``); сопоставления «на проверку» в сумму не входят, а
+    подтвердить их к отменённому счёту нельзя."""
+    if inv.paid_bank_amount > 0:
+        raise DomainError(
+            "E-STATE-01", f"Нельзя отменить счёт {inv.number}: оплата по нему уже "
+                          f"подтверждена выпиской банка. Сначала отмените сопоставление "
+                          f"строки выписки.", status=409)
 
 
 # ── расчёты ─────────────────────────────────────────────────────────────
@@ -408,6 +425,20 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
     _require_author(actor, inv, "Удалить")
     require_status(inv, (InvoiceStatus.DRAFT,), "удалить")
     check_version(inv, expected_version)
+    # Сверка выписки (A4.2, D-S4-3) сопоставляет платёж и с черновиком — «на
+    # проверку». Такой черновик не удаляется, пока сопоставление не
+    # отменено: строка выписки потеряла бы счёт, которому платила
+    # (``PaymentMatch.invoice`` — PROTECT). Отменённые сопоставления уходят
+    # вместе со счётом.
+    matches = inv.payment_matches.all()
+    if matches.exclude(state=PaymentMatchState.CANCELLED).exists():
+        raise DomainError(
+            "E-STATE-01",
+            f"Счёт {inv.number} сопоставлен со строкой выписки банка — удалить его нельзя. "
+            f"Отмените счёт или попросите финансового директора отменить сопоставление "
+            f"в сверке выписки.",
+            status=409)
+    matches.delete()
     audit.record(inv, "deleted", actor_id=actor.user_id, changes={"number": inv.number})
     core_files.owner_deleted(inv, actor_id=actor.user_id)
     inv.delete()
@@ -630,6 +661,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
                     f"директор до оплаты.")
     else:
         raise state_error("отменить", inv)
+    _refuse_while_bank_paid(inv)
     process = _process(inv)
     if process is not None and process["state"] == "pending":
         try:

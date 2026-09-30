@@ -98,16 +98,19 @@ export const STATUS_DICTIONARIES = {
     cancelled: s('invoice.cancelled', 'Отменён', 'muted'),
     replaced: s('invoice.replaced', 'Заменён альтернативой', 'muted'),
   },
-  // Загрузка выписки (ТЗ §15.5, A4.1); `BankImportStatus`. «Сверена» —
-  // вместе со сверкой (A4.2, этап 4).
+  // Загрузка выписки (ТЗ §15.5, A4.1); `BankImportStatus`.
   bank_import: {
     processing: s('bankImport.processing', 'Обрабатывается', 'progress'),
     loaded: s('bankImport.loaded', 'Загружена', 'success'),
+    reconciled: s('bankImport.reconciled', 'Сверена', 'success'),
     failed: s('bankImport.failed', 'Ошибка загрузки', 'danger'),
     cancelled: s('bankImport.cancelled', 'Отменена', 'muted'),
   },
-  // Строка выписки; `LineMatchStatus`. Остальные статусы — со сверкой (A4.2).
+  // Строка выписки; `LineMatchStatus` (A4.2).
   bank_line: {
+    matched: s('bankLine.matched', 'Сопоставлена', 'success'),
+    needs_review: s('bankLine.needs_review', 'Требует проверки', 'attention'),
+    excluded: s('bankLine.excluded', 'Исключена', 'muted'),
     unmatched: s('bankLine.unmatched', 'Не сопоставлена', 'attention'),
   },
   // Фоновая выгрузка реестра (задача 6); `ExportStatus`.

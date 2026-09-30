@@ -13,9 +13,10 @@
 3. Метрика ``bpp_invoices_closing_docs_overdue`` загорается после пяти
    дней ожидания (задача 7, Q-C29).
 4. Выписка 1С с номером этого счёта в назначении (в «грязном» виде, как его
-   набирают в платёжке) загружается, а строка остаётся «Не сопоставлена»:
-   сверка — этап 4 (A4.2). Контракт, на котором она будет стоять, —
-   ``bpp.interface.find_by_number`` — счёт находит.
+   набирают в платёжке) загружается, и автосверка этапа 4 (A4.2) её
+   сопоставляет: строка «Сопоставлена», загрузка «Сверена», у счёта
+   «Оплачено по банку» = сумма и «Оплачен полностью». Контракт, на котором
+   стоит сверка, — ``bpp.interface.find_by_number`` — счёт находит.
 
 Тесты зовут ``digest.send()`` без контекста компании, как Celery-beat;
 остальное идёт внутри ``use_company``.
@@ -128,7 +129,7 @@ def test_closing_docs_metric_lights_up_after_five_days(company_context):
     assert _overdue() == 1
 
 
-# ── 4. выписка с номером счёта — «Не сопоставлена» до сверки A4.2 ────────
+# ── 4. выписка с номером счёта — сопоставлена автосверкой A4.2 ─────────
 
 def _org_account():
     """Счёт организации с шаблоном 1С — так же, как test_imports.py::_account."""
@@ -147,7 +148,7 @@ def _dirty(number: str) -> str:
     return "c" + lowered[1:].replace("-", " - ")
 
 
-def test_statement_line_with_the_invoice_number_stays_unmatched(
+def test_statement_line_with_the_invoice_number_is_matched(
         company_context, django_capture_on_commit_callbacks):
     slug = company_context["slug"]
     inv = _awaiting_docs(slug)
@@ -168,18 +169,22 @@ def test_statement_line_with_the_invoice_number_stays_unmatched(
     with django_capture_on_commit_callbacks(execute=True):
         imp, _ = imports.start_import(account_id=account.pk, upload=upload, actor_id=s.FD)
     imp.refresh_from_db()
-    assert imp.status == BankImportStatus.LOADED, imp.failure
+    assert imp.status == BankImportStatus.RECONCILED, imp.failure
     assert (imp.debits, imp.duplicates, imp.errors) == (1, 0, [])
 
     line = BankStatementLine.objects.get(bank_import=imp)
     assert line.purpose == purpose                # назначение хранится как в банке
     assert line.amount == Decimal("1000.00")
     assert line.recipient_bin == inv.counterparty.reg_number
-    # Сверки ещё нет (A4.2): строка не сопоставлена, счёт банком не тронут.
-    assert line.match_status == LineMatchStatus.UNMATCHED
+    # Автосверка (A4.2): «грязный» номер из назначения найден, строка
+    # сопоставлена на всю сумму, счёт — «Оплачен полностью»; статус счёта
+    # (ось бухгалтера, D-13) сверка не трогает.
+    assert (line.match_status, line.found_numbers) == (LineMatchStatus.MATCHED, [inv.number])
+    assert list(line.matches.values_list("invoice_id", "amount", "state")) == [
+        (inv.pk, Decimal("1000.00"), "active")]
     inv.refresh_from_db()
     assert (inv.status, inv.paid_bank_amount, inv.recon_status) == (
-        InvoiceStatus.AWAITING_DOCS, Decimal("0"), ReconStatus.NO_DATA)
+        InvoiceStatus.AWAITING_DOCS, Decimal("1000.00"), ReconStatus.FULL)
 
     # Контракт для A4.2: по чистому номеру счёт находится ...
     found = find_by_number(inv.number)
@@ -188,10 +193,11 @@ def test_statement_line_with_the_invoice_number_stays_unmatched(
         str(inv.pk), inv.number, InvoiceStatus.AWAITING_DOCS)
     assert found["amount"] == Decimal("1000.00")
     assert found["counterparty_reg_number"] == line.recipient_bin
-    assert (found["paid_bank_amount"], found["recon_status"]) == (Decimal("0"),
-                                                                  ReconStatus.NO_DATA)
+    assert (found["paid_bank_amount"], found["recon_status"]) == (Decimal("1000.00"),
+                                                                  ReconStatus.FULL)
     # ... а «грязный» из назначения — нет: find_by_number только обрезает
     # пробелы по краям и поднимает регистр. Выделить номер из назначения и
     # привести его к «СЧ-ГГГГ-NNNNNN» (латиница → кириллица, пробелы у
-    # дефисов) — работа сверки A4.2, до вызова контракта.
+    # дефисов) — работа сверки A4.2 (``recon.find_numbers``), до вызова
+    # контракта.
     assert find_by_number(dirty) is None

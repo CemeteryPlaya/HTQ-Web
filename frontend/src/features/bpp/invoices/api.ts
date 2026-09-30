@@ -203,3 +203,33 @@ export interface InvoiceRow {
   possible_split: boolean;
   current_holders: CurrentHolders | null;
 }
+
+/**
+ * Отбор реестра, пришедший ссылкой (показатель дашборда «Оплаты», D-S4-8):
+ * параметры адреса страницы `/bpp/invoices?…`, которые уходят в запрос
+ * реестра как есть — имена совпадают с параметрами ручки `GET invoices`.
+ * `status` и `recon_status` повторяются. `tab` — вкладка реестра.
+ */
+export const INVOICE_LINK_PARAMS = [
+  'tab', 'status', 'recon_status', 'project_id', 'article_id', 'counterparty_id', 'author_id',
+  'bank_date_from', 'bank_date_to', 'bank_wait_days',
+] as const;
+
+/** Параметры отбора из адреса страницы (порядок — как в адресе). Пусто — отбора нет. */
+export function invoiceLinkParams(search: URLSearchParams): URLSearchParams {
+  const out = new URLSearchParams();
+  for (const [key, value] of search) {
+    if (value && (INVOICE_LINK_PARAMS as readonly string[]).includes(key)) out.append(key, value);
+  }
+  return out;
+}
+
+/** Адрес реестра для `BppRegistry`: вкладка и отбор ссылки — строкой запроса,
+ * остальное (страница, поиск, фильтры панели) реестр добавит сам. */
+export function invoicesEndpoint(tab: string, link: URLSearchParams): string {
+  const query = new URLSearchParams(link);
+  query.delete('tab');
+  if (tab !== 'all') query.set('tab', tab);
+  const text = query.toString();
+  return text ? `${INVOICES_ENDPOINT}?${text}` : INVOICES_ENDPOINT;
+}

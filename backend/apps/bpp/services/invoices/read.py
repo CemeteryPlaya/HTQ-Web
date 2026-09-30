@@ -5,21 +5,33 @@
 закрывающих», «Документы предоставлены», «Оплачено, банк не подтвердил»,
 «Расхождения с банком». Итоговая строка — Σ сумм и Σ оплачено по банку по
 всей выборке.
+
+Фильтры автора, статуса сверки, даты платежа по выписке и «банк молчит N
+рабочих дней» (D-S4-8) нужны ссылкам дашборда D-01
+(``services/dashboard/payments.py``): показатель дашборда считается ЭТОЙ
+выборкой, и его ссылка открывает реестр ровно с тем же числом строк.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db.models import Q, Sum
+from django.db.models import OuterRef, Q, Subquery, Sum
 from django.utils import timezone
 
-from apps.bpp.models import Invoice, InvoiceBasis, InvoiceStatus, ReconStatus
+from apps.bpp.models import (
+    Invoice,
+    InvoiceBasis,
+    InvoiceStatus,
+    PaymentMark,
+    ReconStatus,
+)
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.agreements import positions
+from apps.bpp.services.bank import recon as bank_recon
 from apps.bpp.services.counterparties import lookup as counterparties
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
@@ -173,6 +185,46 @@ def _agreement_remaining(agr, inv: Invoice) -> Decimal | None:
 
 # ── реестр ──────────────────────────────────────────────────────────────
 
+def working_days_before(day: date, days: int) -> date:
+    """День, отстоящий от ``day`` на ``days`` рабочих дней назад (Пн–Пт, без
+    праздников — как метрика этапа 3 ``metrics._stale_before``). Отметка с
+    датой оплаты раньше него ждёт банк дольше ``days`` рабочих дней."""
+    left = days
+    while left > 0:
+        day -= timedelta(days=1)
+        if day.weekday() < 5:
+            left -= 1
+    return day
+
+
+def _bank_waiting(rows, days: int):
+    """Последняя неотменённая отметка оплаты БУХ (по дате оплаты) старше
+    ``days`` рабочих дней (D-S4-5, ТЗ §11.5 «банк не подтвердил > 3 раб.
+    дней»)."""
+    last = (PaymentMark.objects.filter(invoice=OuterRef("pk"), cancelled_at__isnull=True)
+            .order_by("-pay_date").values("pay_date")[:1])
+    cutoff = working_days_before(timezone.localdate(), days)
+    return rows.annotate(last_pay_date=Subquery(last)).filter(last_pay_date__lt=cutoff)
+
+
+def _paid_by_bank_between(rows, date_from, date_to):
+    """Счета с действующим сопоставлением строки выписки, дата платежа
+    которой в периоде (D-S4-6: банковские показатели — по дате платежа)."""
+    matches = bank_recon.active_matches()
+    if date_from:
+        matches = matches.filter(line__doc_date__gte=date_from)
+    if date_to:
+        matches = matches.filter(line__doc_date__lte=date_to)
+    return rows.filter(pk__in=matches.values("invoice_id"))
+
+
+def visible(actor: Actor, filters: dict | None = None):
+    """Выборка реестра L-06 — та же, что отдаёт ``registry``: по ней считает
+    показатели дашборда D-01, чтобы число показателя и ``total`` реестра по
+    его ссылке не расходились."""
+    return _visible(actor, filters or {})
+
+
 def _visible(actor: Actor, filters: dict):
     # Перенесённые из «Договоров» — в реестре как обычные, с пометкой
     # (D-B61-8): их переносили, чтобы работать дальше.
@@ -191,6 +243,15 @@ def _visible(actor: Actor, filters: dict):
         rows = rows.filter(article_id__in=filters["article_ids"])
     if filters.get("counterparty_id"):
         rows = rows.filter(counterparty_id=filters["counterparty_id"])
+    if filters.get("author_id") is not None:
+        rows = rows.filter(author_id=filters["author_id"])
+    if filters.get("recon_statuses"):
+        rows = rows.filter(recon_status__in=filters["recon_statuses"])
+    if filters.get("bank_date_from") or filters.get("bank_date_to"):
+        rows = _paid_by_bank_between(rows, filters.get("bank_date_from"),
+                                     filters.get("bank_date_to"))
+    if filters.get("bank_wait_days") is not None:
+        rows = _bank_waiting(rows, filters["bank_wait_days"])
     if filters.get("basis"):
         rows = rows.filter(basis=filters["basis"])
     if filters.get("agreement_id"):

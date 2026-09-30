@@ -27,9 +27,12 @@ L-07; план этапа 3 A, задача 3 — A4.1, перенесена и�
 пропускает её строки как дубли. Строки вставляются в порядке ключа — у всех
 загрузок один порядок блокировок, взаимной блокировки нет.
 
-Сверка (A4.2, этап 4) добавит статус «Сверена» и сопоставление строк; до
-неё загрузка останавливается на «Загружена», строки — «Не сопоставлена»
-(решение D-S3-2).
+Сверка (A4.2, этап 4): сразу за «Загружена», в той же задаче и той же
+схеме компании, идёт автосверка (``matching.auto_match``), и загрузка
+становится «Сверена». Упавшая автосверка загрузку не роняет: она остаётся
+«Загружена» со всеми строками, повтор ``auto_match`` доводит её до конца.
+Карточка несёт итоги по вкладкам (``totals``): сопоставлено, требуют
+проверки, не сопоставлено, исключено — число строк и Σ сумм.
 """
 
 from __future__ import annotations
@@ -38,9 +41,10 @@ import hashlib
 import logging
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from apps.bpp.models.bank import (
@@ -49,16 +53,19 @@ from apps.bpp.models.bank import (
     BankStatementLine,
     LineMatchStatus,
     OrgBankAccount,
+    PaymentMatch,
+    PaymentMatchState,
     StatementFormat,
 )
-from apps.bpp.services.core import audit
+from apps.bpp.services.core import audit, export
 from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.numbering import next_number
 from apps.users import interface as users
 from htqweb.errors import DomainError
+from htqweb.fallback import fallback
 from htqweb.tenancy import current_company
 
-from . import templates
+from . import matching, templates
 from .file_owner import FILE_TYPE
 from .parsers import onec, tabular
 
@@ -74,14 +81,18 @@ __all__ = [
     "export_count",
     "export_rows",
     "get_import",
+    "line_card",
     "lines",
     "reap_stale",
     "registry",
+    "result_sheets",
     "run_import",
     "start_import",
 ]
 
-AUDIT_TYPE = "bpp.bankimport"
+#: Журнал загрузки выписки — одно определение с автосверкой и ручными
+#: действиями (``matching.AUDIT_TYPE`` = ``app_label.model``).
+AUDIT_TYPE = matching.AUDIT_TYPE
 NUMBER_PREFIX = "ВП"
 NUMBER_WIDTH = 4
 #: Файл выписки — не больше (ТЗ §11.2; тип ``bank_statement`` в справочнике
@@ -104,6 +115,7 @@ STALE_MINUTES = 15
 #: просто ждут очереди; час — запас на затор, после которого задачу уже
 #: вероятнее потеряли (брокер перезапущен, рубильник ``bpp_bank`` выключен).
 QUEUED_STALE_MINUTES = 60
+ZERO = Decimal("0.00")
 STALE_REASON = ("Загрузка прервана — повторите загрузку. Если ошибка повторится, "
                 "обратитесь к администратору.")
 
@@ -212,7 +224,8 @@ def _overlaps(account: OrgBankAccount, start: date, end: date, exclude=None) -> 
     счёта — повторные операции отсекутся как дубли (BR-075)."""
     rows = (BankImport.objects
             .filter(account=account, period_from__lte=end, period_to__gte=start,
-                    status__in=(BankImportStatus.PROCESSING, BankImportStatus.LOADED))
+                    status__in=(BankImportStatus.PROCESSING, BankImportStatus.LOADED,
+                                BankImportStatus.RECONCILED))
             .order_by("period_from", "created_at")
             .only("number", "period_from", "period_to"))  # без байтов ``source``
     if exclude is not None:
@@ -396,6 +409,20 @@ def run_import(import_id) -> None:
     audit.record_for(AUDIT_TYPE, str(key), _FINISHED, actor_id=None, changes={
         "rows_total": imp.rows_total, "debits": imp.debits, "duplicates": imp.duplicates,
         "loaded": imp.debits - imp.duplicates, "errors": len(imp.errors or [])})
+    try:
+        matching.auto_match(key)
+    except Exception as exc:
+        # Строки загружены и зафиксированы — загрузка остаётся «Загружена»
+        # (не «Сверена»: ФД видит, что сверки не было), сделанные пачки
+        # сверки остаются, повтор ``auto_match`` («Сверить») доводит остальное.
+        # Через политику fallback'ов, а не ``logger.exception``: подмена
+        # «сверки нет — оставляем загруженной» должна дойти до алерта
+        # (``htqweb-fallback-worker-logs`` ищет FALLBACK в логах воркера).
+        # ``expected=False``: у автосверки нет штатной причины падать — это
+        # дефект или сбой базы, в strict (dev, pytest) он должен упасть громко.
+        fallback("bpp.bank.auto_match_failed", None,
+                 reason="автосверка упала — загрузка остаётся «Загружена»",
+                 exc=exc, import_id=str(key))
 
 
 def reap_stale(*, now=None) -> dict:
@@ -435,19 +462,35 @@ def _names(ids) -> dict[int, str]:
 
 def _with_counts(rows):
     live = Q(lines__cancelled_at__isnull=True)
+
+    def by_status(status):
+        return Count("lines", filter=live & Q(lines__match_status=status))
+
     return rows.annotate(
         n_lines=Count("lines", filter=live),
-        n_unmatched=Count("lines", filter=live & Q(lines__match_status=LineMatchStatus.UNMATCHED)))
+        n_unmatched=by_status(LineMatchStatus.UNMATCHED),
+        n_matched=by_status(LineMatchStatus.MATCHED),
+        n_review=by_status(LineMatchStatus.NEEDS_REVIEW),
+        n_excluded=by_status(LineMatchStatus.EXCLUDED))
 
 
 def _brief(imp: BankImport, names: dict[int, str]) -> dict:
+    """Строка реестра L-07. Счётчики строк по вкладкам сверки: ``matched`` —
+    «Сопоставлена», ``needs_review`` — «Требует проверки», ``unmatched`` —
+    «Не сопоставлена», ``excluded`` — «Исключена» (только действующие строки)."""
     account = imp.account
     lines_total = getattr(imp, "n_lines", None)
-    unmatched = getattr(imp, "n_unmatched", None)
     if lines_total is None:
-        live = imp.lines.filter(cancelled_at__isnull=True)
-        lines_total = live.count()
-        unmatched = live.filter(match_status=LineMatchStatus.UNMATCHED).count()
+        live = imp.lines.filter(cancelled_at__isnull=True).order_by()
+        counts = dict(live.values_list("match_status").annotate(n=Count("pk")))
+        lines_total = sum(counts.values())
+        unmatched, matched, review, excluded = (
+            counts.get(status, 0) for status in (
+                LineMatchStatus.UNMATCHED, LineMatchStatus.MATCHED,
+                LineMatchStatus.NEEDS_REVIEW, LineMatchStatus.EXCLUDED))
+    else:
+        unmatched, matched, review, excluded = (imp.n_unmatched, imp.n_matched, imp.n_review,
+                                                imp.n_excluded)
     return {
         "id": str(imp.pk), "number": imp.number,
         "account": {"id": str(account.pk), "iban": account.iban,
@@ -458,7 +501,8 @@ def _brief(imp: BankImport, names: dict[int, str]) -> dict:
         "filename": imp.filename, "comment": imp.comment,
         "rows_total": imp.rows_total, "debits": imp.debits, "rows_done": imp.rows_done,
         "duplicates": imp.duplicates, "errors_count": len(imp.errors or []),
-        "lines": lines_total, "matched": lines_total - unmatched, "unmatched": unmatched,
+        "lines": lines_total, "matched": matched, "needs_review": review,
+        "unmatched": unmatched, "excluded": excluded,
         "author_id": imp.author_id, "author_name": names.get(imp.author_id),
         "created_at": imp.created_at, "finished_at": imp.finished_at,
     }
@@ -476,13 +520,17 @@ def get_import(import_id) -> BankImport:
 def card(imp: BankImport) -> dict:
     """Карточка загрузки — её опрашивает экран, пока идёт разбор:
     состояние, итог (строк в файле, списаний, дублей, ошибок), ошибки строк
-    «Строка N: …», причина отказа и файл выписки."""
+    «Строка N: …», причина отказа, файл выписки и итоги сверки по вкладкам
+    (``totals``: ``matched``, ``needs_review``, ``unmatched``, ``excluded`` —
+    ``{count, amount}``; ``unallocated`` — Σ не разложенных на счета частей
+    строк, переплата по строке с несколькими номерами)."""
     data = _brief(imp, _names([imp.author_id]))
     progress = 100 if imp.status != BankImportStatus.PROCESSING else (
         int(imp.rows_done * 100 / imp.debits) if imp.debits else 0)
     stored = core_files.list_files(imp)
     data.update({"errors": list(imp.errors or []), "failure": imp.failure,
-                 "progress": progress, "file": stored[0] if stored else None})
+                 "progress": progress, "file": stored[0] if stored else None,
+                 "totals": matching.totals(imp.pk)})
     return data
 
 
@@ -547,24 +595,97 @@ def export_rows(*, account_ids=(), period_from=None, period_to=None, statuses=()
         yield item
 
 
+def _serialize_match(match) -> dict:
+    """Сопоставление строки со ссылкой на счёт: сумма счёта, «Оплачено по
+    банку всего» и статус сверки счёта (вкладка «Сопоставлены», ТЗ §11.2)."""
+    inv = match.invoice
+    return {"id": str(match.pk), "invoice_id": str(match.invoice_id),
+            "invoice_number": inv.number, "invoice_url": f"/bpp/invoices/{match.invoice_id}",
+            "invoice_status": inv.status, "invoice_status_label": inv.get_status_display(),
+            "invoice_amount": inv.amount, "invoice_currency": inv.currency_code,
+            "paid_bank_amount": inv.paid_bank_amount, "recon_status": inv.recon_status,
+            "recon_status_label": inv.get_recon_status_display(),
+            "amount": match.amount, "state": match.state, "manual": match.manual,
+            "comment": match.comment,
+            "review_reason": match.review_reason,
+            "review_reason_label": matching.REVIEW_REASONS.get(match.review_reason, ""),
+            "confirmed_by_id": match.confirmed_by_id, "confirmed_at": match.confirmed_at}
+
+
 def serialize_line(row: BankStatementLine) -> dict:
+    """Строка выписки со сверкой: номера счетов из назначения, причина
+    «Требует проверки» (код и текст ТЗ §11.2), сопоставления (действующие и
+    «на проверке»; без предзагрузки ``live_matches`` — пустой список),
+    ``allocated`` — их Σ, ``unallocated`` — часть сопоставленной или
+    проверяемой строки, не разложенная ни на один счёт; исключение —
+    комментарий, кто и когда."""
+    matches = list(getattr(row, "live_matches", None) or ())
+    allocated = sum((m.amount for m in matches), ZERO)
+    placed = row.match_status in (LineMatchStatus.MATCHED, LineMatchStatus.NEEDS_REVIEW)
     return {
-        "id": str(row.pk), "row_no": row.row_no, "doc_date": row.doc_date,
+        "id": str(row.pk), "import_id": str(row.bank_import_id), "row_no": row.row_no,
+        "doc_date": row.doc_date,
         "doc_number": row.doc_number, "amount": row.amount, "currency": row.currency,
         "recipient_name": row.recipient_name, "recipient_bin": row.recipient_bin,
         "recipient_iban": row.recipient_iban, "purpose": row.purpose,
         "match_status": row.match_status, "match_status_label": row.get_match_status_display(),
+        "found_numbers": list(row.found_numbers or []),
+        "review_reason": row.review_reason,
+        "review_reason_label": matching.REVIEW_REASONS.get(row.review_reason, ""),
+        "matches": [_serialize_match(m) for m in matches],
+        "allocated": allocated,
+        "unallocated": max(row.amount - allocated, ZERO) if placed else ZERO,
+        "excluded_comment": row.excluded_comment, "excluded_by_id": row.excluded_by_id,
+        "excluded_at": row.excluded_at,
         "cancelled_at": row.cancelled_at,
     }
 
 
-def lines(imp: BankImport, *, match_status: str | None = None, include_cancelled: bool = False,
-          page: int = 1, page_size: int | None = None) -> dict:
+#: Вкладки экрана результата (ТЗ §11.2) → статус строки.
+TABS = {
+    "matched": LineMatchStatus.MATCHED,
+    "review": LineMatchStatus.NEEDS_REVIEW,
+    "unmatched": LineMatchStatus.UNMATCHED,
+    "excluded": LineMatchStatus.EXCLUDED,
+}
+
+
+def _with_matches(rows):
+    live_matches = Prefetch(
+        "matches", to_attr="live_matches",
+        queryset=(PaymentMatch.objects.exclude(state=PaymentMatchState.CANCELLED)
+                  .select_related("invoice")
+                  .only("id", "line_id", "invoice_id", "amount", "state", "manual", "comment",
+                        "review_reason", "confirmed_by_id", "confirmed_at", "created_at",
+                        "invoice__number", "invoice__status", "invoice__amount",
+                        "invoice__currency_code", "invoice__paid_bank_amount",
+                        "invoice__recon_status")
+                  .order_by("created_at", "pk")))
+    return rows.prefetch_related(live_matches)
+
+
+def line_card(line_id) -> dict:
+    """Одна строка выписки в виде строки списка — ответ ручных действий."""
+    row = _with_matches(BankStatementLine.objects.filter(pk=line_id)).first()
+    if row is None:
+        raise DomainError("E-NOT-FOUND", "Строка выписки не найдена.", status=404)
+    return serialize_line(row)
+
+
+def lines(imp: BankImport, *, match_status: str | None = None, tab: str | None = None,
+          include_cancelled: bool = False, page: int = 1, page_size: int | None = None) -> dict:
     """Строки загрузки — по порядку в файле, страницами. По умолчанию только
-    действующие (как счётчики карточки); отменённые — ``include_cancelled``."""
-    rows = imp.lines.all().order_by("row_no", "pk")
+    действующие (как счётчики карточки); отменённые — ``include_cancelled``.
+    Вкладка ``tab`` (``matched|review|unmatched|excluded``) — то же, что
+    ``match_status``, именами экрана."""
+    rows = _with_matches(imp.lines.all().order_by("row_no", "pk"))
     if not include_cancelled:
         rows = rows.filter(cancelled_at__isnull=True)
+    if tab:
+        if tab not in TABS:
+            raise _invalid("tab", f"Неизвестная вкладка: {tab}. Допустимы: "
+                                  f"{', '.join(TABS)}.")
+        match_status = TABS[tab]
     if match_status:
         if match_status not in LineMatchStatus.values:
             raise _invalid("match_status", f"Неизвестный статус строки: {match_status}.")
@@ -575,3 +696,66 @@ def lines(imp: BankImport, *, match_status: str | None = None, include_cancelled
     return {"items": [serialize_line(row)
                       for row in rows[(page - 1) * page_size: page * page_size]],
             "total": total, "page": page, "page_size": page_size}
+
+
+# ── «Экспорт результата» (ТЗ §11.4): три листа ─────────────────────────
+
+_LINE_COLUMNS = (
+    export.Column("doc_date", "Дата", kind="date"),
+    export.Column("doc_number", "№ ПП"),
+    export.Column("recipient_name", "Получатель"),
+    export.Column("recipient_bin", "БИН"),
+    export.Column("amount", "Сумма", kind="money"),
+    export.Column("currency", "Валюта"),
+    export.Column("purpose", "Назначение"),
+)
+_MATCH_COLUMNS = (
+    *_LINE_COLUMNS,
+    export.Column("invoice_number", "Счёт"),
+    export.Column("invoice_amount", "Сумма счёта", kind="money"),
+    export.Column("match_amount", "Сумма сопоставления", kind="money"),
+    export.Column("paid_bank_amount", "Оплачено по банку всего", kind="money"),
+    export.Column("recon_status_label", "Статус сверки"),
+    export.Column("manual", "Вручную"),
+)
+_REVIEW_COLUMNS = (*_MATCH_COLUMNS, export.Column("review_reason_label", "Причина"))
+_UNMATCHED_COLUMNS = (*_LINE_COLUMNS, export.Column("found_numbers", "Номера в назначении"))
+
+
+def _match_rows(imp: BankImport, status: str):
+    """Строка листа — одно сопоставление: у строки выписки на несколько
+    счетов строк листа несколько (суммы остаются числами по каждому счёту)."""
+    rows = _with_matches(imp.lines.filter(cancelled_at__isnull=True, match_status=status)
+                         .order_by("row_no", "pk"))
+    for row in rows:
+        line = serialize_line(row)
+        base = {column.key: line[column.key] for column in _LINE_COLUMNS}
+        for match in line["matches"] or [{}]:
+            reason = match.get("review_reason_label") or line["review_reason_label"]
+            yield {**base, "invoice_number": match.get("invoice_number"),
+                   "invoice_amount": match.get("invoice_amount"),
+                   "match_amount": match.get("amount"),
+                   "paid_bank_amount": match.get("paid_bank_amount"),
+                   "recon_status_label": match.get("recon_status_label"),
+                   "manual": "Да" if match.get("manual") else "Нет",
+                   "review_reason_label": reason}
+
+
+def _unmatched_rows(imp: BankImport):
+    rows = imp.lines.filter(cancelled_at__isnull=True,
+                            match_status=LineMatchStatus.UNMATCHED).order_by("row_no", "pk")
+    for row in rows:
+        line = serialize_line(row)
+        yield {**{column.key: line[column.key] for column in _LINE_COLUMNS},
+               "found_numbers": ", ".join(line["found_numbers"])}
+
+
+def result_sheets(imp: BankImport) -> list[tuple[str, tuple, object]]:
+    """Листы «Экспорта результата» — ``export.write_xlsx_sheets``:
+    «Сопоставлены», «Требуют проверки», «Не сопоставлены» (исключённые
+    строки в выгрузку не входят — их нет среди вкладок ТЗ §11.2)."""
+    return [
+        ("Сопоставлены", _MATCH_COLUMNS, _match_rows(imp, LineMatchStatus.MATCHED)),
+        ("Требуют проверки", _REVIEW_COLUMNS, _match_rows(imp, LineMatchStatus.NEEDS_REVIEW)),
+        ("Не сопоставлены", _UNMATCHED_COLUMNS, _unmatched_rows(imp)),
+    ]

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 
@@ -49,3 +51,22 @@ class AccountUpdate(BaseModel):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     template_id: str | None = Field(default=None, min_length=1, max_length=64)
     is_active: bool | None = None
+
+
+# ── сверка выписки: ручные действия ФД (A4.2, задача 3) ────────────────
+# Правила (существование и статус счёта, валюта, Σ ≤ строки, BR-060) — в
+# ``services/bank/matching.py``, отказ — кодом модуля на своём поле.
+
+class MatchAllocation(BaseModel):
+    invoice_id: str = Field(default="", max_length=64)
+    # У единственного счёта сумму можно не указывать — вся строка.
+    amount: Decimal | None = Field(default=None, max_digits=18, decimal_places=2)
+
+
+class MatchLine(BaseModel):
+    allocations: list[MatchAllocation] = Field(default_factory=list, max_length=50)
+    comment: str = Field(default="", max_length=1000)
+
+
+class ActionComment(BaseModel):
+    comment: str = Field(default="", max_length=1000)
