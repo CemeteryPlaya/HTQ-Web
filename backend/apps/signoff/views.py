@@ -349,13 +349,17 @@ class ProcessReworkView(SignoffView):
         if process is None:
             raise Http404("Процесс согласования не найден")
 
+        own_tasks = ApprovalTask.objects.filter(stage__process_id=process_id,
+                                                user_id=request.token.user_id)
+        # Круг ещё идёт — ответ «ещё идёт» (409 от ``engine.reopen``) любому
+        # участнику: у согласующего с открытой задачей решения пока нет, и
+        # проверка ниже отказала бы ему в праве, которое тут ни при чём.
+        running = process.state == ProcessState.PENDING and (
+            own_tasks.exists() or request.token.is_elevated)
         # Только реально принятое решение. Наличие созданной, но погашенной
         # задачи ещё не даёт права отпирать завершённый документ.
-        is_approver = ApprovalTask.objects.filter(
-            stage__process_id=process_id, user_id=request.token.user_id,
-            acted_at__isnull=False,
-        ).exists()
-        if not (is_approver or request.token.is_elevated):
+        is_approver = own_tasks.filter(acted_at__isnull=False).exists()
+        if not (running or is_approver or request.token.is_elevated):
             return json_error("Вернуть на доработку может согласующий этого "
                               "процесса или администратор", 403)
 

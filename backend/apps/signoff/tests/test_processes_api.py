@@ -21,6 +21,7 @@ from apps.signoff.tests.helpers import (
     make_route,
     make_user,
     post_json,
+    share_position,
     simple_route,
     task_for,
     token,
@@ -253,8 +254,9 @@ def test_inbox_empties_once_the_stage_is_decided(client):
 
 def test_quorum_any_clears_the_inbox_of_the_other_approver(client):
     a, b = make_user("a"), make_user("b")
+    share_position(a, b)                 # «any» — один держатель должности
     doc = make_doc()
-    simple_route(a.pk, b.pk, quorum=Quorum.ANY)
+    simple_route(a.pk, quorum=Quorum.ANY)
     process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
 
     engine.act(task_id=task_for(process, a.pk).pk, actor_id=a.pk,
@@ -443,8 +445,9 @@ def test_an_admin_can_return_anyones_process_for_rework(client):
 
 def test_a_skipped_approver_cannot_reopen_a_finished_process(client):
     acted, skipped = make_user("acted"), make_user("skipped")
+    share_position(acted, skipped)       # «any» — один держатель должности
     doc = make_doc()
-    simple_route(acted.pk, skipped.pk, quorum=Quorum.ANY)
+    simple_route(acted.pk, quorum=Quorum.ANY)
     process = engine.start(subject_type=SUBJECT, subject_id=doc.pk)
     engine.act(task_id=task_for(process, acted.pk).pk, actor_id=acted.pk,
                decision=engine.APPROVE)
