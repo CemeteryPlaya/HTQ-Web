@@ -214,7 +214,9 @@ IMPORTS_EXPORT_COLUMNS = (
     export.Column("duplicates", "Пропущено дублей", kind="integer"),
     export.Column("errors_count", "Ошибок", kind="integer"),
     export.Column("matched", "Сопоставлено", kind="integer"),
+    export.Column("needs_review", "Требуют проверки", kind="integer"),
     export.Column("unmatched", "Не сопоставлено", kind="integer"),
+    export.Column("excluded", "Исключено", kind="integer"),
     export.Column("status_label", "Статус"),
 )
 

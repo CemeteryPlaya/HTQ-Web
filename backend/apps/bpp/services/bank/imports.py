@@ -27,9 +27,12 @@ L-07; план этапа 3 A, задача 3 — A4.1, перенесена и�
 пропускает её строки как дубли. Строки вставляются в порядке ключа — у всех
 загрузок один порядок блокировок, взаимной блокировки нет.
 
-Сверка (A4.2, этап 4) добавит статус «Сверена» и сопоставление строк; до
-неё загрузка останавливается на «Загружена», строки — «Не сопоставлена»
-(решение D-S3-2).
+Сверка (A4.2, этап 4): сразу за «Загружена», в той же задаче и той же
+схеме компании, идёт автосверка (``matching.auto_match``), и загрузка
+становится «Сверена». Упавшая автосверка загрузку не роняет: она остаётся
+«Загружена» со всеми строками, повтор ``auto_match`` доводит её до конца.
+Карточка несёт итоги по вкладкам (``totals``): сопоставлено, требуют
+проверки, не сопоставлено, исключено — число строк и Σ сумм.
 """
 
 from __future__ import annotations
@@ -38,9 +41,10 @@ import hashlib
 import logging
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 
 from apps.bpp.models.bank import (
@@ -49,6 +53,8 @@ from apps.bpp.models.bank import (
     BankStatementLine,
     LineMatchStatus,
     OrgBankAccount,
+    PaymentMatch,
+    PaymentMatchState,
     StatementFormat,
 )
 from apps.bpp.services.core import audit
@@ -58,7 +64,7 @@ from apps.users import interface as users
 from htqweb.errors import DomainError
 from htqweb.tenancy import current_company
 
-from . import templates
+from . import matching, templates
 from .file_owner import FILE_TYPE
 from .parsers import onec, tabular
 
@@ -104,6 +110,7 @@ STALE_MINUTES = 15
 #: просто ждут очереди; час — запас на затор, после которого задачу уже
 #: вероятнее потеряли (брокер перезапущен, рубильник ``bpp_bank`` выключен).
 QUEUED_STALE_MINUTES = 60
+ZERO = Decimal("0.00")
 STALE_REASON = ("Загрузка прервана — повторите загрузку. Если ошибка повторится, "
                 "обратитесь к администратору.")
 
@@ -212,7 +219,8 @@ def _overlaps(account: OrgBankAccount, start: date, end: date, exclude=None) -> 
     счёта — повторные операции отсекутся как дубли (BR-075)."""
     rows = (BankImport.objects
             .filter(account=account, period_from__lte=end, period_to__gte=start,
-                    status__in=(BankImportStatus.PROCESSING, BankImportStatus.LOADED))
+                    status__in=(BankImportStatus.PROCESSING, BankImportStatus.LOADED,
+                                BankImportStatus.RECONCILED))
             .order_by("period_from", "created_at")
             .only("number", "period_from", "period_to"))  # без байтов ``source``
     if exclude is not None:
@@ -396,6 +404,14 @@ def run_import(import_id) -> None:
     audit.record_for(AUDIT_TYPE, str(key), _FINISHED, actor_id=None, changes={
         "rows_total": imp.rows_total, "debits": imp.debits, "duplicates": imp.duplicates,
         "loaded": imp.debits - imp.duplicates, "errors": len(imp.errors or [])})
+    try:
+        matching.auto_match(key)
+    except Exception:
+        # Строки загружены и зафиксированы — загрузка остаётся «Загружена»
+        # (не «Сверена»: ФД видит, что сверки не было), сделанные пачки
+        # сверки остаются, повтор ``auto_match`` доводит остальное.
+        logger.exception("bpp bank import: автосверка import=%s упала — загрузка "
+                         "остаётся «Загружена»", import_id)
 
 
 def reap_stale(*, now=None) -> dict:
@@ -435,19 +451,35 @@ def _names(ids) -> dict[int, str]:
 
 def _with_counts(rows):
     live = Q(lines__cancelled_at__isnull=True)
+
+    def by_status(status):
+        return Count("lines", filter=live & Q(lines__match_status=status))
+
     return rows.annotate(
         n_lines=Count("lines", filter=live),
-        n_unmatched=Count("lines", filter=live & Q(lines__match_status=LineMatchStatus.UNMATCHED)))
+        n_unmatched=by_status(LineMatchStatus.UNMATCHED),
+        n_matched=by_status(LineMatchStatus.MATCHED),
+        n_review=by_status(LineMatchStatus.NEEDS_REVIEW),
+        n_excluded=by_status(LineMatchStatus.EXCLUDED))
 
 
 def _brief(imp: BankImport, names: dict[int, str]) -> dict:
+    """Строка реестра L-07. Счётчики строк по вкладкам сверки: ``matched`` —
+    «Сопоставлена», ``needs_review`` — «Требует проверки», ``unmatched`` —
+    «Не сопоставлена», ``excluded`` — «Исключена» (только действующие строки)."""
     account = imp.account
     lines_total = getattr(imp, "n_lines", None)
-    unmatched = getattr(imp, "n_unmatched", None)
     if lines_total is None:
-        live = imp.lines.filter(cancelled_at__isnull=True)
-        lines_total = live.count()
-        unmatched = live.filter(match_status=LineMatchStatus.UNMATCHED).count()
+        live = imp.lines.filter(cancelled_at__isnull=True).order_by()
+        counts = dict(live.values_list("match_status").annotate(n=Count("pk")))
+        lines_total = sum(counts.values())
+        unmatched, matched, review, excluded = (
+            counts.get(status, 0) for status in (
+                LineMatchStatus.UNMATCHED, LineMatchStatus.MATCHED,
+                LineMatchStatus.NEEDS_REVIEW, LineMatchStatus.EXCLUDED))
+    else:
+        unmatched, matched, review, excluded = (imp.n_unmatched, imp.n_matched, imp.n_review,
+                                                imp.n_excluded)
     return {
         "id": str(imp.pk), "number": imp.number,
         "account": {"id": str(account.pk), "iban": account.iban,
@@ -458,7 +490,8 @@ def _brief(imp: BankImport, names: dict[int, str]) -> dict:
         "filename": imp.filename, "comment": imp.comment,
         "rows_total": imp.rows_total, "debits": imp.debits, "rows_done": imp.rows_done,
         "duplicates": imp.duplicates, "errors_count": len(imp.errors or []),
-        "lines": lines_total, "matched": lines_total - unmatched, "unmatched": unmatched,
+        "lines": lines_total, "matched": matched, "needs_review": review,
+        "unmatched": unmatched, "excluded": excluded,
         "author_id": imp.author_id, "author_name": names.get(imp.author_id),
         "created_at": imp.created_at, "finished_at": imp.finished_at,
     }
@@ -476,13 +509,17 @@ def get_import(import_id) -> BankImport:
 def card(imp: BankImport) -> dict:
     """Карточка загрузки — её опрашивает экран, пока идёт разбор:
     состояние, итог (строк в файле, списаний, дублей, ошибок), ошибки строк
-    «Строка N: …», причина отказа и файл выписки."""
+    «Строка N: …», причина отказа, файл выписки и итоги сверки по вкладкам
+    (``totals``: ``matched``, ``needs_review``, ``unmatched``, ``excluded`` —
+    ``{count, amount}``; ``unallocated`` — Σ не разложенных на счета частей
+    строк, переплата по строке с несколькими номерами)."""
     data = _brief(imp, _names([imp.author_id]))
     progress = 100 if imp.status != BankImportStatus.PROCESSING else (
         int(imp.rows_done * 100 / imp.debits) if imp.debits else 0)
     stored = core_files.list_files(imp)
     data.update({"errors": list(imp.errors or []), "failure": imp.failure,
-                 "progress": progress, "file": stored[0] if stored else None})
+                 "progress": progress, "file": stored[0] if stored else None,
+                 "totals": matching.totals(imp.pk)})
     return data
 
 
@@ -547,13 +584,35 @@ def export_rows(*, account_ids=(), period_from=None, period_to=None, statuses=()
         yield item
 
 
+def _serialize_match(match) -> dict:
+    return {"id": str(match.pk), "invoice_id": str(match.invoice_id),
+            "invoice_number": match.invoice.number, "amount": match.amount,
+            "state": match.state, "manual": match.manual,
+            "review_reason": match.review_reason,
+            "review_reason_label": matching.REVIEW_REASONS.get(match.review_reason, "")}
+
+
 def serialize_line(row: BankStatementLine) -> dict:
+    """Строка выписки со сверкой: номера счетов из назначения, причина
+    «Требует проверки» (код и текст ТЗ §11.2), сопоставления (действующие и
+    «на проверке»; без предзагрузки ``live_matches`` — пустой список),
+    ``allocated`` — их Σ, ``unallocated`` — часть сопоставленной или
+    проверяемой строки, не разложенная ни на один счёт."""
+    matches = list(getattr(row, "live_matches", None) or ())
+    allocated = sum((m.amount for m in matches), ZERO)
+    placed = row.match_status in (LineMatchStatus.MATCHED, LineMatchStatus.NEEDS_REVIEW)
     return {
         "id": str(row.pk), "row_no": row.row_no, "doc_date": row.doc_date,
         "doc_number": row.doc_number, "amount": row.amount, "currency": row.currency,
         "recipient_name": row.recipient_name, "recipient_bin": row.recipient_bin,
         "recipient_iban": row.recipient_iban, "purpose": row.purpose,
         "match_status": row.match_status, "match_status_label": row.get_match_status_display(),
+        "found_numbers": list(row.found_numbers or []),
+        "review_reason": row.review_reason,
+        "review_reason_label": matching.REVIEW_REASONS.get(row.review_reason, ""),
+        "matches": [_serialize_match(m) for m in matches],
+        "allocated": allocated,
+        "unallocated": max(row.amount - allocated, ZERO) if placed else ZERO,
         "cancelled_at": row.cancelled_at,
     }
 
@@ -562,7 +621,14 @@ def lines(imp: BankImport, *, match_status: str | None = None, include_cancelled
           page: int = 1, page_size: int | None = None) -> dict:
     """Строки загрузки — по порядку в файле, страницами. По умолчанию только
     действующие (как счётчики карточки); отменённые — ``include_cancelled``."""
-    rows = imp.lines.all().order_by("row_no", "pk")
+    live_matches = Prefetch(
+        "matches", to_attr="live_matches",
+        queryset=(PaymentMatch.objects.exclude(state=PaymentMatchState.CANCELLED)
+                  .select_related("invoice")
+                  .only("id", "line_id", "invoice_id", "amount", "state", "manual",
+                        "review_reason", "invoice__number")
+                  .order_by("created_at", "pk")))
+    rows = imp.lines.all().order_by("row_no", "pk").prefetch_related(live_matches)
     if not include_cancelled:
         rows = rows.filter(cancelled_at__isnull=True)
     if match_status:
