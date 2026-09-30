@@ -33,6 +33,7 @@ from apps.bpp.models import (
 )
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.alternatives import kpi
 from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
@@ -668,6 +669,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
     inv.status, inv.status_comment = InvoiceStatus.CANCELLED, comment
     touch(inv, actor.user_id, "status", "status_comment")
     audit.record(inv, "cancelled", actor_id=actor.user_id, comment=comment)
+    kpi.sync_for_document("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
     return inv
 
 
@@ -689,6 +691,7 @@ def on_approved(invoice_id) -> None:
 def on_rejected(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(status=InvoiceStatus.NOT_PAYABLE,
                                                 fd_decided_at=timezone.now())
+    kpi.sync_for_document("invoice", invoice_id)  # KPI снабжения нового счёта (A5.2)
 
 
 def _last_comment(invoice_id, state: str) -> str:
@@ -706,7 +709,7 @@ def on_rework(invoice_id) -> None:
 
 def on_cancelled(invoice_id) -> None:
     # Отзыв идущего решения — это отмена счёта (``cancel``): статус ставит она.
-    pass
+    kpi.sync_for_document("invoice", invoice_id)
 
 
 def check_requirement(invoice_id, key: str) -> str | None:

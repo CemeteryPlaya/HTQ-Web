@@ -34,6 +34,7 @@ from apps.bpp.models import (
 )
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.alternatives import kpi
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
 from apps.bpp.services.core.errors import check_version
@@ -589,6 +590,7 @@ def fulfil(actor: Actor, agreement_id, *, expected_version: int | None) -> Agree
     agr.status = AgreementStatus.FULFILLED
     _touch(agr, actor.user_id, "status")
     audit.record(agr, "fulfilled", actor_id=actor.user_id)
+    kpi.sync_for_document("agreement", agr.pk)  # KPI снабжения нового договора (A5.2)
     return agr
 
 
@@ -606,6 +608,7 @@ def terminate(actor: Actor, agreement_id, *, expected_version: int | None,
     agr.status, agr.status_comment = AgreementStatus.TERMINATED, comment
     _touch(agr, actor.user_id, "status", "status_comment")
     audit.record(agr, "terminated", actor_id=actor.user_id, comment=comment)
+    kpi.sync_for_document("agreement", agr.pk)
     return agr
 
 
@@ -670,10 +673,12 @@ def on_approved(agreement_id) -> None:
                                                  "supplement": agr.number})
     if agr.counterparty_id and parent is None:
         counterparties.record_success(agr.counterparty_id)
+    kpi.sync_for_document("agreement", agreement_id)  # KPI снабжения нового договора (A5.2)
 
 
 def on_rejected(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.REJECTED)
+    kpi.sync_for_document("agreement", agreement_id)
 
 
 def _last_rework_comment(agreement_id) -> str:
@@ -690,6 +695,7 @@ def on_rework(agreement_id) -> None:
 
 def on_cancelled(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.DRAFT)
+    kpi.sync_for_document("agreement", agreement_id)
 
 
 def facts(agreement_id) -> dict:
