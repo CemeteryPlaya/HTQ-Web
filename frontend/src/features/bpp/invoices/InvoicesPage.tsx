@@ -2,7 +2,8 @@
  * Реестр L-06 «Счета на оплату» (ТЗ §10.5, §19): вкладки «Все», «На решение
  * ФД», «К оплате», «Ждут закрывающих», «Документы предоставлены»,
  * «Оплачено, банк не подтвердил», «Расхождения с банком»; итоговая строка —
- * Σ в KZT и Σ оплачено по банку по всей выборке (сервер).
+ * Σ в KZT и Σ оплачено по банку по всей выборке (сервер). «Статус сверки»
+ * (CALC-010, REQ-017) — колонка по умолчанию и фильтр панели `recon_status`.
  *
  * - Вкладка всегда живёт в адресе — параметр `tab` (смена вкладки пишет его
  *   с `replace`; «Все», неизвестная вкладка и `?tab=all` — адрес без
@@ -241,6 +242,16 @@ export function InvoicesPage() {
     },
     moneyColumn<InvoiceRow>('paid_bank_amount', t('bpp.invoices.paidBank', 'Оплачено по банку'),
       { totalKey: 'paid_bank_amount' }),
+    {
+      // Статус сверки с банком — колонка по умолчанию (ТЗ §10.5, REQ-017).
+      key: 'recon_status',
+      title: t('bpp.invoices.reconStatus', 'Статус сверки'),
+      render: (row) => (
+        <span className={row.recon_status === 'no_data' ? 'text-muted-foreground' : undefined}>
+          {t(`bpp.invoices.recon.${row.recon_status}`, RECON_LABELS[row.recon_status] ?? row.recon_status)}
+        </span>
+      ),
+    },
   ], [t]);
 
   const filters = useMemo<RegistryFilter[]>(() => [
@@ -267,6 +278,16 @@ export function InvoicesPage() {
       kind: 'select',
       options: (projects.data ?? []).map((project) => ({
         value: project.id, label: `${project.code} — ${project.name}`,
+      })),
+    },
+    {
+      // Фильтры панели в адрес не пишутся (там только `page` и `q`), поэтому
+      // режим ссылки дашборда этот фильтр не включает.
+      key: 'recon_status',
+      label: t('bpp.invoices.reconStatus', 'Статус сверки'),
+      kind: 'select',
+      options: Object.entries(RECON_LABELS).map(([value, label]) => ({
+        value, label: t(`bpp.invoices.recon.${value}`, label),
       })),
     },
     { key: 'date_from', label: t('bpp.invoices.dateFrom', 'Дата счёта с'), kind: 'date' },

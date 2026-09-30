@@ -570,3 +570,49 @@ def test_fd_cannot_cancel_invoice_while_bank_holds_payment(company_context):
     assert "cancel" in service.allowed_actions(fd, inv)
     inv = service.cancel(fd, inv.id, expected_version=None, comment="Счёт выставлен ошибочно")
     assert inv.status == InvoiceStatus.CANCELLED
+
+
+def test_bank_tabs_and_recon_column_follow_real_reconciliation(company_context):
+    """Вкладки «Оплачено, банк не подтвердил» и «Расхождения с банком» и
+    колонка «Статус сверки» (ТЗ §10.5, REQ-017; остаток B этапа 4, B-3) — на
+    сопоставлениях автосверки A4.2, а не на выставленном руками
+    ``recon_status``. Один номер в назначении без замечаний — действующее
+    сопоставление на всю сумму строки; чужой БИН — «на проверке», в сумму не
+    входит."""
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    cp = bank.counterparty("100000000001")
+    marked = bank.orm_invoice(cp, 1000, status=InvoiceStatus.PAID)       # банк молчит
+    full = bank.orm_invoice(cp, 1000, status=InvoiceStatus.PAID)
+    partial = bank.orm_invoice(cp, 1000, status=InvoiceStatus.PAID)
+    over = bank.orm_invoice(cp, 1000, status=InvoiceStatus.TO_PAY)       # отметки БУХ нет
+    # БУХ отметил «Оплачен частично», и банк подтвердил часть — не расхождение.
+    both_partial = bank.orm_invoice(cp, 1000, status=InvoiceStatus.PARTIALLY_PAID)
+    wrong_bin = bank.orm_invoice(cp, 1000, status=InvoiceStatus.PAID)
+    pays = [(full, 1000, cp.reg_number), (partial, 400, cp.reg_number),
+            (over, 1100, cp.reg_number), (both_partial, 400, cp.reg_number),
+            (wrong_bin, 1000, "999999999999")]
+    imp = bank.loaded_import(bank.org_account(), [
+        {"amount": str(amount), "recipient_bin": reg, "purpose": f"Оплата по счёту {inv.number}"}
+        for inv, amount, reg in pays])
+    matching.auto_match(imp.pk)
+    expected = {marked: "no_data", full: "full", partial: "partial", over: "overpaid",
+                both_partial: "partial", wrong_bin: "no_data"}
+    for inv, recon in expected.items():
+        inv.refresh_from_db()
+        assert inv.recon_status == recon, inv.number
+
+    s.grant(slug, s.FD, "bpp-fd")
+    client = Client()
+
+    def numbers(tab: str) -> list[str]:
+        body = client.get(f"{BASE}/invoices?tab={tab}", **s.auth(slug, s.FD)).json()
+        return sorted(row["number"] for row in body["items"])
+
+    assert numbers("bank_mismatch") == sorted([partial.number, over.number])
+    assert numbers("bank_unconfirmed") == sorted([marked.number, wrong_bin.number])
+    rows = client.get(f"{BASE}/invoices", **s.auth(slug, s.FD)).json()["items"]
+    assert {row["number"]: row["recon_status"] for row in rows} == {
+        inv.number: recon for inv, recon in expected.items()}
