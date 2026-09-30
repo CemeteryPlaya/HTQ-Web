@@ -51,6 +51,7 @@ import { lessThan, sumMoney } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatDateTime, formatMoney, parseMoneyInput } from '../format';
+import { AlternativesBlock } from '../alternatives/AlternativesBlock';
 import { shownQty } from '../plan/planSelection';
 import { refdataApi, refdataKeys } from '../refdata/api';
 
@@ -791,6 +792,10 @@ export function InvoiceFormPage() {
               <p className="text-sm text-destructive">{errors.lines ?? errors.lines_total}</p>
             )}
           </section>
+
+          {card.basis === 'no_contract' && (
+            <AlternativesBlock sourceType="invoice" sourceId={card.id} />
+          )}
         </div>
       </BppDocumentShell>
       {confirmation.dialog}
