@@ -1,6 +1,7 @@
-"""Помощники тестов KPI снабжения (A5.2): выбор альтернативы имитируется
-прямыми записями в модели — ``lifecycle.mark_selected`` и выбор B5.1 пишут
-то же самое, — а запись KPI заводит настоящий ``kpi.create_preliminary``.
+"""Помощники тестов KPI снабжения (A5.2): выбор альтернативы — настоящий
+``lifecycle.mark_selected`` (задача 3), ссылку на новый документ пишет, как
+сделает B5.1, прямая запись, а запись KPI заводит настоящий
+``kpi.create_preliminary``.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from apps.bpp.models import (
     KpiStatus,
     OfferStatus,
 )
-from apps.bpp.services.alternatives import kpi
+from apps.bpp.services.alternatives import kpi, lifecycle
 from apps.bpp.tests import stage2 as s
 from apps.bpp.tests.bank.common import counterparty, orm_invoice
 
@@ -81,13 +82,18 @@ def submitted_offer(source, *, author_id=SN_A, role="sn", status=OfferStatus.SUB
 
 def select_offer(source, result, *, source_amount, author_id=SN_A, role="sn", own=False,
                  source_type="invoice", result_type="invoice", selected_by=900):
-    """АП «Выбрано» + запись KPI «Предварительный» — как сделает B5.1.
-    ``source_amount`` — исходная часть в KZT."""
+    """АП «Выбрано» + запись KPI «Предварительный» — как сделает B5.1:
+    ``lifecycle.mark_selected`` (исходный документ — в окне подачи), ссылка на
+    новый документ, ``kpi.create_preliminary``. ``source_amount`` — исходная
+    часть в KZT."""
     offer = submitted_offer(source, author_id=author_id, role=role, own=own,
-                            status=OfferStatus.SELECTED, source_type=source_type)
+                            source_type=source_type)
     offer.source_amount_kzt = D(str(source_amount))
-    offer.result_type, offer.result_id = result_type, result.pk
     offer.save()
+    offer = lifecycle.mark_selected(offer.pk, actor_id=selected_by,
+                                    comment="Дешевле при том же сроке поставки")
+    offer.result_type, offer.result_id = result_type, result.pk
+    offer.save(update_fields=["result_type", "result_id", "updated_at"])
     record = kpi.create_preliminary(offer.pk, result_type=result_type, result_id=result.pk,
                                     selected_by_id=selected_by)
     return offer, record

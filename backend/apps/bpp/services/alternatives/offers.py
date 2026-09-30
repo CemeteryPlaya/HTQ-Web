@@ -45,7 +45,6 @@ from apps.bpp.models.requests import InitiatorRole
 from apps.bpp.services import calc
 from apps.bpp.services.actor import ROLE_GROUP, Actor
 from apps.bpp.services.alternatives import calc as offer_calc
-from apps.bpp.services.alternatives.file_owner import _offer_can_view
 from apps.bpp.services.core import audit
 from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
@@ -150,12 +149,13 @@ def source_kind(source) -> str:
 
 
 def window_open(source) -> bool:
-    """BR-090: АП подают, пока ФД не решил счёт без договора (в «На
-    рассмотрении ФД», ``fd_decided_at`` пуст) или идёт согласование договора."""
+    """BR-090: АП подают, пока счёт без договора «На рассмотрении ФД» (решение
+    ФД уводит его из этого статуса) или идёт согласование договора.
+    ``fd_decided_at`` не смотрим: после возврата и повторной отправки он
+    остаётся от прошлого решения, а окно открыто снова (§12.4 п.7)."""
     if isinstance(source, Invoice):
         return (source.basis == InvoiceBasis.NO_CONTRACT
-                and source.status == InvoiceStatus.UNDER_REVIEW
-                and source.fd_decided_at is None)
+                and source.status == InvoiceStatus.UNDER_REVIEW)
     return source.status == AgreementStatus.ON_REVIEW
 
 
@@ -208,9 +208,13 @@ def _source_part_kzt(source, amount: Decimal) -> Decimal | None:
 # ── права и видимость ───────────────────────────────────────────────────
 
 def can_view(actor: Actor, offer: AlternativeOffer) -> bool:
-    """Автор; черновик — только он; поданную — ФД, ТД, ОД, ГД (правило
-    файлового владельца: одно на карточку и КП; задача 4 сузит для ПМ)."""
-    return _offer_can_view(actor, offer)
+    """Одно правило на карточку, журнал и КП — ``read.can_view`` (задача 4):
+    автор; черновик — только он; поданную — ФД, ТД, ОД, ГД и автор
+    исходного документа. ``read`` импортирует этот модуль — отсюда импорт
+    в функции."""
+    from apps.bpp.services.alternatives import read
+
+    return read.can_view(actor, offer)
 
 
 def get_visible(actor: Actor, offer_id) -> AlternativeOffer:
@@ -631,11 +635,13 @@ def _notify_submitted(offer: AlternativeOffer, source, *, actor_id: int) -> None
 def submit(actor: Actor, offer_id, *, expected_version: int | None) -> AlternativeOffer:
     source, offer = _locked(offer_id)
     _require_author(actor, offer, "Подать")
+    # Окно — до статуса: черновик к решённому документу уже закрыт
+    # (``lifecycle.close_for_source``), и причина для автора — решение.
+    if not window_open(source):
+        raise _window_closed()
     if offer.status != OfferStatus.DRAFT:
         raise _state_error("подать", offer)
     check_version(offer, expected_version)
-    if not window_open(source):
-        raise _window_closed()
     _check_document_limit(source, exclude_id=offer.pk)
     _check_author_limit(source, offer.author_id, offer.author_role, exclude_id=offer.pk)
     lines = list(offer.lines.order_by("created_at"))
@@ -669,12 +675,12 @@ def submit(actor: Actor, offer_id, *, expected_version: int | None) -> Alternati
 def withdraw(actor: Actor, offer_id, *, expected_version: int | None) -> AlternativeOffer:
     source, offer = _locked(offer_id)
     _require_author(actor, offer, "Отозвать")
-    if offer.status != OfferStatus.SUBMITTED:
-        raise _state_error("отозвать", offer)
-    check_version(offer, expected_version)
     if not window_open(source):
         raise DomainError("E-STATE-01", "Документ уже решён — альтернативу не отозвать",
                           status=422)
+    if offer.status != OfferStatus.SUBMITTED:
+        raise _state_error("отозвать", offer)
+    check_version(offer, expected_version)
     offer.status = OfferStatus.WITHDRAWN
     _touch(offer, actor.user_id)
     audit.record(offer, "withdrawn", actor_id=actor.user_id, changes={"number": offer.number})
