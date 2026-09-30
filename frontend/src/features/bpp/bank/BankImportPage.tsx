@@ -42,6 +42,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/hooks/usePermissions';
 import { errorStatus, reportApiError } from '@/lib/apiError';
 
+import { CommentDialog } from '../core/CommentDialog';
 import { useRegistryBackHref } from '../core/registryBack';
 import { useIdempotentAction } from '../core/useIdempotentAction';
 import { StatusBadge } from '../core/StatusBadge';
@@ -54,7 +55,6 @@ import {
 } from './api';
 import { fromCents, toCents } from './amounts';
 import { CancelImportDialog } from './CancelImportDialog';
-import { CommentDialog } from './CommentDialog';
 import { ManualMatchDialog } from './ManualMatchDialog';
 import { ReconLinesTable, type LineAction } from './ReconLinesTable';
 

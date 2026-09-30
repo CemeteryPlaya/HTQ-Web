@@ -113,6 +113,12 @@ export const STATUS_DICTIONARIES = {
     excluded: s('bankLine.excluded', 'Исключена', 'muted'),
     unmatched: s('bankLine.unmatched', 'Не сопоставлена', 'attention'),
   },
+  // Запись KPI снабжения (A5.2, D-S5-7); `KpiStatus`.
+  kpi_record: {
+    preliminary: s('kpiRecord.preliminary', 'Предварительный', 'progress'),
+    confirmed: s('kpiRecord.confirmed', 'Подтверждён', 'success'),
+    annulled: s('kpiRecord.annulled', 'Аннулирован', 'muted'),
+  },
   // Фоновая выгрузка реестра (задача 6); `ExportStatus`.
   export: {
     queued: s('export.queued', 'Готовится', 'progress'),
