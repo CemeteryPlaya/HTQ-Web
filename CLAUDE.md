@@ -125,6 +125,8 @@ cd backend
 ../.venv/Scripts/python.exe manage.py bpp_configure_routes --company SLUG [--td ID --od ID --gd ID --fd ID] [--dry-run]  # маршруты БЗО с флагами: заявка «ТД → ОД», договор «ФД → ТД → ОД → ГД», допсоглашение «ФД при росте суммы», счёт, подотчёт и авансовый отчёт — «ФД»; должности по названию
 ../.venv/Scripts/python.exe manage.py seed_bpp_demo --company SLUG [--sn ID --pm ID --fd ID --buh ID] [--purge]  # БЗО B4.2: демо-проекты ДЕМО-01/02 и документы во всех статусах через сервисы, решения — держатели задач; нужны маршруты и роли; повтор — ничего, --purge — только своё (уведомления уходят как при ручной работе)
 ../.venv/Scripts/python.exe manage.py retire_purchase_request_template [--slug zayavka-na-zakup] [--dry-run]  # БЗО B6.3: шаблон закупа — «удалён», его заявки удалены (согласования отозваны), справочники целы
+../.venv/Scripts/python.exe manage.py bpp_migrate_contracts --company SLUG --draft-maps DIR  # БЗО B6.1: черновики карт «администратор → Проект» и «программа → статья»; ничего не пишет
+../.venv/Scripts/python.exe manage.py bpp_migrate_contracts --company SLUG --projects-map CSV --articles-map CSV --actor ID [--dry-run] [--report XLSX]  # перенос «Договоров» одной транзакцией: справочники, бюджеты (годы суммой, только KZT), открытые документы (закрытые — сальдо статьи), сверка остатков — расхождение сверх ожидаемых = стоп; повтор ничего не дублирует; ранбук — docs/deploy/bpp-migrate-contracts-runbook.md
 ../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ../.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
 ```
