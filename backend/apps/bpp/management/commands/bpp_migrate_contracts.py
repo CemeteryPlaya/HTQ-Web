@@ -84,7 +84,9 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             ("Проверка без записи (--dry-run). " if options["dry_run"] else "Перенос выполнен. ")
             + f"Проекты: {len(rows['Проекты'])}, контрагенты: {len(rows['Контрагенты'])}, "
-              f"бюджеты: {len(rows['Бюджеты'])}, не перенесено: {len(rows['Не перенесено'])}."))
+              f"бюджеты: {len(rows['Бюджеты'])}, документы: {len(rows['Документы'])}, "
+              f"переотправить: {len(rows['Переотправить'])}, "
+              f"не перенесено: {len(rows['Не перенесено'])}."))
 
     def _drafts(self, folder: Path, snapshot: dict) -> None:
         folder.mkdir(parents=True, exist_ok=True)

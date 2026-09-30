@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from apps.bpp.services.actor import Actor
 
 from . import reference
+from .documents import Documents
 from .report import MigrationReport
 
 
@@ -24,6 +25,7 @@ class MigrationContext:
     counterparties: dict = field(default_factory=dict)
     project_by_admin: dict[int, str] = field(default_factory=dict)
     limits_by_admin: dict[int, dict] = field(default_factory=dict)
+    documents: Documents | None = None
 
 
 def run(ctx: MigrationContext) -> MigrationContext:
@@ -32,4 +34,5 @@ def run(ctx: MigrationContext) -> MigrationContext:
                                                  ctx.actor.user_id, ctx.report)
     ctx.limits_by_admin = reference.budgets_for(ctx.snapshot, ctx.project_by_admin,
                                                 ctx.article_map, ctx.actor, ctx.report)
+    ctx.documents = Documents(ctx).run()
     return ctx
