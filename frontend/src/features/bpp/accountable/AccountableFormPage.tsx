@@ -42,6 +42,7 @@ import {
   ACCOUNTABLE_HISTORY_FIELDS, ACCOUNTABLE_BASE, ACCOUNTABLE_HISTORY_TYPE, ACCOUNTABLE_SUBJECT, accountableKey,
   bppAccountableApi, type AccountableCard, type AdvanceReportRow,
 } from './api';
+import { MigratedNote } from '../migration/MigratedBadge';
 
 const REPORT_RULES = { formats: ['.pdf', '.jpg', '.jpeg', '.png'], max_mb: 10 };
 /** Состояние согласования отчёта (`signoff.ApprovalState`). */
@@ -297,6 +298,7 @@ export function AccountableFormPage() {
         } : undefined}
       >
         <div className="space-y-6">
+          <MigratedNote migrated={card?.is_migrated} />
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label={t('bpp.accountable.project', 'Проект / статья')}>
               <p className="text-sm">

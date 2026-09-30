@@ -40,6 +40,7 @@ import { bppRequestsApi, type InitiatorRole } from '../requests/api';
 import {
   ACCOUNTABLE_BASE, ACCOUNTABLE_ENDPOINT, bppAccountableApi, type AccountableRow,
 } from './api';
+import { MigratedBadge } from '../migration/MigratedBadge';
 
 const GOAL_MAX = 2000;
 const ROLE_TITLES: Record<InitiatorRole, string> = { sn: 'Снабженец', pm: 'Руководитель проекта' };
@@ -214,7 +215,12 @@ export function AccountablePage() {
   });
 
   const columns = useMemo<RegistryColumn<AccountableRow>[]>(() => [
-    { key: 'number', title: t('bpp.accountable.number', 'Номер'), required: true },
+    {
+      key: 'number',
+      title: t('bpp.accountable.number', 'Номер'),
+      required: true,
+      render: (row) => <span>{row.number}<MigratedBadge migrated={row.is_migrated} /></span>,
+    },
     { key: 'accountable_user_name', title: t('bpp.accountable.person', 'Подотчётное лицо') },
     { key: 'project_code', title: t('bpp.accountable.project', 'Проект') },
     { key: 'article_name', title: t('bpp.accountable.article', 'Статья') },

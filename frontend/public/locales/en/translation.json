@@ -5126,5 +5126,11 @@
       "registryClosed": "The full company tree is shown when you have access to the company registry; what is listed here is only what your permissions let you see.",
       "externalEmpty": "There are no subordinate companies: your position is not marked as managerial with participation in the external hierarchy. This is not a loading error — the flag is set on the position's card."
     }
+  },
+  "bpp": {
+    "migration": {
+      "badge": "migrated",
+      "note": "Migrated from Contracts. Its history before the migration stays there, read-only."
+    }
   }
 }

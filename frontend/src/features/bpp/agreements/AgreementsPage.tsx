@@ -20,6 +20,7 @@ import { formatDate } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
 
 import { AGREEMENTS_BASE, AGREEMENTS_ENDPOINT, type AgreementRow } from './api';
+import { MigratedBadge } from '../migration/MigratedBadge';
 
 export function AgreementsPage() {
   const { t } = useTranslation();
@@ -37,6 +38,7 @@ export function AgreementsPage() {
       render: (row) => (
         <span>
           {row.number}
+          <MigratedBadge migrated={row.is_migrated} />
           {row.is_supplement && (
             <Badge variant="outline" className="ml-2">{t('bpp.agreements.supplementShort', 'ДС')}</Badge>
           )}

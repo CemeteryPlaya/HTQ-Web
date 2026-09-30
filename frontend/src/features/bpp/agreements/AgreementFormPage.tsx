@@ -49,6 +49,7 @@ import {
 } from './api';
 import { AGREEMENT_HISTORY_FIELDS, formOf, overPlan, patchOf, submitErrors, type AgreementFormState } from './agreementForm';
 import { CounterpartyPicker } from './CounterpartyPicker';
+import { MigratedNote } from '../migration/MigratedBadge';
 
 const COMMENT_MIN = 10;
 
@@ -274,6 +275,7 @@ export function AgreementFormPage() {
         } : undefined}
       >
         <div className="space-y-6">
+          <MigratedNote migrated={card.is_migrated} />
           {card.status === 'rework' && card.rework_comment && (
             <div role="status" className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

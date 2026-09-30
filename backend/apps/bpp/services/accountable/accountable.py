@@ -393,6 +393,7 @@ def card(actor: Actor, req: AccountableFundsRequest) -> dict:
         [uid for uid in {req.accountable_user_id, req.paid_by} if uid])}
     return {
         "id": str(req.id), "number": req.number, "status": req.status,
+        "is_migrated": req.is_migrated,
         "approval_state": req.approval_state, "version": req.version,
         "project_id": str(req.project_id), "article_id": str(req.article_id),
         "project": {"id": str(req.project_id), "code": project.get("code"),

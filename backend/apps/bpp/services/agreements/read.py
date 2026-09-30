@@ -77,6 +77,7 @@ def card(actor: Actor, agr: Agreement, *, vat_warning: str | None = None) -> dic
     supplements = list(agr.supplements.order_by("created_at"))
     return {
         "id": str(agr.pk), "number": agr.number, "status": agr.status,
+        "is_migrated": agr.is_migrated,
         "approval_state": agr.approval_state, "version": agr.version,
         "author_id": agr.author_id, "author_name": names.get(agr.author_id),
         "created_at": agr.created_at,
@@ -123,7 +124,9 @@ def card(actor: Actor, agr: Agreement, *, vat_warning: str | None = None) -> dic
 
 def _visible(actor: Actor, filters: dict):
     """Выборка реестра L-05 — одна на страницу и выгрузку."""
-    rows = Agreement.objects.filter(is_migrated=False)
+    # Перенесённые из «Договоров» — в реестре как обычные, с пометкой
+    # (D-B61-8): их переносили, чтобы работать дальше.
+    rows = Agreement.objects.all()
     if not service.sees_all(actor):
         # СН и ПМ: свои, ждущие их решения и договоры своих проектов и групп
         # статей (ТЗ §9.1 [Л]). Статьи группы — по статьям самих договоров
@@ -164,6 +167,7 @@ def _visible(actor: Actor, filters: dict):
 def _row(agr: Agreement, *, project_map, article_map, names, holders, invoiced) -> dict:
     return {
         "id": str(agr.pk), "number": agr.number, "status": agr.status,
+        "is_migrated": agr.is_migrated,
         "created_at": agr.created_at, "author_id": agr.author_id,
         "author_name": names.get(agr.author_id),
         "ext_number": agr.ext_number, "ext_date": agr.ext_date, "name": agr.name,
@@ -209,7 +213,7 @@ def search_for_invoice(actor: Actor, *, project_id, article_id, query: str = "",
     on_date = on_date or timezone.localdate()
     rows = (Agreement.objects
             .filter(status=AgreementStatus.ACTIVE, parent_agreement__isnull=True,
-                    project_id=project_id, article_id=article_id, is_migrated=False)
+                    project_id=project_id, article_id=article_id)
             .filter(Q(valid_to__isnull=True) | Q(valid_to__gte=on_date))
             .select_related("counterparty"))
     query = (query or "").strip()

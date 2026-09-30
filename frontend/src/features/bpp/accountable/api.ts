@@ -40,6 +40,8 @@ export interface AdvanceReportRow {
 }
 
 export interface AccountableCard {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: AccountableStatus;
@@ -64,6 +66,8 @@ export interface AccountableCard {
 }
 
 export interface AccountableRow {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: AccountableStatus;

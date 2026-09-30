@@ -49,6 +49,7 @@ import {
 } from './api';
 import { localToday } from './invoiceForm';
 import { usePrompt } from './PromptDialog';
+import { MigratedBadge } from '../migration/MigratedBadge';
 
 const INVOICE_TABS = [
   { key: 'all', label: 'Все' },
@@ -107,6 +108,7 @@ export function InvoicesPage() {
       render: (row) => (
         <span>
           {row.number}
+          <MigratedBadge migrated={row.is_migrated} />
           {row.possible_split && (
             <AlertTriangle className="ml-1 inline h-3.5 w-3.5 text-amber-600"
               aria-label={t('bpp.invoices.possibleSplit', 'Возможное дробление')} />

@@ -109,6 +109,7 @@ def card(actor: Actor, inv: Invoice, *, vat_warning: str | None = None) -> dict:
                         - timezone.localtime(inv.docs_requested_at).date()).days
     return {
         "id": str(inv.pk), "number": inv.number, "status": inv.status,
+        "is_migrated": inv.is_migrated,
         "approval_state": inv.approval_state, "version": inv.version,
         "author_id": inv.author_id, "author_name": names.get(inv.author_id),
         "created_at": inv.created_at, "basis": inv.basis,
@@ -173,7 +174,9 @@ def _agreement_remaining(agr, inv: Invoice) -> Decimal | None:
 # ── реестр ──────────────────────────────────────────────────────────────
 
 def _visible(actor: Actor, filters: dict):
-    rows = Invoice.objects.filter(is_migrated=False)
+    # Перенесённые из «Договоров» — в реестре как обычные, с пометкой
+    # (D-B61-8): их переносили, чтобы работать дальше.
+    rows = Invoice.objects.all()
     if not service.sees_all(actor):
         awaiting = [str(sid) for sid in signoff.list_awaiting_subject_ids(actor.user_id, SUBJECT)]
         rows = rows.filter(Q(author_id=actor.user_id) | Q(pk__in=awaiting))
@@ -217,6 +220,7 @@ def _rows(chunk: list[Invoice]) -> list[dict]:
         due = inv.planned_pay_date or inv.due_date
         out.append({
             "id": str(inv.pk), "number": inv.number, "status": inv.status,
+            "is_migrated": inv.is_migrated,
             "created_at": inv.created_at, "author_name": names.get(inv.author_id),
             "basis": inv.basis,
             "agreement_number": inv.agreement.number if inv.agreement_id else None,
