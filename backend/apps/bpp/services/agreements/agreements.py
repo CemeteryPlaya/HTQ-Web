@@ -380,7 +380,9 @@ def delete_draft(actor: Actor, agreement_id, *, expected_version: int | None) ->
     _require_status(agr, (AgreementStatus.DRAFT,), "удалить")
     check_version(agr, expected_version)
     audit.record(agr, "deleted", actor_id=actor.user_id, changes={"number": agr.number})
+    pk = agr.pk  # ``delete()`` обнуляет pk экземпляра
     agr.delete()
+    kpi.sync_for_document("agreement", pk)  # удалённый новый договор аннулирует KPI (A5.2)
 
 
 # ── отправка ────────────────────────────────────────────────────────────
@@ -656,6 +658,7 @@ def scope_of(agreement_id) -> str:
 def on_started(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.ON_REVIEW)
     lifecycle.notify_buyers("agreement", agreement_id)  # СН: можно предложить альтернативу (A5.1)
+    kpi.sync_for_document("agreement", agreement_id)  # KPI — на отправленную сумму (A5.2)
 
 
 def on_approved(agreement_id) -> None:

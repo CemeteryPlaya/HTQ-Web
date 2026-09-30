@@ -439,7 +439,9 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
             status=409)
     matches.delete()
     audit.record(inv, "deleted", actor_id=actor.user_id, changes={"number": inv.number})
+    pk = inv.pk  # ``delete()`` обнуляет pk экземпляра
     inv.delete()
+    kpi.sync_for_document("invoice", pk)  # удалённый новый счёт аннулирует KPI (A5.2)
 
 
 # ── отправка ФД ─────────────────────────────────────────────────────────
@@ -680,6 +682,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
 def on_started(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(status=InvoiceStatus.UNDER_REVIEW)
     lifecycle.notify_buyers("invoice", invoice_id)  # СН: можно предложить альтернативу (A5.1)
+    kpi.sync_for_document("invoice", invoice_id)  # KPI — на отправленную сумму (A5.2)
 
 
 def on_approved(invoice_id) -> None:

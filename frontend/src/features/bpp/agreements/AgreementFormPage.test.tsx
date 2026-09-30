@@ -25,6 +25,11 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => ({ activeProfile: { id: '1' } }),
 }));
+// Блок «Альтернативы» спрашивает `bpp.alternatives` view (без права — ни
+// запроса сравнения, ни блока).
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({ can: () => true, atLeast: () => true }),
+}));
 vi.mock('../core/HistoryTab', () => ({ HistoryTab: () => <div>История</div> }));
 vi.mock('../core/ApprovalTab', () => ({ ApprovalTab: () => <div>Согласование</div> }));
 
