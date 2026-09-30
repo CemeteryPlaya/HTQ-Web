@@ -4,9 +4,11 @@
  * «Оплачено, банк не подтвердил», «Расхождения с банком»; итоговая строка —
  * Σ в KZT и Σ оплачено по банку по всей выборке (сервер).
  *
- * - Вкладка — параметр `tab` адреса реестра; фильтры и колонки у вкладок
- *   общие (один ключ `localStorage`), отметки строк — свои: смена вкладки
- *   пересоздаёт таблицу.
+ * - Вкладка всегда живёт в адресе — параметр `tab` (смена вкладки пишет его
+ *   с `replace`; «Все», неизвестная вкладка и `?tab=all` — адрес без
+ *   параметра): обновление страницы и «Назад» с карточки счёта возвращают на
+ *   ту же вкладку. Фильтры и колонки у вкладок общие (один ключ
+ *   `localStorage`), отметки строк — свои: смена вкладки пересоздаёт таблицу.
  * - ФД на вкладке «На решение ФД» решает отмеченные разом: «Оплатить» — с
  *   плановой датой (пусто — срок оплаты каждого счёта), «Не оплачивать» — с
  *   причиной; итог — по каждому счёту (успешные и отклонённые с причиной).
@@ -15,20 +17,21 @@
  * - Кнопки «Создать» нет: счёт оформляется из Плана закупок или из
  *   действующего договора.
  * - Отбор ссылкой (показатель дашборда «Оплаты», D-S4-8): параметры адреса
- *   `tab`, `status`, `recon_status`, `project_id`, `article_id`,
- *   `counterparty_id`, `author_id`, `bank_date_from`/`bank_date_to`,
- *   `bank_wait_days` уходят в запрос реестра как есть, и `total` реестра
- *   совпадает с числом на карточке. Поэтому в таком режиме сохранённые
- *   фильтры панели не подмешиваются (свой ключ `localStorage`, панели
- *   фильтров нет — они сузили бы выборку молча): над таблицей плашка
- *   «Отбор с дашборда» с кнопкой «Показать весь реестр». Смена вкладки
- *   тоже выходит из отбора ссылки — это уже другая выборка. Вкладка в режиме
- *   ссылки — из адреса, вне его — выбор человека: переход из меню «Счета»
- *   (адрес без отбора) не оставляет вкладку, которую выбрала ссылка.
+ *   `status`, `recon_status`, `project_id`, `article_id`, `counterparty_id`,
+ *   `author_id`, `bank_date_from`/`bank_date_to`, `bank_wait_days` (и
+ *   вкладка) уходят в запрос реестра как есть, и `total` реестра совпадает с
+ *   числом на карточке. Режим ссылки включается только при хотя бы одном
+ *   таком параметре, кроме `tab`: одна вкладка в адресе — это обычный реестр
+ *   (её пишет сама смена вкладки). В режиме ссылки сохранённые фильтры панели
+ *   не подмешиваются (свой ключ `localStorage`, панели фильтров нет — они
+ *   сузили бы выборку молча): над таблицей плашка «Отбор с дашборда» с
+ *   кнопкой «Показать весь реестр». Смена вкладки выходит из отбора ссылки —
+ *   это уже другая выборка. Переход из меню «Счета» (адрес без параметров) —
+ *   вкладка «Все».
  *   «Экспорт очереди к оплате» отбора ссылки не знает — в этом режиме кнопка
  *   так и подписана: «вся очередь».
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
@@ -136,15 +139,26 @@ export function InvoicesPage() {
   const permissions = usePermissions();
   const prompt = usePrompt();
   const [searchParams, setSearchParams] = useSearchParams();
-  const link = useMemo(() => invoiceLinkParams(searchParams), [searchParams]);
+  // Отбор ссылки — параметры реестра из адреса, кроме вкладки: вкладка в
+  // адресе есть всегда, а режим ссылки — только при фильтрах.
+  const link = useMemo(() => {
+    const params = invoiceLinkParams(searchParams);
+    params.delete('tab');
+    return params;
+  }, [searchParams]);
   const linkKey = link.toString();
   const fromLink = linkKey !== '';
-  const urlTab = link.get('tab');
-  // Вкладка ссылки — из адреса (новая ссылка при открытом реестре — новая
-  // вкладка); вне ссылки — выбор человека. Уход из отбора ссылки переходом из
-  // меню возвращает её («Все», если реестр открыли ссылкой), а не вкладку ссылки.
-  const [ownTab, setOwnTab] = useState<TabKey>('all');
-  const tab: TabKey = fromLink ? (isTabKey(urlTab) ? urlTab : 'all') : ownTab;
+  const rawTab = searchParams.get('tab');
+  const tab: TabKey = isTabKey(rawTab) ? rawTab : 'all';
+  // «Все» и неизвестная вкладка — адрес без параметра: у одной вкладки один адрес.
+  useEffect(() => {
+    if (rawTab === null || (rawTab !== 'all' && isTabKey(rawTab))) return;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('tab');
+      return next;
+    }, { replace: true });
+  }, [rawTab, setSearchParams]);
   const [exporting, setExporting] = useState(false);
   const canDecide = permissions.can('bpp.invoices.decision', 'edit');
   const canPay = permissions.can('bpp.invoices.payment', 'edit');
@@ -258,21 +272,16 @@ export function InvoicesPage() {
     { key: 'date_to', label: t('bpp.invoices.dateTo', 'Дата счёта по'), kind: 'date' },
   ], [projects.data, t]);
 
-  /** Выйти из отбора ссылки: убрать его параметры (и номер страницы) из адреса. */
-  const dropLink = () => setSearchParams((current) => {
+  /** Перейти на вкладку `value`: она пишется в адрес, отбор ссылки (если
+   * был) и номер страницы из адреса уходят — это уже другая выборка. */
+  const openTab = (value: TabKey) => setSearchParams((current) => {
     const next = new URLSearchParams(current);
     for (const key of INVOICE_LINK_PARAMS) next.delete(key);
     next.delete('page');
+    if (value !== 'all') next.set('tab', value);
     return next;
   }, { replace: true });
-  const changeTab = (value: TabKey) => {
-    setOwnTab(value);
-    if (fromLink) dropLink();
-  };
-  const showWholeRegistry = () => {
-    setOwnTab('all');
-    dropLink();
-  };
+  const showWholeRegistry = () => openTab('all');
   const linkLabels = fromLink ? describeLink(link, t, projects.data) : [];
 
   const batch = (ids: string[], decision: 'pay' | 'not_payable') => {
@@ -333,7 +342,7 @@ export function InvoicesPage() {
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-bold tracking-tight">{t('bpp.invoices.title', 'Счета на оплату')}</h2>
-      <Tabs value={tab} onValueChange={(value) => changeTab(value as TabKey)}>
+      <Tabs value={tab} onValueChange={(value) => openTab(value as TabKey)}>
         <TabsList className="h-auto flex-wrap justify-start">
           {INVOICE_TABS.map((entry) => (
             <TabsTrigger key={entry.key} value={entry.key}>

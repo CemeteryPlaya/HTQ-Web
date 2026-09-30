@@ -1,15 +1,17 @@
 /**
- * Реестр L-06 (ТЗ §10.5): вкладка — параметр `tab` запроса; ФД на вкладке
+ * Реестр L-06 (ТЗ §10.5): вкладка — параметр `tab` адреса и запроса (смена
+ * вкладки пишет его в адрес, «Все» и неизвестная — адрес без него); ФД на вкладке
  * «На решение ФД» не оплачивает отмеченные без причины и видит итог по
  * каждому счёту. Ссылка показателя дашборда «Оплаты» (D-S4-8): отбор из
- * адреса уходит в запрос как есть, сохранённые фильтры панели его не сужают,
+ * адреса уходит в запрос как есть (режим ссылки — только при фильтрах, одна
+ * вкладка в адресе — обычный реестр), сохранённые фильтры панели его не сужают,
  * «Показать весь реестр», смена вкладки и переход из меню возвращают обычный
  * реестр; экспорт очереди в режиме ссылки подписан «вся очередь».
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestQueryClient } from '@/test/renderWithProviders';
@@ -36,6 +38,14 @@ const ROW: InvoiceRow = {
   possible_split: true, current_holders: null,
 };
 
+/** Строка запроса текущего адреса — чтобы проверить, что вкладка живёт в нём. */
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
+}
+
+const locationSearch = () => screen.getByTestId('location-search').textContent;
+
 function renderAt(route: string) {
   return render(
     <QueryClientProvider client={createTestQueryClient()}>
@@ -45,6 +55,7 @@ function renderAt(route: string) {
             <>
               {/* Пункт меню «Счета» — тот же маршрут без параметров. */}
               <Link to="/bpp/invoices">Меню: Счета</Link>
+              <LocationProbe />
               <InvoicesPage />
             </>
           )} />
@@ -166,6 +177,49 @@ describe('InvoicesPage', () => {
 
     await waitFor(() => expect(lastRegistryUrl()).toMatch(/invoices\?tab=to_pay$/));
     expect(screen.getByRole('tab', { name: 'К оплате' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(locationSearch()).toBe('?tab=to_pay');
+  });
+
+  it('вкладка живёт в адресе: клик пишет ?tab=, «Все» его убирает; режима ссылки нет', { timeout: 20000 }, async () => {
+    window.localStorage.setItem('bpp:registry:invoices', JSON.stringify({
+      pageSize: 50, sort: null, filters: { basis: 'contract' }, hidden: [],
+    }));
+    renderAt('/bpp/invoices');
+    expect(await screen.findByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Ждут закрывающих' }));
+
+    await waitFor(() => expect(locationSearch()).toBe('?tab=awaiting_docs'));
+    await waitFor(() => expect(lastRegistryUrl()).toMatch(/invoices\?tab=awaiting_docs$/));
+    // Вкладка в адресе — не отбор ссылки: плашки нет, сохранённые фильтры панели работают.
+    expect(screen.queryByRole('note')).toBeNull();
+    const call = get.mock.calls.filter(([url]) => String(url).includes('invoices?tab=awaiting_docs')).at(-1)!;
+    expect(call[1].params).toMatchObject({ basis: 'contract' });
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Все' }));
+    await waitFor(() => expect(locationSearch()).toBe(''));
+    expect(screen.getByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('адрес с одной вкладкой — обычный реестр этой вкладки, с панелью фильтров', { timeout: 20000 }, async () => {
+    window.localStorage.setItem('bpp:registry:invoices', JSON.stringify({
+      pageSize: 50, sort: null, filters: { basis: 'contract' }, hidden: [],
+    }));
+    renderAt('/bpp/invoices?tab=fd');
+    expect(await screen.findByRole('tab', { name: 'На решение ФД' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(lastRegistryUrl()).toMatch(/invoices\?tab=fd$/));
+    expect(screen.queryByRole('note')).toBeNull();
+    const call = get.mock.calls.filter(([url]) => String(url).includes('invoices?tab=fd')).at(-1)!;
+    expect(call[1].params).toMatchObject({ basis: 'contract' });
+    expect(locationSearch()).toBe('?tab=fd');
+  });
+
+  it.each(['all', 'bogus'])('?tab=%s приводится к адресу без параметра — вкладка «Все»', { timeout: 20000 }, async (value) => {
+    renderAt(`/bpp/invoices?tab=${value}`);
+    expect(await screen.findByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(locationSearch()).toBe(''));
+    await waitFor(() => expect(lastRegistryUrl()).toMatch(/bpp\/v1\/invoices$/));
     expect(screen.queryByRole('note')).toBeNull();
   });
 
