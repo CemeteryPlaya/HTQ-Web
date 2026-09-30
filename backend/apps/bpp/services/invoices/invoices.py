@@ -27,6 +27,7 @@ from apps.bpp.models import (
     InvoiceBasis,
     InvoiceLine,
     InvoiceStatus,
+    PaymentMatchState,
     PurchaseRequestItem,
     RateSource,
 )
@@ -406,6 +407,20 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
     _require_author(actor, inv, "Удалить")
     require_status(inv, (InvoiceStatus.DRAFT,), "удалить")
     check_version(inv, expected_version)
+    # Сверка выписки (A4.2, D-S4-3) сопоставляет платёж и с черновиком — «на
+    # проверку». Такой черновик не удаляется, пока сопоставление не
+    # отменено: строка выписки потеряла бы счёт, которому платила
+    # (``PaymentMatch.invoice`` — PROTECT). Отменённые сопоставления уходят
+    # вместе со счётом.
+    matches = inv.payment_matches.all()
+    if matches.exclude(state=PaymentMatchState.CANCELLED).exists():
+        raise DomainError(
+            "E-STATE-01",
+            f"Счёт {inv.number} сопоставлен со строкой выписки банка — удалить его нельзя. "
+            f"Отмените счёт или попросите финансового директора отменить сопоставление "
+            f"в сверке выписки.",
+            status=409)
+    matches.delete()
     audit.record(inv, "deleted", actor_id=actor.user_id, changes={"number": inv.number})
     inv.delete()
 

@@ -397,6 +397,34 @@ def test_find_by_number_for_reconciliation(company_context):
     assert find_by_number("СЧ-2000-000001") is None
 
 
+def test_draft_with_bank_match_is_not_deleted(company_context):
+    """Сверка выписки (A4.2, D-S4-3) сопоставляет платёж и с черновиком — «на
+    проверку». Пока сопоставление не отменено, черновик не удаляется (409
+    ``E-STATE-01``, а не 500 от PROTECT); отменённое уходит вместе со счётом."""
+    from apps.bpp.models import PaymentMatch
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    sn, _, inv = _invoice(slug, 100)
+    imp = bank.loaded_import(bank.org_account(), [
+        {"amount": "100", "purpose": f"Оплата по счёту {inv.number}",
+         "recipient_bin": "100000000001"}])
+    matching.auto_match(imp.pk)
+    match = PaymentMatch.objects.get(invoice=inv)
+    assert (match.state, match.review_reason) == ("review", "invoice_status")
+
+    with pytest.raises(DomainError) as exc:
+        service.delete_draft(sn, inv.id, expected_version=None)
+    assert (exc.value.code, exc.value.status) == ("E-STATE-01", 409)
+    assert inv.number in exc.value.message
+
+    PaymentMatch.objects.filter(pk=match.pk).update(state="cancelled")
+    service.delete_draft(sn, inv.id, expected_version=None)
+    assert not Invoice.objects.filter(pk=inv.pk).exists()
+    assert not PaymentMatch.objects.filter(pk=match.pk).exists()
+
+
 def test_http_create_patch_and_registry_tabs(company_context):
     slug = company_context["slug"]
     proj = _setup(slug)
