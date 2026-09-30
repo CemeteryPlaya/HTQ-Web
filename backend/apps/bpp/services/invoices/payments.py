@@ -24,6 +24,7 @@ from django.utils import timezone
 from apps.bpp.models import Invoice, InvoiceBasis, InvoiceStatus, PaymentMark
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.core import audit
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.counterparties import lookup as counterparties
 from apps.bpp.services.money import fmt, money
 from htqweb.errors import DomainError
@@ -31,13 +32,15 @@ from htqweb.errors import DomainError
 from . import invoices as service
 
 DOC_TYPES = {"avr": "АВР", "waybill": "Накладная", "vat_invoice": "Счёт-фактура"}
-#: Тип файла в ``apps.files`` у каждого закрывающего документа (ТЗ §21).
+#: Тип файла в ``apps.files`` у каждого закрывающего документа (ТЗ §21;
+#: владелец ``bpp.invoice`` — ``services/invoices/file_owner.py``).
 DOC_FILE_TYPES = {"avr": "act", "waybill": "waybill", "vat_invoice": "vat_invoice"}
 
-#: Проверка «файлы запрошенных типов вложены» — через ``apps.files`` после
-#: сведения задачи 1 этапа 3 A (типы ``act``/``waybill``/``vat_invoice``).
-#: До неё — функция ``(invoice, types) → [недостающие]``; пусто — всё вложено.
-DOCS_ATTACHED_CHECK = None
+
+def missing_docs(inv: Invoice, wanted: list[str]) -> list[str]:
+    """Запрошенные закрывающие, по которым не вложено ни одного файла (ТЗ
+    §10.2: «для каждого запрошенного типа ≥1 файл»)."""
+    return [key for key in wanted if core_files.count_files(inv, DOC_FILE_TYPES[key]) == 0]
 
 
 def paid_total(inv: Invoice) -> Decimal:
@@ -163,7 +166,7 @@ def submit_docs(actor: Actor, invoice_id) -> Invoice:
         raise service._deny(f"Документы по счёту {inv.number} вкладывает автор счёта.")
     service.require_status(inv, (InvoiceStatus.AWAITING_DOCS,), "отправить документы по")
     wanted = [key for key, need in (inv.docs_required or {}).items() if need]
-    missing = DOCS_ATTACHED_CHECK(inv, wanted) if DOCS_ATTACHED_CHECK else []
+    missing = missing_docs(inv, wanted)
     if missing:
         raise DomainError(
             "E-INV-04", f"Не вложены запрошенные документы: "

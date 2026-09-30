@@ -45,6 +45,8 @@ export interface PaymentMark {
 }
 
 export interface InvoiceCard {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: string;
@@ -172,6 +174,8 @@ export const invoiceApi = {
 export const EXPORT_QUEUE_ENDPOINT = apiPath('bpp', 'invoices/export-queue');
 
 export interface InvoiceRow {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: string;

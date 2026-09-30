@@ -272,6 +272,38 @@ def _type_modify_block(ref: OwnerRef, token, file_type: str) -> FilesError | Non
     return None
 
 
+def assert_can_version(ref: OwnerRef, token, file_type: str) -> None:
+    """Может ли вызывающий загрузить НОВУЮ ВЕРСИЮ документа типа ``file_type``.
+
+    У владельца с ``can_version`` — только его ответ (новая версия документа
+    заявки допустима и после отправки, когда ``can_modify`` закрыт); без
+    него — те же правила, что у добавления и удаления."""
+    hook = ref.entry.can_version
+    if hook is None:
+        assert_can_modify(ref, token)
+        assert_can_modify_type(ref, token, file_type)
+        return
+    try:
+        allowed = hook(ref.owner_id, token, file_type)
+    except FilesForbidden as exc:
+        raise FilesError(E_ACCESS, 403, str(exc)) from exc
+    except FilesLocked as exc:
+        raise FilesError(E_LOCKED, 409, str(exc)) from exc
+    if not allowed:
+        raise FilesError(
+            E_ACCESS, 403,
+            "Новую версию этого документа вы загрузить не можете. Если это ошибка, "
+            "обратитесь к администратору.")
+
+
+def _allowed(check) -> bool:
+    try:
+        check()
+    except FilesError:
+        return False
+    return True
+
+
 def _file_types(entry: OwnerEntry) -> dict[str, FileType]:
     codes = [spec.code for spec in entry.file_types]
     rows = {row.code: row for row in FileType.objects.filter(code__in=codes)}
@@ -428,6 +460,20 @@ def folder(owner_type: str, owner_id: Any, token) -> dict:
     # только в черновике…»): это подсказка автору. Отказ по правам читателю
     # (согласующему, наблюдателю) объяснять незачем — он ничего не пытался.
     reason = block.message if block is not None and block.code == E_LOCKED else None
+    # Что можно с каждым документом — по его типу: новая версия (своё правило
+    # владельца, ``can_version``) и удаление (объект + тип). Интерфейс не
+    # предлагает того, что сервер отвергнет.
+    per_type = {}
+    for code in {document["file_type"] for document in documents}:
+        per_type[code] = (
+            _allowed(lambda code=code: assert_can_version(ref, token, code)),
+            can_modify and _type_modify_block(ref, token, code) is None,
+        )
+    for document in documents:
+        alive = document["deleted_at"] is None
+        can_version, can_delete = per_type[document["file_type"]]
+        document["can_version"] = alive and can_version
+        document["can_delete"] = alive and can_delete
     types_out = []
     for spec in entry.file_types:
         if not visible[spec.code]:
@@ -569,10 +615,12 @@ def precheck(owner_type: str, owner_id: Any, token, *, document_id=None) -> Owne
     (404) и читателю (403/409) незачем занимать воркер, пока multipart
     раскладывается и 20 МБ читаются в память."""
     ref = resolve(owner_type, owner_id, token)
-    assert_can_modify(ref, token)
-    if document_id is not None:
+    if document_id is None:
+        assert_can_modify(ref, token)
+    else:
+        # Новая версия — своё правило владельца (``can_version``), если оно есть.
         current = _current_or_404(ref, document_id, token)
-        assert_can_modify_type(ref, token, current.file_type_id)
+        assert_can_version(ref, token, current.file_type_id)
     return ref
 
 
@@ -767,7 +815,10 @@ def _upload(ref: OwnerRef, token, actor_id: int, *, upload, file_type: str | Non
     if token is not None:
         # Тип нового документа известен только после разбора тела запроса —
         # ранний ``precheck`` его не видел.
-        assert_can_modify_type(ref, token, spec.code)
+        if document_id is None:
+            assert_can_modify_type(ref, token, spec.code)
+        else:
+            assert_can_version(ref, token, spec.code)
     ftype = types[spec.code]
 
     name = os.path.basename((upload.name or "").replace("\\", "/")) or "file"
@@ -831,8 +882,11 @@ def _link(ref: OwnerRef, token, actor_id: int, *, stored: dict, name: str,
     # За время записи в хранилище владельца могли отправить. Загрузку из
     # кода (``token is None``) владелец разрешил сам — под своей блокировкой.
     if token is not None:
-        assert_can_modify(ref, token)
-        assert_can_modify_type(ref, token, spec.code)
+        if document_id is None:
+            assert_can_modify(ref, token)
+            assert_can_modify_type(ref, token, spec.code)
+        else:
+            assert_can_version(ref, token, spec.code)
 
     current = None
     if document_id is None:

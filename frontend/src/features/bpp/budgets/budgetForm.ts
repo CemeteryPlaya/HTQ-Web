@@ -19,6 +19,8 @@ export interface EditLine {
   locked: boolean;
   /** «Задействовано» по статье; `null` — бюджет ещё не утверждён. */
   committed: string | null;
+  /** «Оплачено факт» по статье — только для показа. */
+  paid_fact: string | null;
 }
 
 export interface BudgetFormState {
@@ -38,11 +40,13 @@ export const lineOf = (line: BudgetLine, locked: boolean): EditLine => ({
   comment: line.comment,
   locked,
   committed: line.committed,
+  paid_fact: line.paid_fact,
 });
 
 export const emptyLine = (correction: boolean): EditLine => ({
   key: nextLineKey(), article_id: '', limit: '0,00', comment: '', locked: false,
   committed: correction ? '0.00' : null,
+  paid_fact: correction ? '0.00' : null,
 });
 
 /** Форма из карточки: в корректировке — строки черновика версии N+1, и у

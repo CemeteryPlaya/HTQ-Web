@@ -26,3 +26,14 @@ def find_by_number(number: str) -> dict | None:
     from apps.bpp.services.invoices import read
 
     return read.find_by_number(number)
+
+
+def migrated_targets(source_type: str, source_ids) -> dict[str, list[dict]]:
+    """Куда переехали записи ``contracts`` (B6.1) — для заморозки старого
+    раздела (A6.2): карточка показывает «перенесён в ДГ-…». ``{ключ записи
+    строкой: [{target_type, target_id, number}]}``; неперенесённых в ответе
+    нет. Зовётся в контексте компании."""
+    require_service("bpp")
+    from apps.bpp.services.migration import links
+
+    return links.targets(source_type, source_ids)

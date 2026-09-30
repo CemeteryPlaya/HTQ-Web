@@ -16,8 +16,11 @@
  *   создаётся договор.
  * - «Оплатить» ФД спрашивает плановую дату оплаты (по умолчанию — срок
  *   оплаты), «Оплачено» БУХ — дату, сумму и номер платёжного поручения.
- * - Вкладки «Файлы» пока нет: владелец файлов счёта в `apps.files` появится
- *   со сведением задачи 1 этапа 3 A; тогда же проверка вложенных закрывающих.
+ * - Вкладка «Файлы» — папка владельца `bpp.invoice` в `apps.files`: файл
+ *   счёта (обязателен для «Отправить ФД», `E-FIL-04`) и закрывающие — АВР,
+ *   накладная, счёт-фактура. Закрывающие видят только автор, ФД и БУХ и
+ *   вкладываются по запросу БУХ; «Документы предоставлены» без файла
+ *   запрошенного типа — `E-INV-04` (`services/invoices/file_owner.py`).
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -49,6 +52,7 @@ import { agreementApi } from '../agreements/api';
 import { CounterpartyPicker } from '../agreements/CounterpartyPicker';
 import { lessThan, sumMoney } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatDateTime, formatMoney, parseMoneyInput } from '../format';
 import { shownQty } from '../plan/planSelection';
@@ -59,10 +63,11 @@ import {
   type InvoiceCard,
 } from './api';
 import {
-  COMMENT_MAX, formOf, localToday, overThreshold, patchOf, submitErrors,
+  INVOICE_HISTORY_FIELDS, COMMENT_MAX, formOf, localToday, overThreshold, patchOf, submitErrors,
   type InvoiceFormState,
 } from './invoiceForm';
 import { usePrompt, type PromptValues } from './PromptDialog';
+import { MigratedNote } from '../migration/MigratedBadge';
 
 const COMMENT_MIN = 10;
 const DOC_LABELS: Record<string, string> = {
@@ -459,8 +464,8 @@ export function InvoiceFormPage() {
         allowedActions={shellActions}
         actions={actions}
         readOnly={!editable}
-        withFiles={false}
         historyType={INVOICE_HISTORY_TYPE}
+        historyFields={INVOICE_HISTORY_FIELDS}
         extraTabs={showPayments ? [{
           key: 'payments', label: t('bpp.invoices.payments', 'Оплаты'),
           content: <PaymentsTab card={card} canUnmark={canUnmark} onUnmark={unmark} />,
@@ -470,6 +475,7 @@ export function InvoiceFormPage() {
         } : undefined}
       >
         <div className="space-y-6">
+          <MigratedNote migrated={card.is_migrated} />
           {card.status === 'returned' && card.rework_comment && (
             <div role="status" className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -712,6 +718,12 @@ export function InvoiceFormPage() {
                 </p>
               )}
               {card.docs_comment && <p className="text-muted-foreground">{card.docs_comment}</p>}
+              {allowed.includes('submit_docs') && (
+                <p className="text-muted-foreground">
+                  {t('bpp.invoices.docsHowTo',
+                    'Вложите запрошенные документы на вкладке «Файлы» и нажмите «Документы предоставлены».')}
+                </p>
+              )}
             </section>
           )}
 
@@ -801,8 +813,9 @@ export function InvoiceFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(INVOICES_BASE);
   return (
-    <Link to={INVOICES_BASE} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={back} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.invoices.back', 'К счетам')}
     </Link>

@@ -215,6 +215,45 @@ describe('InvoicesPage', () => {
     expect(locationSearch()).toBe('?tab=fd');
   });
 
+  it('смена вкладки начинает с первой страницы, поиск остаётся', { timeout: 20000 }, async () => {
+    // 500 строк — третья страница существует, реестр её не прижимает.
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.includes('invoices') ? {
+      items: [ROW], total: 500, page: 3, page_size: 50,
+      totals: { amount_kzt: '1000.00', paid_bank_amount: '0.00' },
+    } : [] }));
+    renderAt('/bpp/invoices?page=3&q=145');
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'К оплате' }));
+    await waitFor(() => expect(locationSearch()).toContain('tab=to_pay'));
+    const search = new URLSearchParams(locationSearch() ?? '');
+    expect(search.get('page')).toBeNull();
+    expect(search.get('q')).toBe('145');
+    await waitFor(() => expect(lastRegistryUrl()).toMatch(/invoices\?tab=to_pay$/));
+  });
+
+  it('«Статус сверки» — колонка и фильтр панели: фильтр уходит в запрос, режима ссылки нет', { timeout: 20000 }, async () => {
+    // Сохранённый фильтр неизвестного реестру ключа отбрасывается при чтении —
+    // значит, дошедший до запроса `recon_status` объявлен в панели.
+    window.localStorage.setItem('bpp:registry:invoices', JSON.stringify({
+      pageSize: 50, sort: null, filters: { recon_status: 'partial' }, hidden: [],
+    }));
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.includes('invoices') ? {
+      items: [{ ...ROW, recon_status: 'partial', paid_bank_amount: '400.00' }], total: 1,
+      page: 1, page_size: 50, totals: { amount_kzt: '1000.00', paid_bank_amount: '400.00' },
+    } : [] }));
+    renderAt('/bpp/invoices');
+
+    expect(await screen.findByRole('columnheader', { name: 'Статус сверки' })).toBeInTheDocument();
+    const row = (await screen.findByText('СЧ-2026-000001')).closest('tr')!;
+    expect(within(row).getByText('Оплачен частично')).toBeInTheDocument();
+    await waitFor(() => {
+      const call = get.mock.calls.filter(([url]) => String(url).includes('invoices')).at(-1)!;
+      expect(call[1].params).toMatchObject({ recon_status: 'partial' });
+    });
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(locationSearch()).toBe('');
+  });
+
   it.each(['all', 'bogus'])('?tab=%s приводится к адресу без параметра — вкладка «Все»', { timeout: 20000 }, async (value) => {
     renderAt(`/bpp/invoices?tab=${value}`);
     expect(await screen.findByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');

@@ -320,3 +320,26 @@ def get_invoice_brief(invoice_id: int) -> dict | None:
         "budget_line_id": invoice.budget_line_id,
         "budget_id": invoice.budget_line.budget_id,
     }
+
+
+def migration_snapshot() -> dict:
+    """Всё, что переносится в модуль БЗО (B6.1), плоскими словарями:
+    справочники, бюджеты со строками, контрагенты, договоры с позициями,
+    счета, платёжные документы договоров, подотчёт с авансовыми отчётами —
+    и у каждого документа ``committed``, его вклад в «занято» строки по
+    правилам ``budget_calc``; ``committed_by_line`` — итог ``committed_map``
+    по всем строкам. Зовётся в контексте компании."""
+    require_service("contracts")
+    from apps.contracts.services import migration_export
+
+    return migration_export.snapshot()
+
+
+def revoke_for_migration(subject_type: str, ids) -> list[int]:
+    """Отозвать идущие согласования документов раздела перед переносом
+    (B6.1, D-B61-2): документ возвращается в черновик своим колбэком.
+    Ключи, у которых процесс был и отозван."""
+    require_service("contracts")
+    from apps.contracts.services import migration_export
+
+    return migration_export.revoke(subject_type, ids)

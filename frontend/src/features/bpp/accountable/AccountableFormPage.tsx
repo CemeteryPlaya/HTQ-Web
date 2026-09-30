@@ -34,13 +34,15 @@ import { errorStatus, reportApiError } from '@/lib/apiError';
 
 import { lessThan } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { formatDateTime, formatMoney, parseMoneyInput } from '../format';
 import { usePrompt, type PromptValues } from '../invoices/PromptDialog';
 
 import {
-  ACCOUNTABLE_BASE, ACCOUNTABLE_HISTORY_TYPE, ACCOUNTABLE_SUBJECT, accountableKey,
+  ACCOUNTABLE_HISTORY_FIELDS, ACCOUNTABLE_BASE, ACCOUNTABLE_HISTORY_TYPE, ACCOUNTABLE_SUBJECT, accountableKey,
   bppAccountableApi, type AccountableCard, type AdvanceReportRow,
 } from './api';
+import { MigratedNote } from '../migration/MigratedBadge';
 
 const REPORT_RULES = { formats: ['.pdf', '.jpg', '.jpeg', '.png'], max_mb: 10 };
 /** Состояние согласования отчёта (`signoff.ApprovalState`). */
@@ -290,11 +292,13 @@ export function AccountableFormPage() {
         readOnly={!editable}
         withFiles={false}
         historyType={ACCOUNTABLE_HISTORY_TYPE}
+        historyFields={ACCOUNTABLE_HISTORY_FIELDS}
         draft={editable ? {
           value: form, dirty, onRestore: setForm, onSaveDraft: () => save(`draft-${Date.now()}`),
         } : undefined}
       >
         <div className="space-y-6">
+          <MigratedNote migrated={card?.is_migrated} />
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label={t('bpp.accountable.project', 'Проект / статья')}>
               <p className="text-sm">
@@ -371,8 +375,9 @@ export function AccountableFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(ACCOUNTABLE_BASE);
   return (
-    <Link to={ACCOUNTABLE_BASE} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={back} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.accountable.back', 'К подотчёту')}
     </Link>

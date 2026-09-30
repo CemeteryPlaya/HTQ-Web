@@ -17,14 +17,30 @@ import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/hooks/usePermissions';
 
 import { BppRegistry } from '../core/BppRegistry';
-import { statusColumn } from '../core/registryColumns';
+import { moneyColumn, statusColumn } from '../core/registryColumns';
 import type { RegistryColumn, RegistryFilter } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
 import { formatDate } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
 
 import { BUDGETS_BASE, BUDGETS_ENDPOINT, type BudgetRow } from './api';
-import { moneyColumn } from './money';
+import { lessThan } from './cents';
+
+const DASH = <span className="text-muted-foreground">—</span>;
+
+/** У черновика задействованного и доступного ещё нет — «—», а не нули. */
+const notForDraft = (column: RegistryColumn<BudgetRow>): RegistryColumn<BudgetRow> => ({
+  ...column,
+  render: (row) => (row.status === 'draft' ? DASH : column.render?.(row)),
+});
+
+/** Отрицательный остаток (задействовано больше лимита) — красным. */
+const negativeInRed = (column: RegistryColumn<BudgetRow>): RegistryColumn<BudgetRow> => ({
+  ...column,
+  render: (row) => (lessThan(row.available ?? '0', '0')
+    ? <span className="text-destructive">{column.render?.(row)}</span>
+    : column.render?.(row)),
+});
 
 export function BudgetsPage() {
   const { t } = useTranslation();
@@ -54,13 +70,13 @@ export function BudgetsPage() {
     { key: 'version_no', title: t('bpp.budgets.version', 'Версия'), align: 'right' },
     statusColumn<BudgetRow>(t, 'budget'),
     moneyColumn<BudgetRow>('limit_amount', t('bpp.budgets.limit', 'Σ Лимит'),
-      (row) => row.limit_amount, { currency: (row) => row.currency_code }),
-    moneyColumn<BudgetRow>('committed', t('bpp.budgets.committed', 'Σ Задействовано'),
-      (row) => (row.status === 'draft' ? null : row.committed),
-      { currency: (row) => row.currency_code }),
-    moneyColumn<BudgetRow>('available', t('bpp.budgets.available', 'Σ Доступно'),
-      (row) => (row.status === 'draft' ? null : row.available),
-      { currency: (row) => row.currency_code }),
+      { currency: 'currency_code' }),
+    notForDraft(moneyColumn<BudgetRow>('committed', t('bpp.budgets.committed', 'Σ Задействовано'),
+      { currency: 'currency_code' })),
+    notForDraft(moneyColumn<BudgetRow>('paid_fact', t('bpp.budgets.paidFact', 'Σ Оплачено факт'),
+      { currency: 'currency_code' })),
+    notForDraft(negativeInRed(moneyColumn<BudgetRow>('available',
+      t('bpp.budgets.available', 'Σ Доступно'), { currency: 'currency_code' }))),
     {
       key: 'approved_at',
       title: t('bpp.budgets.approvedAt', 'Утверждён'),

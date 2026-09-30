@@ -30,10 +30,6 @@ urlpatterns = [
     path(f"{R}/execution/", views.request_execution),
     path(f"{R}/print", views.request_print),
     path(f"{R}/print/", views.request_print),
-    path(f"{R}/files", views.request_files),
-    path(f"{R}/files/", views.request_files),
-    path(f"{R}/files/<uuid:file_id>/version", views.request_file_version),
-    path(f"{R}/files/<uuid:file_id>/version/", views.request_file_version),
-    path(f"{R}/files/<uuid:file_id>/link", views.request_file_link),
-    path(f"{R}/files/<uuid:file_id>/link/", views.request_file_link),
+    # Документы заявки — панель /api/files/v1/bpp.purchase_request/<id>/files/
+    # (владелец в apps/bpp/file_owners.py); своих ручек файлов у заявки нет.
 ]

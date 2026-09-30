@@ -58,8 +58,9 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД и бухгалтер видят все заявки, сотрудник — свои (как ``requests.sees_all``:
-    у просмотра без права создавать)."""
-    return actor.can("bpp.accountable", "view") and not actor.can("bpp.accountable", "create")
+    у просмотра без права создавать). Суперпользователь — тоже."""
+    return actor.is_superuser or (actor.can("bpp.accountable", "view")
+                                  and not actor.can("bpp.accountable", "create"))
 
 
 def can_view(actor: Actor, req: AccountableFundsRequest) -> bool:
@@ -392,6 +393,7 @@ def card(actor: Actor, req: AccountableFundsRequest) -> dict:
         [uid for uid in {req.accountable_user_id, req.paid_by} if uid])}
     return {
         "id": str(req.id), "number": req.number, "status": req.status,
+        "is_migrated": req.is_migrated,
         "approval_state": req.approval_state, "version": req.version,
         "project_id": str(req.project_id), "article_id": str(req.article_id),
         "project": {"id": str(req.project_id), "code": project.get("code"),

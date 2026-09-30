@@ -33,6 +33,7 @@ import { errorStatus } from '@/lib/apiError';
 
 import { lessThan, subMoney } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { formatMoney } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
 import { refdataApi, refdataKeys } from '../refdata/api';
@@ -43,7 +44,7 @@ import {
 } from './api';
 import { ItemsEditor } from './ItemsEditor';
 import {
-  afterRequest, formOf, JUSTIFICATION_MIN, requestInput, submitErrors, totalAmount,
+  REQUEST_HISTORY_FIELDS, afterRequest, formOf, JUSTIFICATION_MIN, requestInput, submitErrors, totalAmount,
   type RequestFormState,
 } from './requestForm';
 
@@ -297,6 +298,7 @@ export function RequestFormPage() {
         actions={actions}
         readOnly={!editable}
         historyType={REQUEST_HISTORY_TYPE}
+        historyFields={REQUEST_HISTORY_FIELDS}
         extraTabs={approvedOrLater ? [{
           key: 'execution', label: t('bpp.requests.execution', 'Исполнение'),
           content: <ExecutionTab requestId={card!.id} />,
@@ -487,9 +489,10 @@ export function RequestFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(REQUESTS_BASE);
   return (
     <Link
-      to={REQUESTS_BASE}
+      to={back}
       className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
     >
       <ArrowLeft className="h-4 w-4" />

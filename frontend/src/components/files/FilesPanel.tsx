@@ -285,7 +285,9 @@ function VersionRow({ ownerType, ownerId, version }: OwnerProps & { version: Fil
 interface DocumentItemProps extends OwnerProps {
   doc: FileDocument;
   type: UploadType | undefined;
-  canModify: boolean;
+  /** Можно загрузить новую версию (своё правило владельца, `can_version`). */
+  canVersion: boolean;
+  canDelete: boolean;
   deleteIsPhysical: boolean;
   /** Идёт любая правка папки — остальные действия ждут. */
   busy: boolean;
@@ -296,7 +298,7 @@ interface DocumentItemProps extends OwnerProps {
 }
 
 function DocumentItem({
-  ownerType, ownerId, doc, type, canModify, deleteIsPhysical, busy,
+  ownerType, ownerId, doc, type, canVersion, canDelete, deleteIsPhysical, busy,
   versionPending, removePending, onNewVersion, onRemove,
 }: DocumentItemProps) {
   const { t, i18n } = useTranslation();
@@ -335,65 +337,71 @@ function DocumentItem({
           )}
         </div>
 
-        {canModify && !deleted && (
+        {(canVersion || canDelete) && !deleted && (
           <div className="flex shrink-0 flex-wrap gap-2">
-            <input
-              ref={inputRef}
-              type="file"
-              className="hidden"
-              accept={type ? type.formats.join(',') : undefined}
-              disabled={busy}
-              onChange={onFile}
-            />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              aria-label={`${t('attachments.newVersion')}: ${current.name}`}
-              onClick={() => inputRef.current?.click()}
-            >
-              {versionPending
-                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                : <Upload className="mr-2 h-4 w-4" />}
-              {t('attachments.newVersion')}
-            </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
+            {canVersion && (
+              <>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  className="hidden"
+                  accept={type ? type.formats.join(',') : undefined}
+                  disabled={busy}
+                  onChange={onFile}
+                />
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  className="text-destructive"
                   disabled={busy}
-                  aria-label={`${t('attachments.delete')}: ${current.name}`}
+                  aria-label={`${t('attachments.newVersion')}: ${current.name}`}
+                  onClick={() => inputRef.current?.click()}
                 >
-                  {removePending
+                  {versionPending
                     ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    : <Trash2 className="mr-2 h-4 w-4" />}
-                  {t('attachments.delete')}
+                    : <Upload className="mr-2 h-4 w-4" />}
+                  {t('attachments.newVersion')}
                 </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>{t('attachments.deleteTitle', { name: current.name })}</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {deleteIsPhysical
-                      ? t('attachments.deletePhysical')
-                      : t('attachments.deleteSoft')}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>{t('attachments.cancel')}</AlertDialogCancel>
-                  <AlertDialogAction
-                    className={buttonVariants({ variant: 'destructive' })}
-                    onClick={onRemove}
+              </>
+            )}
+            {canDelete && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-destructive"
+                    disabled={busy}
+                    aria-label={`${t('attachments.delete')}: ${current.name}`}
                   >
+                    {removePending
+                      ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      : <Trash2 className="mr-2 h-4 w-4" />}
                     {t('attachments.delete')}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{t('attachments.deleteTitle', { name: current.name })}</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {deleteIsPhysical
+                        ? t('attachments.deletePhysical')
+                        : t('attachments.deleteSoft')}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>{t('attachments.cancel')}</AlertDialogCancel>
+                    <AlertDialogAction
+                      className={buttonVariants({ variant: 'destructive' })}
+                      onClick={onRemove}
+                    >
+                      {t('attachments.delete')}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
           </div>
         )}
       </div>
@@ -515,7 +523,8 @@ export function FilesPanel({ ownerType, ownerId, title, readOnly = false }: Prop
                 ownerId={ownerId}
                 doc={doc}
                 type={typesByCode.get(doc.file_type)}
-                canModify={canModify}
+                canVersion={!readOnly && (doc.can_version ?? canModify)}
+                canDelete={!readOnly && (doc.can_delete ?? canModify)}
                 deleteIsPhysical={data.delete_is_physical}
                 busy={busy}
                 versionPending={uploadVersion.isPending

@@ -5,7 +5,8 @@
  * Режим формы определяет сервер (`allowed_actions`):
  * - **Создание** (`/bpp/budgets/new`) и **Черновик** — таблица лимитов
  *   правится целиком, «Сохранить», «Утвердить», «Удалить»;
- * - **Утверждён** — только чтение с «Задействовано» и «Доступно»;
+ * - **Утверждён** — только чтение с «Задействовано», «Оплачено факт» (по
+ *   выписке, CALC-007; нет, если выписка у компании выключена) и «Доступно»;
  *   «Корректировать», «Закрыть бюджет»;
  * - **Корректировка** — лимиты и новые строки; статья существующей строки не
  *   меняется; комментарий ≥ 10 символов обязателен; лимит ниже
@@ -37,6 +38,7 @@ import { errorCode, errorStatus } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDateTime, formatMoney, parseMoneyInput } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
@@ -75,13 +77,15 @@ function useArticles() {
 }
 
 function LinesEditor({
-  lines, onChange, editable, correction, showCommitted, currency, errors, archivedNames,
+  lines, onChange, editable, correction, showCommitted, showPaid, currency, errors, archivedNames,
 }: {
   lines: EditLine[];
   onChange: (lines: EditLine[]) => void;
   editable: boolean;
   correction: boolean;
   showCommitted: boolean;
+  /** «Оплачено факт» — при утверждённом бюджете и включённой выписке. */
+  showPaid: boolean;
   currency: string;
   errors: Record<string, string>;
   archivedNames: Record<string, { name: string; group: string; archived: boolean }>;
@@ -95,6 +99,7 @@ function LinesEditor({
 
   const limitsTotal = sumMoney(lines.map((line) => parseMoneyInput(line.limit)));
   const committedTotal = sumMoney(lines.map((line) => line.committed));
+  const paidTotal = sumMoney(lines.map((line) => line.paid_fact));
 
   return (
     <div className="space-y-2">
@@ -108,6 +113,9 @@ function LinesEditor({
             {showCommitted && (
               <>
                 <TableHead className="text-right">{t('bpp.budgets.committedCol', 'Задействовано')}</TableHead>
+                {showPaid && (
+                  <TableHead className="text-right">{t('bpp.budgets.paidFactCol', 'Оплачено факт')}</TableHead>
+                )}
                 <TableHead className="text-right">{t('bpp.budgets.availableCol', 'Доступно')}</TableHead>
               </>
             )}
@@ -118,7 +126,7 @@ function LinesEditor({
         <TableBody>
           {lines.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
+              <TableCell colSpan={9} className="text-center text-muted-foreground">
                 {t('bpp.budgets.noLines', 'Строк нет — добавьте статью')}
               </TableCell>
             </TableRow>
@@ -179,6 +187,11 @@ function LinesEditor({
                     <TableCell className="text-right">
                       {line.committed === null ? '—' : formatMoney(line.committed, currency)}
                     </TableCell>
+                    {showPaid && (
+                      <TableCell className="text-right">
+                        {line.paid_fact === null ? '—' : formatMoney(line.paid_fact, currency)}
+                      </TableCell>
+                    )}
                     <TableCell className={`text-right ${available && lessThan(available, 0) ? 'text-destructive' : ''}`}>
                       {available === null ? '—' : formatMoney(available, currency)}
                     </TableCell>
@@ -224,6 +237,9 @@ function LinesEditor({
             {showCommitted && (
               <>
                 <TableCell className="text-right">{formatMoney(committedTotal, currency)}</TableCell>
+                {showPaid && (
+                  <TableCell className="text-right">{formatMoney(paidTotal, currency)}</TableCell>
+                )}
                 <TableCell className="text-right">
                   {formatMoney(subMoney(limitsTotal, committedTotal), currency)}
                 </TableCell>
@@ -256,9 +272,12 @@ function GroupTotals({ card }: { card: BudgetCard }) {
       {card.totals.by_group.map((group) => (
         <dl key={group.group_code} className="rounded-lg border p-3 text-sm">
           <dt className="mb-1 font-medium">{group.group_name}</dt>
-          <dd className="grid grid-cols-3 gap-2">
+          <dd className={cn('grid gap-2', group.paid_fact === null ? 'grid-cols-3' : 'grid-cols-2')}>
             <span>{t('bpp.budgets.lineLimit', 'Лимит')}: {formatMoney(group.limit_amount, card.currency_code)}</span>
             <span>{t('bpp.budgets.committedCol', 'Задействовано')}: {formatMoney(group.committed, card.currency_code)}</span>
+            {group.paid_fact !== null && (
+              <span>{t('bpp.budgets.paidFactCol', 'Оплачено факт')}: {formatMoney(group.paid_fact, card.currency_code)}</span>
+            )}
             <span className={lessThan(group.available, 0) ? 'text-destructive' : undefined}>
               {t('bpp.budgets.availableCol', 'Доступно')}: {formatMoney(group.available, card.currency_code)}
             </span>
@@ -619,6 +638,7 @@ export function BudgetCardPage() {
               editable={editable}
               correction={correction}
               showCommitted={Boolean(card?.active_version)}
+              showPaid={Boolean(card?.active_version) && card?.totals.paid_fact != null}
               currency={card?.currency_code ?? form.currency}
               errors={showErrors || correction ? lineErrors : {}}
               archivedNames={names}
@@ -634,9 +654,10 @@ export function BudgetCardPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(BUDGETS_BASE);
   return (
     <Link
-      to={BUDGETS_BASE}
+      to={back}
       className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
     >
       <ArrowLeft className="h-4 w-4" />

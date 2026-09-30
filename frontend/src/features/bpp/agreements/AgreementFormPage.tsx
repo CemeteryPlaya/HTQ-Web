@@ -10,8 +10,10 @@
  *   остатка — «Отправить» закрыта (ТЗ §9.3 п.5, BR-034).
  * - Ставка НДС — из справочника страны на дату; её можно поправить (D-14),
  *   ручная ставка подсвечена для ФД.
- * - Вкладки «Файлы» пока нет: владелец файлов договора в `apps.files`
- *   появится со сведением задачи 1 этапа 3 A.
+ * - Вкладка «Файлы» — папка владельца `bpp.agreement` в `apps.files`: скан
+ *   договора (обязателен для отправки — без него сервер отвечает `E-FIL-04`,
+ *   ТЗ §21) и приложения до 30. Менять их может автор в «Черновике» и «На
+ *   доработке»; правила — у владельца (`services/agreements/file_owner.py`).
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -34,6 +36,7 @@ import { errorStatus } from '@/lib/apiError';
 
 import { lessThan } from '../budgets/cents';
 import { BppDocumentShell, type BppDocumentAction } from '../core/BppDocumentShell';
+import { useRegistryBackHref } from '../core/registryBack';
 import { StatusBadge } from '../core/StatusBadge';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatMoney, parseMoneyInput } from '../format';
@@ -44,8 +47,9 @@ import {
   AGREEMENT_HISTORY_TYPE, AGREEMENT_SUBJECT, AGREEMENTS_BASE, agreementApi, agreementKey,
   type AgreementCard, type AgreementType,
 } from './api';
-import { formOf, overPlan, patchOf, submitErrors, type AgreementFormState } from './agreementForm';
+import { AGREEMENT_HISTORY_FIELDS, formOf, overPlan, patchOf, submitErrors, type AgreementFormState } from './agreementForm';
 import { CounterpartyPicker } from './CounterpartyPicker';
+import { MigratedNote } from '../migration/MigratedBadge';
 
 const COMMENT_MIN = 10;
 
@@ -260,8 +264,8 @@ export function AgreementFormPage() {
         allowedActions={shellActions}
         actions={actions}
         readOnly={!editable}
-        withFiles={false}
         historyType={AGREEMENT_HISTORY_TYPE}
+        historyFields={AGREEMENT_HISTORY_FIELDS}
         extraTabs={showExecution ? [{
           key: 'execution', label: t('bpp.requests.execution', 'Исполнение'),
           content: <ExecutionTab id={card.id} />,
@@ -271,6 +275,7 @@ export function AgreementFormPage() {
         } : undefined}
       >
         <div className="space-y-6">
+          <MigratedNote migrated={card.is_migrated} />
           {card.status === 'rework' && card.rework_comment && (
             <div role="status" className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -494,8 +499,9 @@ export function AgreementFormPage() {
 
 function BackLink() {
   const { t } = useTranslation();
+  const back = useRegistryBackHref(AGREEMENTS_BASE);
   return (
-    <Link to={AGREEMENTS_BASE} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+    <Link to={back} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" />
       {t('bpp.agreements.back', 'К договорам')}
     </Link>

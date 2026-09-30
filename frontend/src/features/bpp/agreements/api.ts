@@ -48,6 +48,8 @@ export interface CounterpartyBrief {
 }
 
 export interface AgreementCard {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: string;
@@ -87,6 +89,8 @@ export interface AgreementCard {
 }
 
 export interface AgreementRow {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: string;

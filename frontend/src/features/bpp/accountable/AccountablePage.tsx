@@ -29,9 +29,8 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
 import { lessThan } from '../budgets/cents';
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type { RegistryColumn, RegistryFilter } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
 import { formatMoney, parseMoneyInput } from '../format';
@@ -41,6 +40,7 @@ import { bppRequestsApi, type InitiatorRole } from '../requests/api';
 import {
   ACCOUNTABLE_BASE, ACCOUNTABLE_ENDPOINT, bppAccountableApi, type AccountableRow,
 } from './api';
+import { MigratedBadge } from '../migration/MigratedBadge';
 
 const GOAL_MAX = 2000;
 const ROLE_TITLES: Record<InitiatorRole, string> = { sn: 'Снабженец', pm: 'Руководитель проекта' };
@@ -215,7 +215,12 @@ export function AccountablePage() {
   });
 
   const columns = useMemo<RegistryColumn<AccountableRow>[]>(() => [
-    { key: 'number', title: t('bpp.accountable.number', 'Номер'), required: true },
+    {
+      key: 'number',
+      title: t('bpp.accountable.number', 'Номер'),
+      required: true,
+      render: (row) => <span>{row.number}<MigratedBadge migrated={row.is_migrated} /></span>,
+    },
     { key: 'accountable_user_name', title: t('bpp.accountable.person', 'Подотчётное лицо') },
     { key: 'project_code', title: t('bpp.accountable.project', 'Проект') },
     { key: 'article_name', title: t('bpp.accountable.article', 'Статья') },
@@ -225,9 +230,9 @@ export function AccountablePage() {
       render: (row) => <span className="line-clamp-2 max-w-xs">{row.goal}</span>,
     },
     moneyColumn<AccountableRow>('amount', t('bpp.accountable.amount', 'Сумма'),
-      (row) => row.amount, { currency: (row) => row.currency, total: 'amount' }),
+      { currency: 'currency', totalKey: 'amount' }),
     moneyColumn<AccountableRow>('reported_amount', t('bpp.accountable.reported', 'Подтверждено отчётами'),
-      (row) => row.reported_amount, { currency: (row) => row.currency }),
+      { currency: 'currency' }),
     statusColumn<AccountableRow>(t, 'accountable'),
     currentHoldersColumn<AccountableRow>(t),
   ], [t]);

@@ -13,6 +13,8 @@ HTML не зависит от WeasyPrint и проверяется всегда.
 from __future__ import annotations
 
 import os
+import re
+import zlib
 
 import pytest
 
@@ -77,6 +79,28 @@ def _weasyprint_missing() -> str | None:
                 f"проверяется в Docker/CI ({exc})")
 
 
+def _with_inflated_streams(data: bytes) -> bytes:
+    """PDF вместе с распакованными потоками FlateDecode. WeasyPrint кладёт
+    словари шрифтов в сжатые потоки объектов (``/ObjStm``), и в сырых байтах
+    ``/Identity-H`` не видно, хотя шрифт вложен."""
+    chunks = [data]
+    for match in re.finditer(rb"stream\r?\n(.*?)endstream", data, re.S):
+        try:
+            chunks.append(zlib.decompressobj().decompress(match.group(1)))
+        except zlib.error:
+            continue  # поток не FlateDecode — в нём словарей нет
+    return b"\n".join(chunks)
+
+
+def test_with_inflated_streams_sees_dictionaries_inside_object_streams():
+    packed = b"%PDF-1.7\n5 0 obj\n<</Type /ObjStm /Filter /FlateDecode>>\nstream\n" \
+        + zlib.compress(b"<</Encoding /Identity-H>> <</FontFile2 7 0 R>>") \
+        + b"\nendstream\nendobj\n%%EOF\n"
+    assert b"/Identity-H" not in packed
+    expanded = _with_inflated_streams(packed)
+    assert b"/Identity-H" in expanded and b"/FontFile2" in expanded
+
+
 def test_render_pdf_starts_with_signature_and_embeds_a_unicode_font():
     reason = _weasyprint_missing()
     if reason is not None:
@@ -91,9 +115,11 @@ def test_render_pdf_starts_with_signature_and_embeds_a_unicode_font():
     # Поэтому «кириллица встроена» проверяется тем, что для неё вообще есть
     # чем рендериться: PDF содержит вложенный Unicode-шрифт (CID + FontFile2),
     # а не только латинский base14 — без этого кириллица ушла бы «тофу»
-    # (пустыми прямоугольниками) без единой ошибки.
-    assert b"/Identity-H" in data
-    assert b"/FontFile2" in data
+    # (пустыми прямоугольниками) без единой ошибки. Словари шрифта WeasyPrint
+    # кладёт в сжатые потоки объектов — ищем и в распакованных.
+    expanded = _with_inflated_streams(data)
+    assert b"/Identity-H" in expanded
+    assert b"/FontFile2" in expanded
 
 
 def test_pdf_response_is_inline_not_attachment():

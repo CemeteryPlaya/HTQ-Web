@@ -445,7 +445,8 @@ def test_authors_are_invoice_authors_visible_to_the_actor(company_context):
     """Список фильтра «Автор счёта» — из счетов реестра, а не из кадров: у
     ролей дашборда нет прав ``hr``. Видимость — реестра (СН — только свои),
     остальные фильтры дашборда список не сужают; автора без учётки — ``name:
-    null``."""
+    null``. Перенесённый из «Договоров» счёт виден в реестре с пометкой
+    (D-B61-8) — и его автор в списке."""
     slug = company_context["slug"]
     s.user(s.SN, "snab")
     s.user(s.PM, "arman")
@@ -454,10 +455,10 @@ def test_authors_are_invoice_authors_visible_to_the_actor(company_context):
     _inv(InvoiceStatus.DRAFT, 300, author_id=s.PM)
     _inv(InvoiceStatus.PAID, 400, author_id=99901)            # учётки нет
     Invoice.objects.filter(pk=_inv(InvoiceStatus.PAID, 500, author_id=s.SN2).pk).update(
-        is_migrated=True)                                    # перенесённый — не в реестре
+        is_migrated=True)                          # перенесённый — в реестре (D-B61-8)
     fd = invoice_flow._fd(slug)
     expected = [{"id": s.PM, "name": "Тест Arman"}, {"id": s.SN, "name": "Тест Snab"},
-                {"id": 99901, "name": None}]
+                {"id": s.SN2, "name": None}, {"id": 99901, "name": None}]
 
     assert dashboard.authors(fd) == expected
     narrowed = dashboard.Filters(project_id=str(OTHER_PROJECT), author_id=s.SN)

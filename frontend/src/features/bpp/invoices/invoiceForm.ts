@@ -15,6 +15,7 @@ import { parseQtyInput } from '../requests/requestForm';
 
 import type { CounterpartyBrief } from '../agreements/api';
 import type { InvoiceCard, InvoicePatch } from './api';
+import type { HistoryFieldOptions } from '../core/HistoryTab';
 
 export const COMMENT_MAX = 1000;
 
@@ -168,3 +169,21 @@ export function overThreshold(form: InvoiceFormState, card: InvoiceCard,
   const kzt = rate ? toKzt(amount, rate) : null;
   return kzt === null ? null : lessThan(threshold, kzt);
 }
+
+/** Подписи и денежные поля «Истории изменений» счёта (снимок правки
+ * `services/invoices/invoices.py::_snapshot` и факты событий — отправка,
+ * решение ФД, отметки оплаты, закрывающие документы). */
+export const INVOICE_HISTORY_FIELDS: HistoryFieldOptions = {
+  fieldLabels: {
+    basis: 'Основание', agreement_id: 'Договор', counterparty_id: 'Контрагент',
+    ext_number: 'Номер счёта контрагента', ext_date: 'Дата счёта', amount: 'Сумма',
+    amount_kzt: 'Сумма в тенге', currency_code: 'Валюта', rate: 'Курс',
+    rate_source: 'Источник курса', with_vat: 'С НДС', vat_rate: 'Ставка НДС, %',
+    vat_source: 'Источник ставки НДС', purchase_type: 'Тип приобретения',
+    is_advance: 'Аванс', due_date: 'Срок оплаты', lines: 'Строки', number: 'Номер',
+    planned_pay_date: 'Плановая дата оплаты', pay_date: 'Дата оплаты', pp_number: '№ п/п',
+    status: 'Статус', docs: 'Документы', on_behalf: 'От имени автора',
+    possible_split: 'Возможное дробление',
+  },
+  moneyFields: ['amount', 'amount_kzt'],
+};

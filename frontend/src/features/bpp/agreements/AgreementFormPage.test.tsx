@@ -24,6 +24,7 @@ vi.mock('@/api/client', () => ({ default: { get, post, patch, delete: vi.fn() } 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 vi.mock('../core/HistoryTab', () => ({ HistoryTab: () => <div>История</div> }));
 vi.mock('../core/ApprovalTab', () => ({ ApprovalTab: () => <div>Согласование</div> }));
+vi.mock('@/components/files/FilesPanel', () => ({ FilesPanel: () => <div>Файлы</div> }));
 
 const ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 
