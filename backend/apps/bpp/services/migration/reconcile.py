@@ -204,7 +204,41 @@ class Reconciliation:
         if wrong:
             raise MigrationStop("остатки не сошлись:\n  " + "\n  ".join(wrong))
 
+    # ── ключи книги CashFlow ──────────────────────────────────────────
+
+    def cashflow_keys(self) -> None:
+        """D-B62-4: документ «Договоров», загруженный когда-то из книги
+        CashFlow, несёт её ключ — LARK договора или отпечаток ``ops:`` строки.
+        Ключ связывается с тем, чем документ стал: перенесённым документом или
+        сальдо статьи (закрытый). Импорт книги в модуль (B6.2) такие ключи
+        пропускает — иначе книга, загруженная после переноса, завела бы их
+        второй раз, а закрытые посчитала бы дважды: в сальдо и документом."""
+        snapshot = self.ctx.snapshot
+        agreement_line = {row["id"]: row["budget_line_id"] for row in snapshot["agreements"]}
+        groups = (
+            ("cashflow.agreement", "contracts.agreement", "bpp.agreement",
+             snapshot["agreements"], lambda row: row["budget_line_id"]),
+            ("cashflow.operation", "contracts.invoice", "bpp.invoice",
+             snapshot["invoices"], lambda row: row["budget_line_id"]),
+            ("cashflow.operation", "contracts.contract_payment", "bpp.invoice",
+             [row for row in snapshot["payments"] if row["kind"] == "contract_payment"],
+             lambda row: agreement_line[row["agreement_id"]]),
+        )
+        for key_type, source_type, target_type, rows, line_of in groups:
+            for row in rows:
+                external_id = (row.get("external_id") or "").strip()
+                if not external_id:
+                    continue
+                target = links.target_of(source_type, row["id"], target_type)
+                if target:
+                    links.link(key_type, external_id, target_type, target)
+                    continue
+                key = self.key_of_line.get(line_of(row))
+                if key is not None:
+                    links.link(key_type, external_id, "bpp.saldo", saldo_key(*key))
+
     def run(self) -> None:
         self.collect()
         self.saldo()
         self.check()
+        self.cashflow_keys()

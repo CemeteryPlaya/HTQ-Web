@@ -11,6 +11,10 @@
 уходит в сальдо статьи (D-B61-1), вклад открытых — в их новые документы.
 Поэтому правила вклада повторяют ``committed_map`` буквально, включая его
 особенности (оплаты открытого договора считаются и у договора-поступления).
+
+``external_id`` — ключ книги CashFlow (идентификатор LARK договора, отпечаток
+``ops:…`` строки операции): по нему импорт книги в модуль (B6.2) узнаёт уже
+перенесённое и не заводит его второй раз.
 """
 
 from __future__ import annotations
@@ -66,6 +70,7 @@ def snapshot() -> dict:
                 "posting_number": row.posting_number, "paid_by": row.paid_by,
                 "paid_at": row.paid_at, "document_date": getattr(row, "document_date", None),
                 "created_by": row.created_by, "created_at": row.created_at,
+                "external_id": getattr(row, "external_id", "") or "",
                 "committed": _payment_committed(row, agreement),
             })
 
@@ -117,6 +122,7 @@ def snapshot() -> dict:
             "end_date": agr.end_date, "signed_date": agr.signed_date, "subject": agr.subject,
             "file_id": agr.file_id, "manager_user_id": agr.manager_user_id,
             "created_by": agr.created_by, "created_at": agr.created_at,
+            "external_id": agr.external_id,
             "committed": _agreement_committed(agr),
             "items": [{"line_no": item.line_no, "name": item.name, "unit": item.unit,
                        "quantity": item.quantity, "amount": item.amount}
@@ -128,7 +134,7 @@ def snapshot() -> dict:
             "amount": inv.amount, "currency": inv.currency, "file_id": inv.file_id,
             "status": inv.status, "approval_state": inv.approval_state,
             "document_date": inv.document_date, "created_by": inv.created_by,
-            "created_at": inv.created_at,
+            "created_at": inv.created_at, "external_id": inv.external_id,
             "committed": (inv.amount if inv.status in budget_calc.INVOICE_COMMITTING_STATUSES
                           else ZERO),
         } for inv in m.Invoice.objects.order_by("created_at", "id")],
