@@ -454,3 +454,42 @@ def test_http_create_patch_and_registry_tabs(company_context):
     tab = client.get(f"{BASE}/invoices?tab=fd", **s.auth(slug, s.FD)).json()
     assert [row["number"] for row in tab["items"]] == [card["number"]]
     assert client.get(f"{BASE}/invoices?tab=to_pay", **s.auth(slug, s.FD)).json()["total"] == 0
+
+
+def test_fd_cannot_cancel_invoice_while_bank_holds_payment(company_context):
+    """Выписка пришла раньше отметки БУХ: автосверка поставила действующее
+    сопоставление на счёт «К оплате» (D-S4-3). Отмена такого счёта
+    освободила бы статью бюджета, а «Оплачено факт» платёж продолжал бы
+    считать, — поэтому 409 ``E-STATE-01``, как у отмены отметки оплаты, и
+    «Отменить» нет в действиях. Отменили сопоставление — счёт отменяется."""
+    from apps.bpp.models import PaymentMatch
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    _, _, inv = _to_pay(slug, 1000)
+    imp = bank.loaded_import(bank.org_account(), [
+        {"amount": "1000", "purpose": f"Оплата по счёту {inv.number}",
+         "recipient_bin": "100000000001"}])
+    matching.auto_match(imp.pk)
+    assert PaymentMatch.objects.get(invoice=inv).state == "active"
+    inv.refresh_from_db()
+    assert inv.paid_bank_amount == Decimal("1000")
+    assert not inv.payments.exists()                 # отметки БУХ ещё нет
+
+    fd = _fd(slug)
+    assert "cancel" not in service.allowed_actions(fd, inv)
+    with pytest.raises(DomainError) as exc:
+        service.cancel(fd, inv.id, expected_version=None, comment="Счёт выставлен ошибочно")
+    assert (exc.value.code, exc.value.status) == ("E-STATE-01", 409)
+    assert inv.number in exc.value.message and "сопоставление" in exc.value.message
+    inv.refresh_from_db()
+    assert inv.status == InvoiceStatus.TO_PAY
+
+    line = imp.lines.get()
+    matching.cancel_match(s.FD, line.pk, "Платёж не по этому счёту")
+    inv.refresh_from_db()
+    assert inv.paid_bank_amount == 0
+    assert "cancel" in service.allowed_actions(fd, inv)
+    inv = service.cancel(fd, inv.id, expected_version=None, comment="Счёт выставлен ошибочно")
+    assert inv.status == InvoiceStatus.CANCELLED
