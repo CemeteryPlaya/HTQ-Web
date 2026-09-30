@@ -1,4 +1,4 @@
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 
 
 class BppConfig(AppConfig):
@@ -19,3 +19,9 @@ class BppConfig(AppConfig):
         approval_hooks.register()
         # Документы модуля — владельцы файлов платформенной apps.files (A).
         file_owners.register()
+        # Раздел ежедневной сводки «ждут от вас закрывающих документов»
+        # (A3.2, D-13) — только там, где центр уведомлений установлен.
+        if apps.is_installed("apps.notifications"):
+            from . import digest
+
+            digest.register()

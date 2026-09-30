@@ -80,3 +80,49 @@ def test_links_are_absolute_and_lead_to_existing_pages(monkeypatch, settings):
     assert "https://htq-kz.htq.group/bpp/r/45" in note.text
     assert "https://htq.group/x" in note.text
     assert note.url == "/signoff"  # входящие согласования — маршрут /signoff
+
+
+@pytest.mark.django_db
+def test_sectioned_source_goes_under_its_heading_after_plain_items(monkeypatch):
+    """Источник с ``section`` — отдельный раздел письма после позиций без
+    раздела; источник без позиций заголовка не печатает."""
+    interface.register_digest_source(
+        "docs", lambda user_id: [{"title": "СЧ-2026-000001", "url": "/a", "since": ""}],
+        tenant=False, section="Ждут от вас закрывающих документов")
+    interface.register_digest_source(
+        "plain", lambda user_id: [{"title": "Заявка", "url": "/b", "since": ""}], tenant=False)
+    interface.register_digest_source("empty", lambda user_id: [], tenant=False,
+                                     section="Пустой раздел")
+    monkeypatch.setattr(digest, "_recipients", lambda: [7])
+    digest.send()
+    note = Notification.objects.get(recipient_id=7)
+    # Смешанная сводка — заголовок и ссылка решений, N — только решения.
+    assert note.title == "Ждут вашего решения: 1"
+    assert note.url == "/signoff"
+    lines = note.text.splitlines()
+    assert lines[0].startswith("• Заявка")
+    assert lines[1:3] == ["", "Ждут от вас закрывающих документов:"]
+    assert lines[3].startswith("• СЧ-2026-000001")
+    assert not any("Пустой раздел" in line for line in lines)
+
+
+@pytest.mark.django_db
+def test_sections_only_digest_has_a_neutral_title_and_its_own_link(monkeypatch):
+    """Без решений сводка не зовёт «решать» и не ведёт в /signoff: одна
+    позиция — ссылка на неё, несколько — на страницу первого раздела."""
+    items = {7: ["/bpp/invoices/1"], 8: ["/bpp/invoices/1", "/bpp/invoices/2"]}
+    interface.register_digest_source(
+        "docs", lambda user_id: [{"title": f"СЧ-{n}", "url": url, "since": ""}
+                                 for n, url in enumerate(items[user_id])],
+        tenant=False, section="Ждут от вас закрывающих документов",
+        landing_url="/bpp/invoices")
+    monkeypatch.setattr(digest, "_recipients", lambda: [7, 8])
+    assert digest.send() == 2
+
+    one = Notification.objects.get(recipient_id=7)
+    assert one.title == "Ждут вашего внимания: 1"
+    assert one.url == "/bpp/invoices/1"
+    two = Notification.objects.get(recipient_id=8)
+    assert two.title == "Ждут вашего внимания: 2"
+    assert two.url == "/bpp/invoices"
+    assert two.text.splitlines()[0] == "Ждут от вас закрывающих документов:"

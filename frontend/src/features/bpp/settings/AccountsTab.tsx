@@ -12,6 +12,12 @@
  * Так счёт переводят на другой шаблон — без этого шаблон, по которому
  * разбирается действующий счёт, не архивировать (409 `E-STATE-01`). IBAN
  * счёта, по которому уже загружены выписки, сервер менять не даст.
+ *
+ * Валюта — выбор из справочника валют (`refdata`, только действующие,
+ * `?active=1`; справочник ведёт управляющая компания, D-03): свободный текст
+ * пропускал любой трёхбуквенный код, которого в справочнике нет. Новый счёт —
+ * в тенге, если тенге есть среди действующих. Валюта счёта, ушедшая в архив
+ * справочника, в правке остаётся видна выбранной с меткой «архив».
  */
 import { useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,6 +41,7 @@ import { errorCode, errorDetail, reportApiError } from '@/lib/apiError';
 import { errorFields } from '../counterparties/errors';
 import { checkBic, checkIban } from '../counterparties/validation';
 import { useIdempotentAction } from '../core/useIdempotentAction';
+import { refdataApi, refdataKeys } from '../refdata/api';
 
 import {
   ACCOUNTS_KEY, bankSettingsApi, settingsTabHref, TEMPLATES_KEY,
@@ -42,7 +49,10 @@ import {
 } from './api';
 import { FORMAT_LABELS } from './templateFields';
 
-const EMPTY: AccountInput = { iban: '', bic: '', bank_name: '', currency: 'KZT', template_id: '' };
+const EMPTY: AccountInput = { iban: '', bic: '', bank_name: '', currency: '', template_id: '' };
+
+/** Валюта нового счёта, пока её не выбрали, — если она есть в справочнике. */
+const DEFAULT_CURRENCY = 'KZT';
 
 type Errors = Partial<Record<keyof AccountInput | 'form', string>>;
 
@@ -99,13 +109,39 @@ export function AccountsTab({ canEdit }: Props) {
     queryFn: () => bankSettingsApi.templates(true),
     enabled: canEdit,
   });
+  // Тот же ключ, что у `useActiveRefdata('currencies')`, — кэш общий; без
+  // права правки формы нет, и справочник не нужен.
+  const currenciesQuery = useQuery({
+    queryKey: refdataKeys.list('currencies', { active: true }),
+    queryFn: () => refdataApi.currencies.list({ active: true }),
+    staleTime: 5 * 60 * 1000,
+    enabled: canEdit,
+  });
   const [mode, setMode] = useState<Mode>({ kind: 'closed' });
   const [values, setValues] = useState<AccountInput>(EMPTY);
   const [errors, setErrors] = useState<Errors>({});
 
+  const activeCurrencies = currenciesQuery.data ?? [];
+  // Новый счёт — в тенге, пока валюту не выбрали сами (если тенге действует).
+  const currency = values.currency || (
+    mode.kind === 'new' && activeCurrencies.some((item) => item.code === DEFAULT_CURRENCY)
+      ? DEFAULT_CURRENCY : '');
+  // Валюта счёта могла уйти в архив справочника — в правке она всё равно
+  // видна выбранной, а не пустым полем.
+  const savedCurrency = mode.kind === 'edit' ? mode.account.currency : '';
+  const currencyOptions = [
+    ...activeCurrencies.map((item) => ({ code: item.code, label: `${item.code} — ${item.name}` })),
+    ...(savedCurrency && !activeCurrencies.some((item) => item.code === savedCurrency)
+      ? [{
+        code: savedCurrency,
+        label: `${savedCurrency} (${t('bpp.bankSettings.currencyArchived', 'архив')})`,
+      }]
+      : []),
+  ];
+
   const save = useIdempotentAction((key) => {
     const body: AccountInput = {
-      ...values, iban: checkIban(values.iban).value ?? values.iban,
+      ...values, currency, iban: checkIban(values.iban).value ?? values.iban,
       bic: checkBic(values.bic).value ?? values.bic,
     };
     if (mode.kind !== 'edit') return bankSettingsApi.createAccount(key, body);
@@ -143,6 +179,7 @@ export function AccountsTab({ canEdit }: Props) {
     if (!iban.ok) found.iban = iban.message;
     const bic = checkBic(values.bic);
     if (!bic.ok) found.bic = bic.message;
+    if (!currency) found.currency = t('bpp.bankSettings.currencyRequired', 'Выберите валюту счёта');
     if (!values.template_id) {
       found.template_id = t('bpp.bankSettings.templateRequired', 'Выберите шаблон выписки');
     }
@@ -168,7 +205,7 @@ export function AccountsTab({ canEdit }: Props) {
     );
   };
 
-  const input = (key: 'iban' | 'bic' | 'bank_name' | 'currency', label: string, mono = false) => (
+  const input = (key: 'iban' | 'bic' | 'bank_name', label: string, mono = false) => (
     <div className="space-y-1.5">
       <Label htmlFor={`org-acc-${key}`}>{label}</Label>
       <Input
@@ -282,7 +319,44 @@ export function AccountsTab({ canEdit }: Props) {
             {input('iban', 'IBAN', true)}
             {input('bic', t('bpp.bankSettings.bic', 'БИК'), true)}
             {input('bank_name', t('bpp.bankSettings.bank', 'Банк'))}
-            {input('currency', t('bpp.bankSettings.currency', 'Валюта'))}
+            <div className="space-y-1.5">
+              <Label htmlFor="org-acc-currency">{t('bpp.bankSettings.currency', 'Валюта')}</Label>
+              <Select
+                value={currency}
+                onValueChange={(value) => set('currency', value)}
+                disabled={save.pending || currencyOptions.length === 0}
+              >
+                <SelectTrigger
+                  id="org-acc-currency"
+                  aria-invalid={errors.currency ? true : undefined}
+                >
+                  <SelectValue placeholder={t('bpp.bankSettings.currencyPlaceholder', 'Выберите валюту')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {currencyOptions.map((option) => (
+                    <SelectItem key={option.code} value={option.code}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Валюты ведёт управляющая компания (D-03): ссылка — на вкладку
+                  справочника, где их заводят и возвращают из архива. */}
+              <PrerequisiteNotice
+                variant="inline"
+                items={[{
+                  when: currenciesQuery.isSuccess && activeCurrencies.length === 0,
+                  text: t('bpp.bankSettings.noActiveCurrencies',
+                    'Действующих валют в справочнике нет — его ведёт управляющая компания'),
+                  to: '/bpp/refdata?tab=currencies',
+                  linkText: t('bpp.refdata.title', 'Справочники'),
+                }]}
+              />
+              {currenciesQuery.isError && (
+                <p className="text-xs text-destructive">
+                  {t('bpp.bankSettings.currenciesLoadError', 'Не удалось загрузить справочник валют. Обновите страницу.')}
+                </p>
+              )}
+              {errors.currency && <p className="text-xs text-destructive">{errors.currency}</p>}
+            </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="org-acc-template">{t('bpp.bankSettings.template', 'Шаблон выписки')}</Label>
               <Select

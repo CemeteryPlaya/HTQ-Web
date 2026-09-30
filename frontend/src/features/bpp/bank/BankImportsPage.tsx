@@ -12,9 +12,8 @@
  * простого заголовка. «Статус» из общего набора колонок сортируемый — здесь
  * это снято явно.
  *
- * Быстрого поиска у ручки нет, поэтому и поля поиска на экране нет
- * (`searchable={false}`): загрузки находят фильтрами по счёту, периоду и
- * статусу.
+ * Быстрый поиск — номер загрузки (`ВП-…`) или комментарий: ручка понимает
+ * `q` (как реестр контрагентов), выгрузка идёт по той же выборке.
  *
  * «Загрузить выписку» — по узлу `bpp.bank` `edit` (ФД); БУХ смотрит.
  */
@@ -113,7 +112,8 @@ export function BankImportsPage() {
         columns={columns}
         filters={filters}
         exportName="bank-imports"
-        searchable={false}
+        searchParam="q"
+        searchPlaceholder={t('bpp.bank.search', 'Номер или комментарий')}
         defaultHidden={['matched', 'unmatched']}
         rowHref={(row) => bankImportHref(row.id)}
         rowLabel={(row) => row.number}

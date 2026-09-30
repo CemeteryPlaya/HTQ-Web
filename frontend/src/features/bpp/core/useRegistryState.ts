@@ -11,7 +11,11 @@
  * со строки документа возвращает туда же, откуда ушли, ссылкой на выборку
  * можно поделиться, а переход из меню (адрес без параметров) начинает
  * реестр сначала. Адрес правится с `replace` — листание страниц не
- * засоряет историю браузера.
+ * засоряет историю браузера. Негодный номер в адресе (`?page=abc`, `0`,
+ * `-2`, `1`, `02`) сразу переписывается в канонический вид (первая страница
+ * — без параметра), тоже с `replace`: такая ссылка не должна жить в адресе
+ * и уходить дальше при копировании. Номер за пределами выборки прижимает к
+ * последней странице реестр (`BppRegistry`), и адрес следует за ним.
  *
  * Быстрый поиск и текстовые фильтры уходят в запрос с задержкой
  * `INPUT_DEBOUNCE_MS` после последнего нажатия: поле показывает набранное
@@ -72,6 +76,14 @@ const pageFromUrl = (params: URLSearchParams): number => {
   return Number.isInteger(value) && value > 1 ? value : 1;
 };
 const searchFromUrl = (params: URLSearchParams): string => params.get(URL_SEARCH) ?? '';
+/** В адресе номер страницы не в каноническом виде: не число, не больше 1
+ * (первая страница — без параметра) или с лишними знаками (`02`, `2.0`). */
+const pageMalformedInUrl = (params: URLSearchParams): boolean => {
+  const raw = params.get(URL_PAGE);
+  if (raw === null) return false;
+  const page = pageFromUrl(params);
+  return page === 1 || raw !== String(page);
+};
 
 const isPageSize = (value: unknown): value is PageSize =>
   PAGE_SIZES.includes(value as PageSize);
@@ -198,6 +210,7 @@ export function useRegistryState(
   // применённый через паузу, затёр бы буквы, набранные после неё.
   const urlPage = url ? pageFromUrl(url.params) : null;
   const urlSearch = url ? searchFromUrl(url.params) : null;
+  const pageMalformed = url ? pageMalformedInUrl(url.params) : false;
   const written = useRef({ page: urlPage, search: urlSearch });
   const setUrlRef = useRef(url?.setParams);
   setUrlRef.current = url?.setParams;
@@ -217,12 +230,13 @@ export function useRegistryState(
     setAppliedSearch(urlSearch);
   }, [urlSearch]);
 
-  // Состояние → адрес: применённый поиск (не каждая буква) и страница.
+  // Состояние → адрес: применённый поиск (не каждая буква) и страница;
+  // негодный `?page=` — переписать сразу, даже если состояние то же.
   useEffect(() => {
     const setParams = setUrlRef.current;
     if (!setParams) return;
     const text = appliedSearch.trim();
-    if (written.current.page === page && written.current.search === text) return;
+    if (written.current.page === page && written.current.search === text && !pageMalformed) return;
     written.current = { page, search: text };
     setParams((current) => {
       const next = new URLSearchParams(current);
@@ -230,7 +244,7 @@ export function useRegistryState(
       if (text) next.set(URL_SEARCH, text); else next.delete(URL_SEARCH);
       return next;
     }, { replace: true });
-  }, [page, appliedSearch]);
+  }, [page, appliedSearch, pageMalformed]);
 
   // Любая смена выборки начинает её с первой страницы: седьмой страницы
   // новой выборки может не быть вовсе.

@@ -175,7 +175,19 @@ def owner_deleted(owner, *, actor_id: int | None) -> None:
 
 def download_url(file_id: str, *, user_id: int, request=None) -> str:
     """Ссылка на версию ``file_id``; выдача пишется в журнал файловых
-    операций (кто, а с ``request`` — ещё IP и user-agent)."""
+    операций (кто, а с ``request`` — ещё IP и user-agent).
+
+    ⚠️ Права здесь НЕ проверяются — ни на документ, ни на тип файла.
+    Путь «из кода» (``apps.files.interface.download_link``, как и
+    ``attach_bytes``/``replace_bytes`` у загрузки) доверяет проверкам
+    владельца и для загрузки, и для скачивания: колбэки ``can_view`` и
+    ``can_view_type`` владельца подсистема применяет только на своих
+    ручках ``/api/files/v1`` (по токену), а сюда токен не приходит. Поэтому
+    вызывающий сервис документа до вызова сам убеждается, что человек
+    видит документ, а владелец с видимостью по типу файла (зарегистрирован
+    с ``can_view_type``) — ещё и что он видит тип этой версии
+    (``get_file(owner, file_id)["file_type"]``): иначе ссылка откроет файл
+    типа, который панель документов этому человеку не показывает."""
     version = files.find_version(file_id)
     if version is None:
         raise _not_found()
