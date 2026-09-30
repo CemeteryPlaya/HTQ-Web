@@ -34,7 +34,7 @@ from apps.bpp.models import (
 )
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
-from apps.bpp.services.alternatives import kpi
+from apps.bpp.services.alternatives import kpi, lifecycle
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
 from apps.bpp.services.core.errors import check_version
@@ -655,6 +655,7 @@ def scope_of(agreement_id) -> str:
 
 def on_started(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.ON_REVIEW)
+    lifecycle.notify_buyers("agreement", agreement_id)  # СН: можно предложить альтернативу (A5.1)
 
 
 def on_approved(agreement_id) -> None:
@@ -673,11 +674,15 @@ def on_approved(agreement_id) -> None:
                                                  "supplement": agr.number})
     if agr.counterparty_id and parent is None:
         counterparties.record_success(agr.counterparty_id)
+    lifecycle.close_for_source("agreement", agreement_id, lifecycle.NOT_SELECTED,
+                               reason=lifecycle.REASON_AGREEMENT_APPROVED)  # АП (A5.1)
     kpi.sync_for_document("agreement", agreement_id)  # KPI снабжения нового договора (A5.2)
 
 
 def on_rejected(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.REJECTED)
+    lifecycle.close_for_source("agreement", agreement_id, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_AGREEMENT_REJECTED)  # АП (A5.1)
     kpi.sync_for_document("agreement", agreement_id)
 
 
@@ -691,10 +696,15 @@ def _last_rework_comment(agreement_id) -> str:
 def on_rework(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(
         status=AgreementStatus.REWORK, rework_comment=_last_rework_comment(agreement_id))
+    lifecycle.close_for_source("agreement", agreement_id, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_RETURNED)  # АП (A5.1)
 
 
 def on_cancelled(agreement_id) -> None:
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.DRAFT)
+    # Отзыв автором (``withdraw``) идёт сюда же через ``cancel_process``.
+    lifecycle.close_for_source("agreement", agreement_id, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_AGREEMENT_WITHDRAWN)  # АП (A5.1)
     kpi.sync_for_document("agreement", agreement_id)
 
 

@@ -33,7 +33,7 @@ from apps.bpp.models import (
 )
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
-from apps.bpp.services.alternatives import kpi
+from apps.bpp.services.alternatives import kpi, lifecycle
 from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
@@ -669,6 +669,8 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
     inv.status, inv.status_comment = InvoiceStatus.CANCELLED, comment
     touch(inv, actor.user_id, "status", "status_comment")
     audit.record(inv, "cancelled", actor_id=actor.user_id, comment=comment)
+    lifecycle.close_for_source("invoice", inv.pk, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_INVOICE_CANCELLED)  # АП (A5.1)
     kpi.sync_for_document("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
     return inv
 
@@ -677,6 +679,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
 
 def on_started(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(status=InvoiceStatus.UNDER_REVIEW)
+    lifecycle.notify_buyers("invoice", invoice_id)  # СН: можно предложить альтернативу (A5.1)
 
 
 def on_approved(invoice_id) -> None:
@@ -686,11 +689,15 @@ def on_approved(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(
         status=InvoiceStatus.TO_PAY, fd_decided_at=timezone.now(), rework_comment="",
         planned_pay_date=inv.planned_pay_date or inv.due_date)
+    lifecycle.close_for_source("invoice", invoice_id, lifecycle.NOT_SELECTED,
+                               reason=lifecycle.REASON_INVOICE_PAY)  # АП (A5.1)
 
 
 def on_rejected(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(status=InvoiceStatus.NOT_PAYABLE,
                                                 fd_decided_at=timezone.now())
+    lifecycle.close_for_source("invoice", invoice_id, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_INVOICE_NOT_PAYABLE)  # АП (A5.1)
     kpi.sync_for_document("invoice", invoice_id)  # KPI снабжения нового счёта (A5.2)
 
 
@@ -705,6 +712,8 @@ def on_rework(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(
         status=InvoiceStatus.RETURNED, fd_decided_at=timezone.now(),
         rework_comment=_last_comment(invoice_id, "rework"))
+    lifecycle.close_for_source("invoice", invoice_id, lifecycle.ANNULLED,
+                               reason=lifecycle.REASON_RETURNED)  # АП (A5.1)
 
 
 def on_cancelled(invoice_id) -> None:
