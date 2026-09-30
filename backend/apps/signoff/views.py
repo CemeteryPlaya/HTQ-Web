@@ -94,9 +94,6 @@ class SignoffView(ApiView):
 
 
 read = method_decorator(api_view(methods=("GET",), auth="jwt"))
-admin_read = method_decorator(
-    api_view(methods=("GET",), auth="jwt", admin=True)
-)
 
 
 def write(method: str, body=None, status: int = 200, admin: bool = True):
@@ -133,18 +130,42 @@ def _visible_process_or_404(process_id: int, token) -> ApprovalProcess:
 # ═══════════════════════════════════════════════════════════════════════
 # Маршруты
 # ═══════════════════════════════════════════════════════════════════════
+#
+# Маршруты правит администратор платформы, а маршруты своего типа — ещё и
+# тот, кого назовёт предметная аппка (``registry.route_editors``; модуль БЗО,
+# В-09: ФД и АДМ). Поэтому ручки — ``admin=False`` с проверкой по типу
+# маршрута: гейт ``admin=True`` не знает, чей это маршрут.
+
+_ROUTES_FORBIDDEN = "Маршруты согласования этого типа документов правит администратор."
+
+
+def _route_edit_denied(token, subject_type: str):
+    """``None`` — владелец токена правит маршруты типа; иначе ответ 403."""
+    if registry.can_edit_routes(subject_type, token):
+        return None
+    return json_error(_ROUTES_FORBIDDEN, 403)
+
 
 class RouteCollectionView(SignoffView):
-    @admin_read
+    @read
     def get(self, request):
-        rows = routes.list_routes(subject_type=self.str_param("subject_type"),
+        subject_type = self.str_param("subject_type")
+        if not request.token.is_elevated:
+            editable = registry.route_editable_types(request.token)
+            if not editable or (subject_type and subject_type not in editable):
+                return json_error(_ROUTES_FORBIDDEN, 403)
+        rows = routes.list_routes(subject_type=subject_type,
                                   is_active=self.bool_param("is_active"),
                                   scope=self.request.GET.get("scope"))
+        if not request.token.is_elevated:
+            rows = [row for row in rows if row.subject_type in editable]
         return [schemas.RouteRead.model_validate(routes.serialize_route(row))
                 for row in rows]
 
-    @write("POST", body=schemas.RouteCreate, status=201)
+    @write("POST", body=schemas.RouteCreate, status=201, admin=False)
     def post(self, request, data: schemas.RouteCreate):
+        if (denied := _route_edit_denied(request.token, data.subject_type)) is not None:
+            return denied
         try:
             route = routes.create_route(**data.model_dump())
         except CONFLICTS as exc:
@@ -153,15 +174,20 @@ class RouteCollectionView(SignoffView):
 
 
 class RouteDetailView(SignoffView):
-    @admin_read
+    @read
     def get(self, request, route_id: int):
+        route = routes.get_route_or_404(route_id)
+        if (denied := _route_edit_denied(request.token, route.subject_type)) is not None:
+            return denied
         # ``gaps=True`` только здесь: карточка одного маршрута — это экран
         # редактора, ради которого подсказка и считается.
-        return schemas.RouteRead.model_validate(
-            routes.serialize_route(routes.get_route_or_404(route_id), gaps=True))
+        return schemas.RouteRead.model_validate(routes.serialize_route(route, gaps=True))
 
-    @write("PATCH", body=schemas.RouteUpdate)
+    @write("PATCH", body=schemas.RouteUpdate, admin=False)
     def patch(self, request, route_id: int, data: schemas.RouteUpdate):
+        route = routes.get_route_or_404(route_id)
+        if (denied := _route_edit_denied(request.token, route.subject_type)) is not None:
+            return denied
         try:
             # Только присланные поля: у должности эскалации null значит «убрать».
             route = routes.update_route(route_id, **data.model_dump(exclude_unset=True))
@@ -169,8 +195,11 @@ class RouteDetailView(SignoffView):
             return self.conflict(exc)
         return schemas.RouteRead.model_validate(routes.serialize_route(route))
 
-    @write("DELETE")
+    @write("DELETE", admin=False)
     def delete(self, request, route_id: int):
+        route = routes.get_route_or_404(route_id)
+        if (denied := _route_edit_denied(request.token, route.subject_type)) is not None:
+            return denied
         routes.delete_route(route_id)
         return HttpResponse(status=204)
 
@@ -178,8 +207,11 @@ class RouteDetailView(SignoffView):
 class RouteStagesView(SignoffView):
     """Добавление этапа в маршрут."""
 
-    @write("POST", body=schemas.StageCreate, status=201)
+    @write("POST", body=schemas.StageCreate, status=201, admin=False)
     def post(self, request, route_id: int, data: schemas.StageCreate):
+        route = routes.get_route_or_404(route_id)
+        if (denied := _route_edit_denied(request.token, route.subject_type)) is not None:
+            return denied
         try:
             stage = routes.add_stage(route_id, **data.model_dump())
         except CONFLICTS as exc:
@@ -188,13 +220,18 @@ class RouteStagesView(SignoffView):
 
 
 class StageDetailView(SignoffView):
-    @admin_read
+    @read
     def get(self, request, stage_id: int):
-        return schemas.StageRead.model_validate(
-            routes.serialize_stage(routes.get_stage_or_404(stage_id)))
+        stage = routes.get_stage_or_404(stage_id)
+        if (denied := _route_edit_denied(request.token, stage.route.subject_type)) is not None:
+            return denied
+        return schemas.StageRead.model_validate(routes.serialize_stage(stage))
 
-    @write("PATCH", body=schemas.StageUpdate)
+    @write("PATCH", body=schemas.StageUpdate, admin=False)
     def patch(self, request, stage_id: int, data: schemas.StageUpdate):
+        stage = routes.get_stage_or_404(stage_id)
+        if (denied := _route_edit_denied(request.token, stage.route.subject_type)) is not None:
+            return denied
         try:
             # exclude_unset: у списка согласующих None («не трогать») и
             # пустой список («стереть») — разные намерения, и model_dump()
@@ -205,8 +242,11 @@ class StageDetailView(SignoffView):
             return self.conflict(exc)
         return schemas.StageRead.model_validate(routes.serialize_stage(stage))
 
-    @write("DELETE")
+    @write("DELETE", admin=False)
     def delete(self, request, stage_id: int):
+        stage = routes.get_stage_or_404(stage_id)
+        if (denied := _route_edit_denied(request.token, stage.route.subject_type)) is not None:
+            return denied
         try:
             routes.delete_stage(stage_id)
         except CONFLICTS as exc:

@@ -74,6 +74,37 @@ def test_fd_and_gd_choose_the_option_of_an_agreement(company_context):
                       ("bpp.agreement", "", "Генеральный директор")}
 
 
+def test_fd_and_adm_edit_the_routes_of_the_module(company_context, client):
+    """В-09 (access/0018): маршруты документов модуля правят ФД и АДМ — и
+    только их; СН — нет, чужие маршруты — только администратор платформы."""
+    from apps.bpp.tests import stage2 as s
+
+    slug = company_context["slug"]
+    _positions()
+    _run(slug)
+    s.grant(slug, 31, "bpp-fd"), s.grant(slug, 32, "bpp-adm"), s.grant(slug, 33, "bpp-sn")
+    foreign = ApprovalRoute.objects.create(subject_type="contracts.agreement", name="Старый")
+    agreement = ApprovalRoute.objects.get(subject_type="bpp.agreement", scope="")
+    gd_stage = agreement.stages.get(name="Генеральный директор")
+    base = "/api/signoff/v1"
+
+    for editor in (31, 32):
+        listed = client.get(f"{base}/routes", **s.auth(slug, editor))
+        assert listed.status_code == 200
+        assert {row["subject_type"] for row in listed.json()} == {
+            "bpp.purchase_request", "bpp.agreement", "bpp.invoice",
+            "bpp.accountable_funds_request", "bpp.advance_report"}
+        changed = client.patch(f"{base}/stages/{gd_stage.pk}", {"votes_option": False},
+                               **s.auth(slug, editor))
+        assert changed.status_code == 200, changed.content
+        assert client.patch(f"{base}/routes/{foreign.pk}", {"name": "x"},
+                            **s.auth(slug, editor)).status_code == 403
+
+    assert client.get(f"{base}/routes", **s.auth(slug, 33)).status_code == 403
+    assert client.patch(f"{base}/routes/{agreement.pk}", {"name": "x"},
+                        **s.auth(slug, 33)).status_code == 403
+
+
 def test_dry_run_writes_nothing(company_context):
     _positions()
     assert "завести маршрут" in _run(company_context["slug"], "--dry-run")

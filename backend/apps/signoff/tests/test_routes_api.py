@@ -14,6 +14,7 @@ from apps.signoff.tests.helpers import (
     patch_json,
     post_json,
     token,
+    user_token,
 )
 from apps.signoff.tests.testapp.models import ProbeDoc
 
@@ -163,6 +164,59 @@ def test_reading_and_writing_routes_need_admin(client):
                           {"subject_type": SUBJECT, "name": "Ещё один"},
                           **auth(token()))
     assert forbidden.status_code == 403
+
+
+def test_subject_names_who_edits_its_routes(client, monkeypatch):
+    """Кроме администратора маршруты типа правит тот, кого назовёт сам тип
+    (``route_editors``; модуль БЗО, В-09): только маршруты этого типа."""
+    import dataclasses
+
+    from apps.signoff.services import registry
+    from apps.signoff.tests.testapp.models import UuidProbeDoc
+
+    editor = make_user("editor")
+    monkeypatch.setitem(registry._SUBJECTS, SUBJECT, dataclasses.replace(
+        registry.get_subject(SUBJECT),
+        route_editors=lambda tok: tok.user_id == editor.pk))
+    other_type = UuidProbeDoc.SIGNOFF_SUBJECT_TYPE
+    own = make_route([(1, "Этап", Quorum.ALL, [editor.pk])])
+    foreign = make_route([(1, "Этап", Quorum.ALL, [editor.pk])], subject_type=other_type)
+    as_editor = auth(user_token(editor))
+
+    listed = client.get(f"{BASE}/routes", **as_editor)
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [own.pk]
+    assert client.get(f"{BASE}/routes?subject_type={other_type}", **as_editor).status_code \
+        == 403
+
+    assert client.get(f"{BASE}/routes/{own.pk}", **as_editor).status_code == 200
+    assert patch_json(client, f"{BASE}/routes/{own.pk}", {"name": "Новое имя"},
+                      **as_editor).status_code == 200
+    stage = own.stages.get()
+    assert patch_json(client, f"{BASE}/stages/{stage.pk}", {"name": "Проверка"},
+                      **as_editor).status_code == 200
+    created = post_json(client, f"{BASE}/routes",
+                        {"subject_type": SUBJECT, "name": "Второй", "is_active": False},
+                        **as_editor)
+    assert created.status_code == 201, created.content
+
+    foreign_stage = foreign.stages.get()
+    for response in (
+            client.get(f"{BASE}/routes/{foreign.pk}", **as_editor),
+            patch_json(client, f"{BASE}/routes/{foreign.pk}", {"name": "x"}, **as_editor),
+            client.delete(f"{BASE}/routes/{foreign.pk}", **as_editor),
+            post_json(client, f"{BASE}/routes/{foreign.pk}/stages",
+                      {"order": 2, "name": "x", "quorum": Quorum.ALL,
+                       "position_ids": [editor.pk]}, **as_editor),
+            client.get(f"{BASE}/stages/{foreign_stage.pk}", **as_editor),
+            client.delete(f"{BASE}/stages/{foreign_stage.pk}", **as_editor),
+            post_json(client, f"{BASE}/routes", {"subject_type": other_type, "name": "x"},
+                      **as_editor)):
+        assert response.status_code == 403, response.content
+    assert ApprovalRoute.objects.filter(pk=foreign.pk).exists()
+
+    # Остальным — по-прежнему только администратор.
+    assert client.get(f"{BASE}/routes", **auth(token())).status_code == 403
 
 
 def test_anonymous_is_401(client):

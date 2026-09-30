@@ -368,7 +368,9 @@ frontend/src/
 │   │                   #   core/ — BppRegistry (+useRegistryState, registryExport: та же ручка реестра с
 │   │                   #   ?format=xlsx), BppDocumentShell (тип истории = label_lower модели, не тип signoff),
 │   │                   #   HistoryTab, StatusBadge+statusDictionaries, useIdempotentAction, useDraftAutosave,
-│   │                   #   useUnsavedChangesGuard; подмодули approvals, accountable, exports
+│   │                   #   useUnsavedChangesGuard; подмодули approvals, routes («Маршруты согласования» —
+│   │                   #   ФД и АДМ по узлу bpp.routes, В-09; общие RouteListPanel/RouteEditorPanel из
+│   │                   #   components/signoff), accountable, exports
 │   │                   #   (/bpp/exports/:id), refdata, projects, counterparties (+ConfirmCounterpartyDialog);
 │   │                   #   экраны B2.5: budgets (L-01, F-01 с корректировкой; budgetForm.ts, cents.ts —
 │   │                   #   деньги в копейках BigInt; денежная колонка — общая `moneyColumn` из core), requests (L-02, F-02:

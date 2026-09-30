@@ -9,7 +9,7 @@ OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.agreements.terminate", "bpp.invoices.decision", "bpp.invoices.payment",
               "bpp.counterparties.block", "bpp.alternatives.select",
               "bpp.accountable.payment", "bpp.invoices.closing_docs",
-              "project.all", "bpp.requests.all", "bpp.plan.reassign")
+              "project.all", "bpp.requests.all", "bpp.plan.reassign", "bpp.routes")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -71,3 +71,11 @@ def test_who_sees_all_requests_and_who_reassigns_plan_items():
     for code in ROLES:
         assert _flags(code, "bpp.requests.all") <= {"view"}, code
         assert _flags(code, "bpp.plan.reassign") <= {"edit"}, code
+
+
+@pytest.mark.django_db
+def test_routes_are_edited_by_fd_and_adm():
+    """В-09 (access/0018): маршруты согласования модуля правят ФД и АДМ."""
+    assert [c for c in ROLES if "edit" in _flags(c, "bpp.routes")] == ["bpp-fd", "bpp-adm"]
+    for code in ROLES:
+        assert _flags(code, "bpp.routes") <= {"edit"}, code
