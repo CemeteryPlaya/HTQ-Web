@@ -2,13 +2,19 @@
 
 Здесь только функции без базы: разбор номера счёта в назначении платежа и
 распределение суммы по остаткам. Запись сопоставлений — в этом же
-подмодуле, отдельными функциями (следующие задачи).
+подмодуле, отдельными функциями (следующие задачи). Исключение —
+агрегат «Оплачено факт» ``paid_fact_by_article`` (CALC-007, D-S4-7) в
+конце файла: он только читает.
 """
 
 from __future__ import annotations
 
 import re
 from decimal import ROUND_HALF_UP, Decimal
+
+from django.db.models import Sum
+
+from apps.bpp.models import BankImportStatus, PaymentMatch, PaymentMatchState
 
 _LOOKALIKES = str.maketrans({"C": "С", "X": "Х", "c": "С", "x": "Х"})
 # После перевода в верхний регистр и замены латиницы: «СЧ», затем год из 4 цифр
@@ -54,3 +60,37 @@ def distribute(amount: Decimal,
         result.append((key, part))
         left -= part
     return result, _money(amount) == total
+
+
+# ── «Оплачено по банку» и «Оплачено факт» (D-S4-1, CALC-007, D-S4-7) ────
+
+def active_matches():
+    """Сопоставления, которые входят в «Оплачено по банку» (D-S4-1): только
+    действующие (автоматические без замечаний, ручные и подтверждённые ФД) —
+    «на проверке» и отменённые нет; строка выписки не отменена, её загрузка
+    не отменена. Одна выборка на всех читателей суммы — дашборд
+    (``dashboard/payments``), фильтр реестра счетов по дате платежа
+    (``invoices/read``), «Оплачено факт» ниже."""
+    return (PaymentMatch.objects
+            .filter(state=PaymentMatchState.ACTIVE, line__cancelled_at__isnull=True)
+            .exclude(line__bank_import__status=BankImportStatus.CANCELLED))
+
+
+def paid_fact_by_article(project_id) -> dict[str, Decimal]:
+    """``{article_id: оплачено факт}`` по проекту — Σ сопоставленных сумм строк
+    выписки по счетам статьи (ТЗ CALC-007). Статьи без оплат — не в ответе.
+
+    - В сумму входят только ``active_matches`` (D-S4-1).
+    - Счёт относится к статье своим заголовком ``Invoice.article_id`` (и к
+      проекту — ``Invoice.project_id``): счёт выписывается на одну статью
+      одного проекта, строки счёта — позиции заявок той же статьи (BR-046).
+    - Сумма сопоставления — в валюте счёта, как строки счетов в
+      «Задействовано» (CALC-002, ``budget/committed.py``): столбцы одного
+      графика считаются в одной валюте.
+    """
+    rows = (active_matches()
+            .filter(invoice__project_id=project_id)
+            .order_by()
+            .values("invoice__article_id")
+            .annotate(total=Sum("amount")))
+    return {str(row["invoice__article_id"]): _money(row["total"]) for row in rows}
