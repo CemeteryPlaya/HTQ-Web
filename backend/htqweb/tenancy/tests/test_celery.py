@@ -50,6 +50,26 @@ def test_positional_company_slug_is_not_accepted():
     assert "именованный" in str(exc.value).lower()
 
 
+def test_signature_accepts_company_slug_by_name():
+    """Celery проверяет аргументы ``.delay()`` по сигнатуре задачи; на Python
+    3.14 — через ``inspect.signature``, которая идёт по ``__wrapped__`` к
+    исходной функции. Обёртка объявляет ``company_slug`` сама: только по
+    имени, перед ``**kwargs``, по умолчанию ``None`` — без него до обёртки
+    доходит вызов и получает ``MissingCompanyArgument``, а не ``TypeError``."""
+    import inspect
+
+    @company_task
+    def _job(*, import_id, **extra):
+        return import_id
+
+    sig = inspect.signature(_job)
+    assert list(sig.parameters) == ["import_id", "company_slug", "extra"]
+    slug = sig.parameters["company_slug"]
+    assert (slug.kind, slug.default) == (inspect.Parameter.KEYWORD_ONLY, None)
+    sig.bind(import_id="i-1", company_slug="htq-kz")
+    assert "company_slug" in inspect.signature(_echo_company).parameters
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Маркеры для мета-теста (apps/core/tests/test_invariants.py):
 # задача tenant-аппки обязана быть либо @company_task, либо явно помеченным

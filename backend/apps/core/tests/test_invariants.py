@@ -275,6 +275,33 @@ def test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers():
     )
 
 
+def test_company_tasks_accept_company_slug_by_signature():
+    """Celery checks ``.delay()``/``.apply_async()`` arguments against the
+    task's signature before queueing. On Python 3.14 it reads it with
+    ``inspect.signature``, which follows ``__wrapped__`` (set by ``@wraps``)
+    down to the undecorated function — without ``company_slug`` — so every
+    ``.delay(company_slug=…)`` died with ``TypeError`` in prod and CI while
+    passing on a 3.13 dev venv. ``inspect.signature`` follows ``__wrapped__``
+    on every Python, so this check catches the regression on any of them."""
+    tenant_apps = frozenset(django_settings.TENANT_APPS)
+    violations = []
+    tasks_seen = 0
+    for app_label, _service, task in _iter_domain_tasks():
+        fn = getattr(task, "run", None) or inspect.unwrap(task)
+        if app_label not in tenant_apps or _company_marker(fn) != "company_task":
+            continue
+        tasks_seen += 1
+        try:
+            inspect.signature(fn).bind_partial(company_slug="probe")
+        except TypeError as exc:
+            violations.append(f"{task.name}: {exc}")
+    assert tasks_seen > 0, "discovered zero @company_task tasks — the sweep itself is broken"
+    assert violations == [], (
+        "@company_task tasks whose signature rejects company_slug (Celery would "
+        "refuse .delay(company_slug=…)):\n  " + "\n  ".join(violations)
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Test 2 — every domain ModelAdmin must mix in ServiceGatedAdminMixin.
 # ═══════════════════════════════════════════════════════════════════════
