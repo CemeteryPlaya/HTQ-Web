@@ -386,6 +386,12 @@ frontend/src/
 │   │                   #   splitPurpose)), dashboard (D-01 «Дашборд
 │   │                   #   оплат»: показатели — ссылки сервера на реестры, фильтры в адресе, авторы и
 │   │                   #   признаки подмодулей — из ответа, графики recharts; chartData — подписи formatMoney),
+│   │                   #   alternatives («Альтернативы», A5.1: лента L-09 на BppRegistry с `mapItems` — у ленты
+│   │                   #   ключ строки source_id, отбор ссылкой уведомления `?source=`; форма F-07 OfferFormPage —
+│   │                   #   расчёт на лету в тиынах (money.ts, offerForm.ts: экономия CALC-013, отклонение, «Дороже на»,
+│   │                   #   обоснование ≥ 30 при удорожании), КП — общая панель файлов; AlternativesBlock — блок
+│   │                   #   сравнения для форм счёта (F-05, без договора) и договора (F-04) со слотом renderSelect
+│   │                   #   для кнопки «Выбрать» B5.1), kpi («Отчёты»: R-01 «KPI снабжения», карточка записи),
 │   │                   #   settings («Настройки»: счета организации, шаблоны выписок —
 │   │                   #   TemplateEditor с «Проверить на образце», ModuleParamsTab — параметры модуля)
 │   ├── messenger/      # MessengerPage + api/ + hooks/ + types.ts (feature-sliced)
