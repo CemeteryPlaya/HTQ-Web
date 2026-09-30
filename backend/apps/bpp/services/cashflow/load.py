@@ -125,11 +125,13 @@ class CashflowLoader(Writer):
                 continue
             version = budget.active_version or budget.versions.order_by("version_no").first()
             have = {str(line.article_id): line.limit_amount for line in version.lines.all()}
+            # В отчёт — код статьи: ФД сверяет лимиты по справочнику, а не по id.
+            article_codes = {str(row["id"]): row["code"] for row in self.article_map.values()}
             for article, amount in limits.items():
                 if have.get(article, ZERO) != amount:
                     self.report.add("Расхождения с книгой", what="лимит статьи",
-                                    key=f"{code} / {article}", book=amount,
-                                    module=have.get(article, ZERO))
+                                    key=f"{code} / {article_codes.get(article, article)}",
+                                    book=amount, module=have.get(article, ZERO))
         for admin, project_id in self.project_by_admin.items():
             budget = Budget.objects.filter(project_id=project_id).first()
             if budget is not None and budget.status == BudgetStatus.APPROVED:
@@ -143,6 +145,14 @@ class CashflowLoader(Writer):
         хэшем: названия администраторов длинные, а ключ связи — до 64."""
         raw = "\x1f".join([row.administrator, row.number, str(row.signed_date or "")])
         return "nolark:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def row_label(row: RegistryRow) -> str:
+        """Договор книги для отчёта: номер у финансистов повторяется («1» у
+        двух договоров одного проекта), поэтому с LARK, а без него — со
+        строкой листа."""
+        return (f"{row.number} (LARK {row.external_id})" if row.external_id
+                else f"{row.number} (строка {row.excel_row})")
 
     def _known(self, key_type: str, key: str) -> MigrationLink | None:
         return MigrationLink.objects.filter(source_type=key_type, source_id=key).first()
@@ -171,11 +181,11 @@ class CashflowLoader(Writer):
                                         module=agr.amount)
                 continue
             project_id = self.project_by_admin[row.administrator]
-            if self._skip_unapproved(project_id, "договор", row.number):
+            if self._skip_unapproved(project_id, "договор", self.row_label(row)):
                 continue
             is_open = row.contract_type == "open"
             if not is_open and not row.has_amount:
-                self.report.add("Не перенесено", kind="договор", old_id=row.number,
+                self.report.add("Не перенесено", kind="договор", old_id=self.row_label(row),
                                 reason="стандартный договор без суммы")
                 continue
             article = self.article_map[(row.administrator, row.program_code)]
