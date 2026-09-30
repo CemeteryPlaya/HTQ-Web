@@ -10,38 +10,53 @@
  *   остальные строки загружены (ТЗ §11.3 п.1). В файле до 10 000 строк, и
  *   ошибок может быть тысячи, поэтому сразу видны первые
  *   `ROW_ERRORS_VISIBLE`, остальные — кнопкой «Показать ещё N»;
- * - таблица строк — страницами с сервера; вкладки сверки «Сопоставлены /
- *   Требуют проверки / Не сопоставлены» — со сверкой (A4.2, этап 4);
+ * - таблица строк — страницами с сервера, вкладки сверки «Сопоставлены /
+ *   Требуют проверки / Не сопоставлены / Исключены» со счётчиками из
+ *   `card.totals` (A4.2); итог — строк, списаний, дублей, ошибок и четыре
+ *   группы с суммами (ТЗ §11.2);
+ * - действия ФД (`bpp.bank` edit) — «Сверить» (если автосверка упала),
+ *   «Отменить загрузку» с числом затронутых счетов, на строках — вручную /
+ *   подтвердить / отменить сопоставление / исключить (комментарий не короче
+ *   10 символов, BR-060); «Выгрузить результат» — всем, кто видит экран.
+ *   После любого действия перечитываются карточка, строки, реестры счетов и
+ *   дашборд «Оплаты» (`invalidateRecon`);
  * - «К списку» возвращает на то место реестра, откуда открыли загрузку
  *   (`useRegistryBackHref`); предупреждения о пересечении периода приходят
  *   с формы загрузки состоянием перехода (карточка загрузки их не хранит —
  *   они есть только в ответе `POST bank/imports`);
- * - строки показываются только у «Загружена»: у отменённой загрузки
+ * - строки показываются у «Загружена» и «Сверена»: у отменённой загрузки
  *   действующих строк нет (сервер отдаёт только неотменённые).
  */
-import { useState } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, FileWarning } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, FileWarning, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
-import { errorStatus } from '@/lib/apiError';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { usePermissions } from '@/hooks/usePermissions';
+import { errorStatus, reportApiError } from '@/lib/apiError';
 
 import { useRegistryBackHref } from '../core/registryBack';
+import { useIdempotentAction } from '../core/useIdempotentAction';
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDate, formatDateTime, formatMoney } from '../format';
 import { FORMAT_LABELS } from '../settings/templateFields';
 
 import {
-  BANK_BASE, bankImportApi, bankImportKey, IMPORT_POLL_MS, type BankImportCard,
+  AUTOMATCH_WINDOW_MS, autoMatchRunning, BANK_BASE, bankImportApi, bankImportKey, IMPORT_POLL_MS, invalidateRecon, RECON_TABS,
+  TAB_TOTAL_KEY, type BankImportCard, type LineMatch, type ReconTab, type StatementLine,
 } from './api';
+import { fromCents, toCents } from './amounts';
+import { CancelImportDialog } from './CancelImportDialog';
+import { CommentDialog } from './CommentDialog';
+import { ManualMatchDialog } from './ManualMatchDialog';
+import { ReconLinesTable, type LineAction } from './ReconLinesTable';
 
 const LINES_PAGE_SIZE = 50;
 
@@ -70,6 +85,39 @@ function Totals({ card }: { card: BankImportCard }) {
   );
 }
 
+const TAB_LABELS: Record<ReconTab, [string, string]> = {
+  matched: ['bpp.bank.tabMatched', 'Сопоставлены'],
+  review: ['bpp.bank.tabReview', 'Требуют проверки'],
+  unmatched: ['bpp.bank.tabUnmatched', 'Не сопоставлены'],
+  excluded: ['bpp.bank.tabExcluded', 'Исключены'],
+};
+
+type GroupKey = 'matched' | 'needs_review' | 'unmatched' | 'excluded';
+const groupOf = (card: BankImportCard, tab: ReconTab) => card.totals?.[TAB_TOTAL_KEY[tab] as GroupKey];
+
+/** Четыре группы сверки со счётчиком и Σ (ТЗ §11.2), под итогом загрузки. */
+function ReconTotalsView({ card }: { card: BankImportCard }) {
+  const { t } = useTranslation();
+  if (!card.totals) return null;
+  const currency = card.account.currency;
+  return (
+    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label={t('bpp.bank.reconTotals', 'Итог сверки')}>
+      {RECON_TABS.map((tab) => {
+        const group = groupOf(card, tab);
+        return (
+          <div key={tab} className="rounded-lg border p-3">
+            <dt className="text-xs text-muted-foreground">{t(...TAB_LABELS[tab])}</dt>
+            <dd className="text-xl font-semibold tabular-nums">{group?.count ?? 0}</dd>
+            <dd className="text-xs tabular-nums text-muted-foreground">
+              {formatMoney(group?.amount ?? '0.00', currency)}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
 /** Сколько ошибок строк видно сразу; остальные — по кнопке. */
 const ROW_ERRORS_VISIBLE = 200;
 
@@ -94,16 +142,57 @@ function RowErrors({ errors }: { errors: string[] }) {
   );
 }
 
-function Lines({ importId }: { importId: string }) {
+/** Остатки счетов и предложенное распределение — перед «Подтвердить». */
+function ConfirmPreview({ matches, currency }: { matches: LineMatch[]; currency: string }) {
   const { t } = useTranslation();
+  if (matches.length === 0) return null;
+  return (
+    <ul className="space-y-1 rounded-lg border p-3 text-sm" aria-label={t('bpp.bank.confirmPreview', 'Предложенное распределение')}>
+      {matches.map((match) => {
+        const remainder = (toCents(match.invoice_amount) ?? 0n) - (toCents(match.paid_bank_amount) ?? 0n);
+        const overpaid = (toCents(match.amount) ?? 0n) > remainder;
+        return (
+          <li key={match.id}>
+            <span className="font-medium">{match.invoice_number}</span>
+            {': '}
+            {t('bpp.bank.confirmRemainder', 'остаток счёта {{remainder}}, распределено {{amount}}', {
+              remainder: formatMoney(fromCents(remainder > 0n ? remainder : 0n), match.invoice_currency || currency),
+              amount: formatMoney(match.amount, match.invoice_currency || currency),
+            })}
+            {overpaid && (
+              <span className="ml-1 font-medium text-destructive">
+                {t('bpp.bank.confirmOverpay', '— переплата')}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Во всех четырёх группах сверки нет ни одной строки. */
+const allGroupsEmpty = (card: BankImportCard) => Boolean(card.totals)
+  && RECON_TABS.every((tab) => groupOf(card, tab)?.count === 0);
+
+function Lines({ card, tab, canEdit }: { card: BankImportCard; tab: ReconTab; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const [dialog, setDialog] = useState<{ action: LineAction; line: StatementLine } | null>(null);
   const { data, isLoading, isError } = useQuery({
-    queryKey: [...bankImportKey(importId), 'lines', page],
-    queryFn: () => bankImportApi.lines(importId, page, LINES_PAGE_SIZE),
+    // Статус в ключе: когда автосверка закончилась («Сверена»), строки читаются заново.
+    queryKey: [...bankImportKey(card.id), 'lines', tab, page, card.status],
+    queryFn: () => bankImportApi.lines(card.id, page, LINES_PAGE_SIZE, tab),
     placeholderData: keepPreviousData,
   });
   const items = data?.items ?? [];
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / LINES_PAGE_SIZE));
+
+  const close = (done: boolean) => {
+    setDialog(null);
+    if (done) void invalidateRecon(queryClient, card.id);
+  };
 
   if (isLoading) return <Skeleton className="h-32 w-full" />;
   if (isError) {
@@ -116,49 +205,20 @@ function Lines({ importId }: { importId: string }) {
   if (items.length === 0) {
     return (
       <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
-        {t('bpp.bank.noLines', 'Новых списаний в выписке нет: строки не распознаны, это поступления или они уже были загружены.')}
+        {allGroupsEmpty(card)
+          ? t('bpp.bank.noLines', 'Новых списаний в выписке нет: строки не распознаны, это поступления или они уже были загружены.')
+          : t('bpp.bank.noLinesTab', 'В этой вкладке строк нет.')}
       </p>
     );
   }
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded-lg border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('bpp.bank.lineDate', 'Дата')}</TableHead>
-              <TableHead>{t('bpp.bank.lineNumber', '№ ПП')}</TableHead>
-              <TableHead>{t('bpp.bank.lineRecipient', 'Получатель')}</TableHead>
-              <TableHead>{t('bpp.bank.lineBin', 'БИН')}</TableHead>
-              <TableHead className="text-right">{t('bpp.bank.lineAmount', 'Сумма')}</TableHead>
-              <TableHead>{t('bpp.bank.linePurpose', 'Назначение')}</TableHead>
-              <TableHead>{t('bpp.bank.lineStatus', 'Сверка')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((line) => (
-              <TableRow key={line.id}>
-                <TableCell>{formatDate(line.doc_date)}</TableCell>
-                <TableCell>{line.doc_number}</TableCell>
-                <TableCell>
-                  <div className="leading-tight">
-                    <div>{line.recipient_name || '—'}</div>
-                    {line.recipient_iban && (
-                      <div className="font-mono text-xs text-muted-foreground">{line.recipient_iban}</div>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="font-mono">{line.recipient_bin || '—'}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatMoney(line.amount, line.currency)}
-                </TableCell>
-                <TableCell className="max-w-96 truncate" title={line.purpose}>{line.purpose || '—'}</TableCell>
-                <TableCell><StatusBadge kind="bank_line" status={line.match_status} /></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+      <ReconLinesTable
+        lines={items}
+        tab={tab}
+        canEdit={canEdit}
+        onAction={(action, line) => setDialog({ action, line })}
+      />
       {pages > 1 && (
         <div className="flex items-center justify-end gap-2 text-sm">
           <Button
@@ -182,6 +242,70 @@ function Lines({ importId }: { importId: string }) {
           </Button>
         </div>
       )}
+
+      {dialog?.action === 'match' && <ManualMatchDialog line={dialog.line} onClose={close} />}
+      {dialog?.action === 'confirm' && (
+        <CommentDialog
+          title={t('bpp.bank.confirmTitle', 'Подтвердить сопоставление')}
+          description={t('bpp.bank.confirmDescription', 'Платёж будет учтён в «Оплачено по банку» указанных счетов.')}
+          submitLabel={t('bpp.bank.actionConfirm', 'Подтвердить')}
+          failureText={t('bpp.bank.confirmFailed', 'Не удалось подтвердить сопоставление')}
+          onSubmit={(comment, key) => bankImportApi.confirm(key, dialog.line.id, comment)}
+          onClose={close}
+        >
+          <ConfirmPreview matches={dialog.line.matches ?? []} currency={dialog.line.currency} />
+        </CommentDialog>
+      )}
+      {dialog?.action === 'cancelMatch' && (
+        <CommentDialog
+          title={dialog.line.match_status === 'excluded'
+            ? t('bpp.bank.unexcludeTitle', 'Снять исключение')
+            : t('bpp.bank.cancelMatchTitle', 'Отменить сопоставление')}
+          description={t('bpp.bank.cancelMatchDescription', 'Строка вернётся в «Не сопоставлены»; автосверка её больше не возьмёт.')}
+          submitLabel={dialog.line.match_status === 'excluded'
+            ? t('bpp.bank.actionUnexclude', 'Снять исключение')
+            : t('bpp.bank.actionCancelMatch', 'Отменить сопоставление')}
+          destructive
+          failureText={t('bpp.bank.cancelMatchFailed', 'Не удалось отменить сопоставление')}
+          onSubmit={(comment, key) => bankImportApi.cancelMatch(key, dialog.line.id, comment)}
+          onClose={close}
+        />
+      )}
+      {dialog?.action === 'exclude' && (
+        <CommentDialog
+          title={t('bpp.bank.excludeTitle', 'Исключить — не относится к закупкам')}
+          description={t('bpp.bank.excludeDescription', 'Строка уйдёт во вкладку «Исключены» и не попадёт в показатель «Не сопоставлено».')}
+          submitLabel={t('bpp.bank.actionExcludeShort', 'Исключить')}
+          destructive
+          failureText={t('bpp.bank.excludeFailed', 'Не удалось исключить строку')}
+          onSubmit={(comment, key) => bankImportApi.exclude(key, dialog.line.id, comment)}
+          onClose={close}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Вкладки результата сверки со счётчиками и таблица выбранной. */
+function ReconResult({ card, canEdit }: { card: BankImportCard; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState<ReconTab>('matched');
+  return (
+    <div className="space-y-3">
+      <Tabs value={tab} onValueChange={(value) => setTab(value as ReconTab)}>
+        <TabsList className="h-auto flex-wrap">
+          {RECON_TABS.map((item) => {
+            const count = groupOf(card, item)?.count;
+            return (
+              <TabsTrigger key={item} value={item}>
+                {t(...TAB_LABELS[item])}{count === undefined ? '' : ` (${count})`}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
+      {/* Ключ — вкладка: номер страницы не переходит между вкладками. */}
+      <Lines key={tab} card={card} tab={tab} canEdit={canEdit} />
     </div>
   );
 }
@@ -192,13 +316,38 @@ export function BankImportPage() {
   const location = useLocation();
   const backHref = useRegistryBackHref(BANK_BASE);
   const warnings = warningsOf(location.state);
+  const permissions = usePermissions();
+  const canEdit = permissions.can('bpp.bank', 'edit');
+  const queryClient = useQueryClient();
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const reconcile = useIdempotentAction((key) => bankImportApi.reconcile(key, id));
 
   const { data: card, isLoading, error } = useQuery({
     queryKey: bankImportKey(id),
     queryFn: () => bankImportApi.get(id),
     enabled: Boolean(id),
-    refetchInterval: (query) => (query.state.data?.status === 'processing' ? IMPORT_POLL_MS : false),
+    // Опрос — пока идёт разбор и пока после «Загружена» идёт автосверка
+    // (окно от `finished_at`); «Сверена», «Ошибка загрузки», «Отменена» и
+    // «Загружена» старше окна его останавливают.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && (data.status === 'processing' || autoMatchRunning(data)) ? IMPORT_POLL_MS : false;
+    },
   });
+
+  // Окно автосверки закрывается само, без ответа сервера: карточка при этом не
+  // меняется (данные те же), поэтому перерисовку по истечении окна даёт таймер.
+  const [, setTick] = useState(0);
+  const status = card?.status;
+  const finishedAt = card?.finished_at;
+  useEffect(() => {
+    if (status !== 'loaded' || !finishedAt) return undefined;
+    const left = Date.parse(finishedAt) + AUTOMATCH_WINDOW_MS - Date.now();
+    if (!(left > 0)) return undefined;
+    const timer = setTimeout(() => setTick((n) => n + 1), left + 50);
+    return () => clearTimeout(timer);
+  }, [status, finishedAt]);
 
   const back = (
     <Button asChild variant="ghost" size="sm">
@@ -241,6 +390,27 @@ export function BankImportPage() {
 
   const processing = card.status === 'processing';
   const cancelled = card.status === 'cancelled';
+  const hasLines = card.status === 'loaded' || card.status === 'reconciled';
+  const matching = autoMatchRunning(card);
+
+  const runReconcile = () => {
+    reconcile.run().then(
+      () => { void invalidateRecon(queryClient, id); },
+      (error: unknown) => reportApiError(error, t('bpp.bank.reconcileFailed', 'Не удалось сверить выписку')),
+    );
+  };
+
+  const runExport = () => {
+    setExporting(true);
+    bankImportApi.exportResult(card.id, card.number).then(
+      (outcome) => {
+        if (outcome.kind === 'queued') {
+          toast.info(outcome.detail || t('bpp.bank.exportQueued', 'Выгрузка готовится, ссылка придёт уведомлением'));
+        }
+      },
+      (error: unknown) => reportApiError(error, t('bpp.bank.exportFailed', 'Не удалось выгрузить результат сверки')),
+    ).finally(() => setExporting(false));
+  };
 
   return (
     <div className="space-y-4">
@@ -317,6 +487,40 @@ export function BankImportPage() {
           )}
 
           <Totals card={card} />
+          {matching && (
+            <p role="status" className="text-muted-foreground">
+              {t('bpp.bank.matching', 'Идёт автосверка со счетами. Страница обновится сама.')}
+            </p>
+          )}
+          {hasLines && <ReconTotalsView card={card} />}
+
+          {hasLines && (
+            <div className="flex flex-wrap gap-2">
+              {canEdit && card.status === 'loaded' && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={reconcile.pending || matching}
+                  title={matching ? t('bpp.bank.reconcileWait', 'Автосверка ещё идёт — дождитесь её окончания') : undefined}
+                  onClick={runReconcile}
+                >
+                  {reconcile.pending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+                  {t('bpp.bank.reconcile', 'Сверить')}
+                </Button>
+              )}
+              <Button type="button" size="sm" variant="outline" disabled={exporting} onClick={runExport}>
+                {exporting
+                  ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  : <Download className="mr-1.5 h-4 w-4" />}
+                {t('bpp.bank.exportResult', 'Выгрузить результат')}
+              </Button>
+              {canEdit && (
+                <Button type="button" size="sm" variant="outline" onClick={() => setCancelOpen(true)}>
+                  {t('bpp.bank.cancelImport', 'Отменить загрузку')}
+                </Button>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -336,15 +540,25 @@ export function BankImportPage() {
         </Card>
       )}
 
-      {card.status === 'loaded' && (
+      {hasLines && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{t('bpp.bank.lines', 'Строки выписки')}</CardTitle>
           </CardHeader>
           <CardContent>
-            <Lines importId={card.id} />
+            <ReconResult card={card} canEdit={canEdit} />
           </CardContent>
         </Card>
+      )}
+
+      {cancelOpen && (
+        <CancelImportDialog
+          card={card}
+          onClose={(done) => {
+            setCancelOpen(false);
+            if (done) void invalidateRecon(queryClient, id);
+          }}
+        />
       )}
     </div>
   );
