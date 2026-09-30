@@ -28,9 +28,13 @@ describe('chartData', () => {
   });
 
   it('подсказка берёт подпись ряда, а не число recharts', () => {
-    expect(tooltipText('limit', { limit: 0.1, limitText: '99 999 999 999 999,99' }))
+    expect(tooltipText('amount', { amount: 0.1, amountText: '99 999 999 999 999,99' }, 'KZT'))
       .toBe('99 999 999 999 999,99 KZT');
     expect(tooltipText('paid_fact', { paid_fact: null, paid_factText: null })).toBe('—');
+  });
+
+  it('подсказка статей — без «KZT»: лимит и оплаты по статье в валюте счетов', () => {
+    expect(tooltipText('limit', { limit: 0.1, limitText: '1 250 000,00' })).toBe('1 250 000,00');
   });
 
   it('деление оси — разряды без копеек', () => {

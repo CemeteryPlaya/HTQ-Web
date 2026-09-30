@@ -149,6 +149,15 @@ describe('результат сверки', () => {
     expect(parts.filter((part) => part.hit).map((part) => part.text)).toEqual(['сч 2026 000001']);
   });
 
+  it('splitPurpose находит номер с латинскими C/X и подсвечивает исходный текст', () => {
+    // «cч» — латинская c, «CЧ» — латинская C: сервер такие номера находит (C/X → С/Х).
+    const purpose = 'Opl. cч-2026-000001 и CЧ 2026 000002; Xerox';
+    const parts = splitPurpose(purpose, ['СЧ-2026-000001', 'СЧ-2026-000002']);
+    expect(parts.filter((part) => part.hit).map((part) => part.text))
+      .toEqual(['cч-2026-000001', 'CЧ 2026 000002']);
+    expect(parts.map((part) => part.text).join('')).toBe(purpose);
+  });
+
   it('диалог ручного сопоставления не отправляет Σ больше суммы строки', async () => {
     serve({ matched: [], unmatched: [LINE] });
     renderPage();

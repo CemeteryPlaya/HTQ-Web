@@ -202,8 +202,12 @@ export function PaymentsDashboardPage() {
     paid_fact: t('bpp.dashboard.paidFact', 'Оплачено факт'),
     amount: t('bpp.dashboard.paidBank', 'Оплачено по банку'),
   };
-  const tooltipFormatter = (_value: unknown, name: unknown, item: { dataKey?: unknown; payload?: unknown }) =>
-    [tooltipText(item.dataKey, item.payload), seriesName[String(item.dataKey)] ?? String(name)];
+  // Статьи — в валюте счетов (без подписи валюты), недели — «Оплачено по банку» в KZT.
+  const tooltipFormatterIn = (currency?: string) =>
+    (_value: unknown, name: unknown, item: { dataKey?: unknown; payload?: unknown }) =>
+      [tooltipText(item.dataKey, item.payload, currency), seriesName[String(item.dataKey)] ?? String(name)];
+  const articleTooltip = tooltipFormatterIn();
+  const weeklyTooltip = tooltipFormatterIn(KZT);
 
   return (
     <div className="space-y-6">
@@ -419,7 +423,7 @@ export function PaymentsDashboardPage() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis type="number" tickFormatter={axisTick} />
                     <YAxis type="category" dataKey="name" width={200} />
-                    <Tooltip formatter={tooltipFormatter} />
+                    <Tooltip formatter={articleTooltip} />
                     <Legend />
                     <Bar dataKey="limit" name={seriesName.limit} fill={SERIES_COLORS.limit} />
                     <Bar dataKey="committed" name={seriesName.committed} fill={SERIES_COLORS.committed} />
@@ -452,7 +456,7 @@ export function PaymentsDashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="week" />
                       <YAxis tickFormatter={axisTick} width={100} />
-                      <Tooltip formatter={tooltipFormatter} />
+                      <Tooltip formatter={weeklyTooltip} />
                       <Line type="monotone" dataKey="amount" name={seriesName.amount}
                         stroke={SERIES_COLORS.weekly} strokeWidth={2} dot />
                     </LineChart>

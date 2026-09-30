@@ -33,25 +33,32 @@ export function centsFromInput(text: string): bigint | null {
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Латиница, похожая на кириллицу номера, — как у сервера
+ * (`recon._LOOKALIKES`): C/X → С/Х. Посимвольно, длина не меняется — индексы
+ * совпадения годятся для исходной строки. */
+const LOOKALIKES: Record<string, string> = { C: 'С', c: 'с', X: 'Х', x: 'х' };
+const unLatin = (text: string) => text.replace(/[CcXx]/g, (char) => LOOKALIKES[char]);
+
 /**
  * Куски назначения: найденные номера счетов помечены. Номер ищется
- * терпимо к разделителям — `СЧ-2026-000123` находит и «сч 2026 000123»,
- * так же его находит сервер (ТЗ §11.3).
+ * терпимо к разделителям и к латинским C/X вместо кириллицы — `СЧ-2026-000123`
+ * находит и «сч 2026 000123», и «cч-2026-000123» с латинской `c`, так же его
+ * находит сервер (ТЗ §11.3). Подсвечивается исходный текст.
  */
 export function splitPurpose(purpose: string, numbers: string[]): { text: string; hit: boolean }[] {
   const patterns = numbers
-    .map((number) => number.split(/[^0-9A-Za-zА-Яа-яЁё]+/).filter(Boolean).map(escape))
+    .map((number) => unLatin(number).split(/[^0-9A-Za-zА-Яа-яЁё]+/).filter(Boolean).map(escape))
     .filter((tokens) => tokens.length > 0)
     .map((tokens) => tokens.join('[\\s_./№-]*'));
   if (patterns.length === 0 || !purpose) return [{ text: purpose, hit: false }];
   const regex = new RegExp(`(${patterns.join('|')})`, 'giu');
   const parts: { text: string; hit: boolean }[] = [];
   let last = 0;
-  for (const match of purpose.matchAll(regex)) {
+  for (const match of unLatin(purpose).matchAll(regex)) {
     const start = match.index ?? 0;
     if (start > last) parts.push({ text: purpose.slice(last, start), hit: false });
-    parts.push({ text: match[0], hit: true });
     last = start + match[0].length;
+    parts.push({ text: purpose.slice(start, last), hit: true });
   }
   if (last < purpose.length) parts.push({ text: purpose.slice(last), hit: false });
   return parts.length > 0 ? parts : [{ text: purpose, hit: false }];

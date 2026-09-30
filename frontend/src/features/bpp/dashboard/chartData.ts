@@ -61,11 +61,15 @@ export const weekPoints = (rows: WeeklyPaidRow[]): WeekPoint[] => rows.map((row)
 }));
 
 /** Подпись значения для всплывающей подсказки recharts: поле `<ряд>Text`
- * строки данных, а не число, которое recharts передаёт первым аргументом. */
-export function tooltipText(dataKey: unknown, payload: unknown): string {
+ * строки данных, а не число, которое recharts передаёт первым аргументом.
+ * Валюта — только там, где сервер обещает одну: «Оплачено по банку» — в KZT,
+ * а «Лимит / Задействовано / Оплачено факт» по статьям — в валюте счетов
+ * (как CALC-002), и подпись «KZT» у них была бы неправдой. */
+export function tooltipText(dataKey: unknown, payload: unknown, currency?: string): string {
   const row = (payload ?? {}) as Record<string, unknown>;
   const text = row[`${String(dataKey)}Text`];
-  return typeof text === 'string' ? `${text} KZT` : '—';
+  if (typeof text !== 'string') return '—';
+  return currency ? `${text} ${currency}` : text;
 }
 
 /** Подпись деления оси: деления строит recharts, это не суммы сервера. */
