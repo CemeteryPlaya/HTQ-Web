@@ -82,47 +82,16 @@ def _money(value) -> Decimal:
     return Decimal(value or 0).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-class Documents:
-    """Перенос документов одной компании. Держит соответствия, нужные
-    соседним шагам: договор → его позиции (для счетов по договору и сальдо)."""
+class Writer:
+    """Общие кирпичи записи документов переноса — и «Договоров» (B6.1), и
+    книги CashFlow (B6.2): техническая заявка, счёт, разбивка платежа по
+    позициям, единица измерения, файл."""
 
-    def __init__(self, ctx):
-        self.ctx = ctx
-        self.report = ctx.report
-        self.actor_id = ctx.actor.user_id
+    def __init__(self, report, actor_id: int):
+        self.report = report
+        self.actor_id = actor_id
         self.today = timezone.localdate()
-        self.lines: dict[int, tuple[int, int, str]] = {}
-        for budget in ctx.snapshot["budgets"]:
-            for line in budget["lines"]:
-                self.lines[line["id"]] = (budget["administrator_id"], line["program_id"],
-                                          budget["currency"])
-        self.agreements: dict[int, Agreement] = {}
-        self.agreement_items: dict[int, list[PurchaseRequestItem]] = {}
-        self.revoke: dict[str, list[int]] = {}
         self._units: dict[str, str | None] = {}
-
-    # ── общее ──────────────────────────────────────────────────────────
-
-    def target(self, line_id: int | None, *, admin_id=None, program_id=None, kind: str,
-               old_id) -> tuple[str, dict] | None:
-        """(ключ «Проекта», статья) строки бюджета — или ``None`` с записью
-        в отчёт: строка в бюджете не в KZT, проект или программа не в карте."""
-        if line_id is not None:
-            admin_id, program_id, currency = self.lines[line_id]
-            if currency != "KZT":
-                self.report.add("Не перенесено", kind=kind, old_id=old_id,
-                                reason=f"строка бюджета в {currency} — лимиты модуля в KZT")
-                return None
-        project_id = self.ctx.project_by_admin.get(admin_id)
-        article = self.ctx.article_map.get(program_id)
-        if project_id is None or article is None:
-            self.report.add("Не перенесено", kind=kind, old_id=old_id,
-                            reason="проект или программа не в карте переноса")
-            return None
-        return project_id, article
-
-    def author(self, created_by) -> int:
-        return created_by or self.actor_id
 
     def uom(self, text: str, *, kind: str, old_id) -> str:
         key = (text or "").strip().lower()
@@ -146,17 +115,6 @@ class Documents:
         except Exception as exc:  # noqa: BLE001 — файл не должен ронять перенос документа
             self.report.add("Не перенесено", kind=f"файл: {kind}", old_id=old_id,
                             reason=f"файл {media_file_id} не перенесён: {exc}")
-
-    def pending_revoke(self, subject_type: str, row: dict) -> None:
-        if row.get("approval_state") == "pending":
-            self.revoke.setdefault(subject_type, []).append(row["id"])
-
-    def done(self, kind: str, row: dict, new_number: str, status: str, *, old_number="") -> None:
-        self.report.add("Документы", kind=kind, old_id=row["id"], old_number=old_number,
-                        new_number=new_number, status=status)
-        if row.get("status") == "on_review":
-            self.report.add("Переотправить", kind=kind, new_number=new_number,
-                            author_id=self.author(row.get("created_by")))
 
     # ── техническая заявка переноса ───────────────────────────────────
 
@@ -187,6 +145,101 @@ class Documents:
                      changes={"source": f"{source[0]}:{source[1]}"})
         links.link(source[0], source[1], "bpp.purchase_request", req.pk)
         return rows
+
+    def _invoice(self, *, basis: str, agreement: Agreement | None, project_id: str,
+                 article_id: str, counterparty, amount: Decimal, status: str, author_id: int,
+                 role: str, purchase_type: str, is_advance: bool, ext_date: date | None,
+                 comment: str, lines: list[tuple[PurchaseRequestItem, Decimal, Decimal]],
+                 source: tuple[str, object]) -> Invoice:
+        inv = Invoice.objects.create(
+            number=next_number("СЧ"), basis=basis, agreement=agreement, project_id=project_id,
+            article_id=article_id, counterparty=counterparty, ext_date=ext_date,
+            amount=amount, currency_code="KZT", rate=Decimal("1"), rate_source=RateSource.KZT,
+            amount_kzt=amount, with_vat=agreement.with_vat if agreement else True,
+            vat_rate=agreement.vat_rate if agreement else None,
+            vat_source=agreement.vat_source if agreement else "",
+            purchase_type=purchase_type, is_advance=is_advance, status=status,
+            approval_state="approved" if status != InvoiceStatus.DRAFT else "draft",
+            fd_decided_at=timezone.now() if status != InvoiceStatus.DRAFT else None,
+            author_comment=comment[:2000], author_id=author_id, initiator_role=role,
+            counterparty_confirmed=True, is_migrated=True,
+            created_by=self.actor_id, updated_by=self.actor_id)
+        for item, qty, line_amount in lines:
+            InvoiceLine.objects.create(invoice=inv, request_item=item, qty=qty,
+                                       amount=line_amount, created_by=self.actor_id,
+                                       updated_by=self.actor_id)
+        audit.record(inv, "migrated", actor_id=self.actor_id,
+                     changes={"source": f"{source[0]}:{source[1]}"})
+        links.link(source[0], source[1], "bpp.invoice", inv.pk)
+        return inv
+
+    @staticmethod
+    def split(amount: Decimal, items: list[PurchaseRequestItem]) -> list[tuple]:
+        """Сумма платежа по позициям договора пропорционально их суммам;
+        остаток округления — последней позиции. Количество — та же доля."""
+        total = sum((item.amount for item in items), ZERO)
+        out, left = [], amount
+        for index, item in enumerate(items):
+            share = left if index == len(items) - 1 else \
+                (amount * item.amount / total).quantize(CENT, rounding=ROUND_HALF_UP)
+            left -= share
+            if share <= 0:
+                continue
+            qty = max((item.qty * share / item.amount).quantize(Decimal("0.001")),
+                      Decimal("0.001"))
+            out.append((item, qty, share))
+        return out
+
+
+class Documents(Writer):
+    """Перенос документов одной компании. Держит соответствия, нужные
+    соседним шагам: договор → его позиции (для счетов по договору и сальдо)."""
+
+    def __init__(self, ctx):
+        super().__init__(ctx.report, ctx.actor.user_id)
+        self.ctx = ctx
+        self.lines: dict[int, tuple[int, int, str]] = {}
+        for budget in ctx.snapshot["budgets"]:
+            for line in budget["lines"]:
+                self.lines[line["id"]] = (budget["administrator_id"], line["program_id"],
+                                          budget["currency"])
+        self.agreements: dict[int, Agreement] = {}
+        self.agreement_items: dict[int, list[PurchaseRequestItem]] = {}
+        self.revoke: dict[str, list[int]] = {}
+
+    # ── общее ──────────────────────────────────────────────────────────
+
+    def target(self, line_id: int | None, *, admin_id=None, program_id=None, kind: str,
+               old_id) -> tuple[str, dict] | None:
+        """(ключ «Проекта», статья) строки бюджета — или ``None`` с записью
+        в отчёт: строка в бюджете не в KZT, проект или программа не в карте."""
+        if line_id is not None:
+            admin_id, program_id, currency = self.lines[line_id]
+            if currency != "KZT":
+                self.report.add("Не перенесено", kind=kind, old_id=old_id,
+                                reason=f"строка бюджета в {currency} — лимиты модуля в KZT")
+                return None
+        project_id = self.ctx.project_by_admin.get(admin_id)
+        article = self.ctx.article_map.get(program_id)
+        if project_id is None or article is None:
+            self.report.add("Не перенесено", kind=kind, old_id=old_id,
+                            reason="проект или программа не в карте переноса")
+            return None
+        return project_id, article
+
+    def author(self, created_by) -> int:
+        return created_by or self.actor_id
+
+    def pending_revoke(self, subject_type: str, row: dict) -> None:
+        if row.get("approval_state") == "pending":
+            self.revoke.setdefault(subject_type, []).append(row["id"])
+
+    def done(self, kind: str, row: dict, new_number: str, status: str, *, old_number="") -> None:
+        self.report.add("Документы", kind=kind, old_id=row["id"], old_number=old_number,
+                        new_number=new_number, status=status)
+        if row.get("status") == "on_review":
+            self.report.add("Переотправить", kind=kind, new_number=new_number,
+                            author_id=self.author(row.get("created_by")))
 
     # ── договоры ──────────────────────────────────────────────────────
 
@@ -289,50 +342,6 @@ class Documents:
                       old_number=row["number"])
 
     # ── счета ─────────────────────────────────────────────────────────
-
-    def _invoice(self, *, basis: str, agreement: Agreement | None, project_id: str,
-                 article_id: str, counterparty, amount: Decimal, status: str, author_id: int,
-                 role: str, purchase_type: str, is_advance: bool, ext_date: date | None,
-                 comment: str, lines: list[tuple[PurchaseRequestItem, Decimal, Decimal]],
-                 source: tuple[str, object]) -> Invoice:
-        inv = Invoice.objects.create(
-            number=next_number("СЧ"), basis=basis, agreement=agreement, project_id=project_id,
-            article_id=article_id, counterparty=counterparty, ext_date=ext_date,
-            amount=amount, currency_code="KZT", rate=Decimal("1"), rate_source=RateSource.KZT,
-            amount_kzt=amount, with_vat=agreement.with_vat if agreement else True,
-            vat_rate=agreement.vat_rate if agreement else None,
-            vat_source=agreement.vat_source if agreement else "",
-            purchase_type=purchase_type, is_advance=is_advance, status=status,
-            approval_state="approved" if status != InvoiceStatus.DRAFT else "draft",
-            fd_decided_at=timezone.now() if status != InvoiceStatus.DRAFT else None,
-            author_comment=comment[:2000], author_id=author_id, initiator_role=role,
-            counterparty_confirmed=True, is_migrated=True,
-            created_by=self.actor_id, updated_by=self.actor_id)
-        for item, qty, line_amount in lines:
-            InvoiceLine.objects.create(invoice=inv, request_item=item, qty=qty,
-                                       amount=line_amount, created_by=self.actor_id,
-                                       updated_by=self.actor_id)
-        audit.record(inv, "migrated", actor_id=self.actor_id,
-                     changes={"source": f"{source[0]}:{source[1]}"})
-        links.link(source[0], source[1], "bpp.invoice", inv.pk)
-        return inv
-
-    @staticmethod
-    def split(amount: Decimal, items: list[PurchaseRequestItem]) -> list[tuple]:
-        """Сумма платежа по позициям договора пропорционально их суммам;
-        остаток округления — последней позиции. Количество — та же доля."""
-        total = sum((item.amount for item in items), ZERO)
-        out, left = [], amount
-        for index, item in enumerate(items):
-            share = left if index == len(items) - 1 else \
-                (amount * item.amount / total).quantize(CENT, rounding=ROUND_HALF_UP)
-            left -= share
-            if share <= 0:
-                continue
-            qty = max((item.qty * share / item.amount).quantize(Decimal("0.001")),
-                      Decimal("0.001"))
-            out.append((item, qty, share))
-        return out
 
     def migrate_invoices(self) -> None:
         """Счета без договора: открытые — «Черновик» или «К оплате»."""

@@ -35,8 +35,15 @@ def article_index() -> dict[str, dict]:
     return index
 
 
+#: Страны без кода ISO: старый импорт CashFlow заводил «Казахстан» одним
+#: названием. Черновик карты подставляет код по названию, ФД может поправить.
+_ISO_BY_NAME = {"казахстан": "KZ", "kazakhstan": "KZ", "қазақстан": "KZ"}
+
+
 def _countries(snapshot: dict) -> dict[int, str]:
-    return {row["id"]: (row["iso_code"] or "").strip().upper() for row in snapshot["countries"]}
+    return {row["id"]: ((row["iso_code"] or "").strip().upper()
+                        or _ISO_BY_NAME.get((row["name"] or "").strip().lower(), ""))
+            for row in snapshot["countries"]}
 
 
 # ── что переносится ──────────────────────────────────────────────────────
@@ -132,7 +139,9 @@ def check_projects(rows: list[dict], snapshot: dict) -> tuple[dict[int, dict], l
     errors, result, seen, faulty = [], {}, {}, set()
     countries = _countries(snapshot)
     admins = {admin["id"]: admin for admin in snapshot["administrators"]}
-    known = refdata.country_brief(sorted({code for code in countries.values() if code}))
+    known = refdata.country_brief(sorted({code for code in countries.values() if code}
+                                         | {(row.get("country") or "").strip().upper()
+                                            for row in rows} - {""}))
     for row in rows:
         try:
             admin_id = int(row["admin_id"])
@@ -153,7 +162,9 @@ def check_projects(rows: list[dict], snapshot: dict) -> tuple[dict[int, dict], l
             errors.append(f"Код проекта {code} повторяется: администраторы {seen[code]} и {admin_id}")
             continue
         seen[code] = admin_id
-        country = countries.get(admins[admin_id]["country_id"], "")
+        # Страна из карты главнее: у старых записей кода ISO может не быть.
+        country = ((row.get("country") or "").strip().upper()
+                   or countries.get(admins[admin_id]["country_id"], ""))
         if not country or country not in known or not known[country]["is_active"]:
             faulty.add(admin_id)
             errors.append(f"Администратор {admin_id}: страны «{country or 'без кода ISO'}» нет "

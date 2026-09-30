@@ -120,10 +120,14 @@ class Invoice(signoff.Approvable, VersionedModel):
         constraints = [
             models.UniqueConstraint(fields=["number"], name="uq_bpp_invoice_number"),
             # BR-045: номер и дата счёта контрагента уникальны среди действующих.
+            # Пустой номер не сравнивается: у счетов, перенесённых из
+            # «Договоров» и книги CashFlow (B6.1, B6.2), номера нет вовсе, а
+            # две оплаты одного договора в один день — обычное дело; счёт,
+            # заведённый в модуле, без номера не отправить.
             models.UniqueConstraint(
                 fields=["counterparty", "ext_number", "ext_date"],
                 condition=~Q(status__in=["draft", "returned", "cancelled", "replaced",
-                                         "not_payable"]),
+                                         "not_payable"]) & ~Q(ext_number=""),
                 name="uq_bpp_invoice_ext"),
             models.CheckConstraint(condition=Q(amount__gte=0), name="ck_bpp_invoice_amount"),
             models.CheckConstraint(

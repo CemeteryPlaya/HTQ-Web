@@ -39,7 +39,6 @@ from apps.contracts.tests.helpers import (
     make_line,
     make_program,
 )
-from apps.contracts.tests.test_approval_wiring import make_user
 from apps.files import interface as files
 from apps.media_files import interface as media
 from apps.signoff import interface as signoff
@@ -80,7 +79,8 @@ def _world():
 
     running = make_agreement(line=line, counterparty=supplier, number="Д-2",
                              amount="120000.00", status="draft", created_by=7)
-    approver = make_user("migration-approver")
+    # Явный id: автоматический мог бы совпасть с явным 7 выше в общем прогоне.
+    approver = s.user(909, "migration-approver")
     signoff.configure_route(subject_type=OldAgreement.SIGNOFF_SUBJECT_TYPE, name="Договор",
                             stages=[{"order": 1, "name": "ФД", "quorum": "any",
                                      "approver_kind": "users", "user_ids": [approver.id]}])

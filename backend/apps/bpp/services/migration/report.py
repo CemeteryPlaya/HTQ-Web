@@ -21,6 +21,8 @@ SECTIONS: dict[str, tuple[str, ...]] = {
                "new_limit", "new_committed", "new_remaining", "expected_diff", "diff"),
     "Ожидаемые расхождения": ("project_code", "article_code", "kind", "number", "delta",
                               "reason"),
+    # Импорт книги CashFlow (B6.2): загруженное не переписывается (D-B62-1).
+    "Расхождения с книгой": ("what", "key", "book", "module"),
 }
 
 
