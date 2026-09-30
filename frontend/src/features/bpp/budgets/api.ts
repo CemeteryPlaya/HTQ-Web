@@ -29,18 +29,24 @@ export interface BudgetLine {
   comment: string;
   /** `null` — бюджет ещё не утверждён, «Задействовано» не показывается. */
   committed: Money | null;
+  /** «Оплачено факт» по выписке (CALC-007); `null` — бюджет не утверждён или
+   * подмодуль выписки у компании выключен. */
+  paid_fact: Money | null;
   available: Money | null;
 }
 
 export interface BudgetTotals {
   limit_amount: Money;
   committed: Money;
+  /** `null` — «Оплачено факт» не показывается (см. `BudgetLine.paid_fact`). */
+  paid_fact: Money | null;
   available: Money;
   by_group: {
     group_code: string;
     group_name: string;
     limit_amount: Money;
     committed: Money;
+    paid_fact: Money | null;
     available: Money;
   }[];
 }
@@ -95,6 +101,7 @@ export interface BudgetRow {
   version_no: number;
   limit_amount: Money;
   committed: Money;
+  paid_fact: Money | null;
   available: Money;
   approved_at: string | null;
   approved_by_name: string | null;

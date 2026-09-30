@@ -34,6 +34,7 @@ EXPORT_COLUMNS = (
     export.Column("currency_code", "Валюта"),
     export.Column("limit_amount", "Лимит", kind="money"),
     export.Column("committed", "Задействовано", kind="money"),
+    export.Column("paid_fact", "Оплачено факт", kind="money"),
     export.Column("available", "Остаток", kind="money"),
     export.Column("approved_at", "Утверждён", kind="datetime"),
     export.Column("approved_by", "Утвердил"),

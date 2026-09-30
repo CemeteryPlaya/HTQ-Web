@@ -2,6 +2,8 @@
  * Форма F-01 (ТЗ §06):
  * - утверждённый бюджет без права правки — только чтение, «Задействовано» и
  *   «Доступно» видны, кнопок правки нет;
+ * - «Оплачено факт» (CALC-007) — столбец, итог и сводка группы; без данных
+ *   выписки (подмодуль выключен) столбца нет;
  * - в корректировке лимит ниже задействованного подсвечен текстом ТЗ §6.5
  *   п.3, а «Утвердить корректировку» не показывается;
  * - «Утвердить» уходит с `version` карточки и `Idempotency-Key`.
@@ -29,12 +31,14 @@ const ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 const line = (over: Partial<BudgetLine> = {}): BudgetLine => ({
   id: 'l1', article_id: 'art-1', article_code: 'T-METAL', article_name: 'Металлопрокат',
   article_archived: false, group_code: 'supply', group_name: 'Снабжение',
-  limit_amount: '5000000.00', comment: '', committed: '3400000.00', available: '1600000.00',
+  limit_amount: '5000000.00', comment: '', committed: '3400000.00', paid_fact: '1200000.00',
+  available: '1600000.00',
   ...over,
 });
 
 const totals = {
-  limit_amount: '5000000.00', committed: '3400000.00', available: '1600000.00', by_group: [],
+  limit_amount: '5000000.00', committed: '3400000.00', paid_fact: '1200000.00',
+  available: '1600000.00', by_group: [],
 };
 
 const card = (over: Partial<BudgetCard> = {}): BudgetCard => ({
@@ -88,6 +92,32 @@ describe('BudgetCardPage', () => {
     expect(screen.queryByRole('textbox', { name: 'Лимит' })).not.toBeInTheDocument();
   });
 
+  it('«Оплачено факт» — столбец, итог и группы; выписка выключена — столбца нет', async () => {
+    const group = {
+      group_code: 'supply', group_name: 'Снабжение', limit_amount: '5000000.00',
+      committed: '3400000.00', paid_fact: '1200000.00', available: '1600000.00',
+    };
+    serve(card({ totals: { ...totals, by_group: [group] } }));
+    const { unmount } = renderCard();
+
+    expect(await screen.findByRole('columnheader', { name: 'Оплачено факт' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('budget-line')).getByText('1 200 000,00 KZT')).toBeInTheDocument();
+    // Итог таблицы и сводка группы.
+    expect(screen.getAllByText('1 200 000,00 KZT')).toHaveLength(2);
+    expect(screen.getByText('Оплачено факт: 1 200 000,00 KZT')).toBeInTheDocument();
+    unmount();
+
+    serve(card({
+      lines: [line({ paid_fact: null })],
+      totals: { ...totals, paid_fact: null, by_group: [{ ...group, paid_fact: null }] },
+    }));
+    renderCard();
+    expect(await screen.findByText('БДЖ-П-015')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Задействовано' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Оплачено факт' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Оплачено факт:/)).not.toBeInTheDocument();
+  });
+
   it('корректировка: лимит ниже задействованного подсвечен, утвердить нельзя', async () => {
     serve(card({
       allowed_actions: ['save_correction', 'approve_correction', 'cancel_correction', 'export'],
@@ -113,7 +143,7 @@ describe('BudgetCardPage', () => {
   it('«Утвердить» черновик уходит с version и Idempotency-Key', async () => {
     serve(card({
       status: 'draft', active_version: null, allowed_actions: ['save', 'approve', 'delete'],
-      lines: [line({ committed: null, available: null })],
+      lines: [line({ committed: null, paid_fact: null, available: null })],
     }));
     post.mockResolvedValue({ data: card() });
     renderCard();

@@ -217,3 +217,85 @@ def test_http_create_is_idempotent_and_denied_to_sn(company_context):
         assert Budget.objects.count() == 1
     assert first.json()["number"] == "БДЖ-П-015"
     assert "approve" in first.json()["allowed_actions"]
+
+
+# ── «Оплачено факт» (ТЗ §6.4, L-01, CALC-007, D-S4-7; остаток B этапа 4, B-2) ──
+
+def _paid_by_bank(account, proj, art, amount, reg):
+    """Счёт статьи ``art`` проекта ``proj``, оплаченный по выписке: автосверка
+    поставила действующее сопоставление (D-S4-1)."""
+    from apps.bpp.models import Invoice, PaymentMatch
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    inv = bank.orm_invoice(bank.counterparty(reg), amount)
+    Invoice.objects.filter(pk=inv.pk).update(project_id=proj.id, article_id=art.id)
+    imp = bank.loaded_import(account, [{"amount": str(amount), "recipient_bin": reg,
+                                        "purpose": f"Оплата по счёту {inv.number}"}])
+    matching.auto_match(imp.pk)
+    assert PaymentMatch.objects.get(invoice=inv).state == "active"
+    return inv
+
+
+def test_paid_fact_follows_bank_matches_in_card_registry_and_export(company_context):
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    proj, metal, design = s.project(), s.metal(), s.design()
+    budget = s.approved_budget(slug, proj, {metal: 5000, design: 2000})
+    account = bank.org_account()
+    _paid_by_bank(account, proj, metal, 1000, "100000000001")
+    _paid_by_bank(account, proj, design, 300, "100000000002")
+    _paid_by_bank(account, s.project("П-2"), metal, 700, "100000000003")  # чужой проект
+
+    fd = _fd(slug)
+    card = read.card(fd, budget)
+    assert {row["article_name"]: row["paid_fact"] for row in card["lines"]} == {
+        "Металлопрокат": Decimal("1000.00"), "Проектные работы": Decimal("300.00")}
+    assert card["totals"]["paid_fact"] == Decimal("1300.00")
+    assert {group["group_code"]: group["paid_fact"] for group in card["totals"]["by_group"]} \
+        == {"supply": Decimal("1000.00"), "pm": Decimal("300.00")}
+    # «Доступно» по-прежнему считается от «Задействовано», а не от оплат.
+    assert card["totals"]["available"] == Decimal("7000.00")
+
+    # СН видит «Оплачено факт» только своей группы статей (BR-010).
+    sn_card = read.card(s.actor(slug, s.SN, "bpp-sn"), budget)
+    assert [row["paid_fact"] for row in sn_card["lines"]] == [Decimal("1000.00")]
+    assert sn_card["totals"]["paid_fact"] == Decimal("1000.00")
+
+    [row] = read.registry(fd)["items"]
+    assert row["paid_fact"] == Decimal("1300.00")
+    [exported] = read.export_rows(user_id=s.FD, company=slug,
+                                  filters={"status": None, "project_id": None})
+    assert exported["paid_fact"] == Decimal("1300.00")
+
+    # Блок корректировки показывает те же оплаты по статьям.
+    budgets.start_correction(fd, budget.id, expected_version=None)
+    budget.refresh_from_db()
+    correction = read.card(fd, budget)["correction"]
+    assert correction["totals"]["paid_fact"] == Decimal("1300.00")
+
+
+def test_paid_fact_waits_for_approval_and_the_bank_submodule(company_context):
+    from django.core.cache import cache
+
+    from apps.companies.models import CompanyModule
+
+    slug = company_context["slug"]
+    fd = _fd(slug)
+    draft = budgets.create(fd, project_id=s.project().id,
+                           lines=[{"article_id": s.metal().id, "limit_amount": 100}])
+    card = read.card(fd, draft)
+    assert card["lines"][0]["paid_fact"] is None and card["totals"]["paid_fact"] is None
+    assert card["totals"]["by_group"][0]["paid_fact"] is None
+    assert read.registry(fd)["items"][0]["paid_fact"] is None
+
+    # Выписка у компании выключена — «Оплачено факт» не показывается, как на
+    # графике дашборда «Оплаты»; «Задействовано» — как было.
+    approved = s.approved_budget(slug, s.project("П-2"), {s.metal(): 1000})
+    CompanyModule.objects.create(company_id=company_context["id"], app_label="bpp_bank",
+                                 enabled=False)
+    cache.clear()          # рубильник кэшируется на 5 с
+    card = read.card(fd, approved)
+    assert card["lines"][0]["paid_fact"] is None and card["totals"]["paid_fact"] is None
+    assert card["lines"][0]["committed"] == Decimal("0.00")

@@ -73,6 +73,8 @@ export function BudgetsPage() {
       { currency: 'currency_code' }),
     notForDraft(moneyColumn<BudgetRow>('committed', t('bpp.budgets.committed', 'Σ Задействовано'),
       { currency: 'currency_code' })),
+    notForDraft(moneyColumn<BudgetRow>('paid_fact', t('bpp.budgets.paidFact', 'Σ Оплачено факт'),
+      { currency: 'currency_code' })),
     notForDraft(negativeInRed(moneyColumn<BudgetRow>('available',
       t('bpp.budgets.available', 'Σ Доступно'), { currency: 'currency_code' }))),
     {

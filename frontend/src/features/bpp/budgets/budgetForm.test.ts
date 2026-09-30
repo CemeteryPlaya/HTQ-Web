@@ -10,7 +10,7 @@ import { fromCents, lessThan, subMoney, sumMoney, toCents } from './cents';
 
 const line = (over: Partial<EditLine>): EditLine => ({
   key: over.key ?? 'k', article_id: 'a1', limit: '100,00', comment: '', locked: false,
-  committed: null, ...over,
+  committed: null, paid_fact: null, ...over,
 });
 
 describe('cents', () => {
@@ -59,7 +59,7 @@ describe('formOf', () => {
   const budgetLine = (article: string, limit: string): BudgetLine => ({
     id: article, article_id: article, article_code: article, article_name: article,
     article_archived: false, group_code: 'supply', group_name: 'Снабжение',
-    limit_amount: limit, comment: '', committed: '100.00', available: '0.00',
+    limit_amount: limit, comment: '', committed: '100.00', paid_fact: '0.00', available: '0.00',
   });
 
   it('в корректировке запирает статьи действующей версии, новые — нет', () => {
