@@ -1,12 +1,13 @@
 /**
- * Реестр L-06 (ТЗ §10.5): вкладка — параметр `tab` запроса; ФД на вкладке
+ * Реестр L-06 (ТЗ §10.5): вкладка — параметр `tab` запроса и адреса страницы
+ * (ссылки дашборда и сводки открывают нужную вкладку); ФД на вкладке
  * «На решение ФД» не оплачивает отмеченные без причины и видит итог по
  * каждому счёту.
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createTestQueryClient } from '@/test/renderWithProviders';
@@ -32,6 +33,19 @@ const ROW: InvoiceRow = {
   days_waiting_docs: null, recon_status: 'no_data', paid_bank_amount: '0.00',
   possible_split: true, current_holders: null,
 };
+
+function LocationProbe() {
+  return <output data-testid="search">{useLocation().search}</output>;
+}
+
+const renderAt = (entry = '/bpp/invoices') => render(
+  <QueryClientProvider client={createTestQueryClient()}>
+    <MemoryRouter initialEntries={[entry]}><InvoicesPage /><LocationProbe /></MemoryRouter>
+  </QueryClientProvider>,
+);
+
+const requested = (fragment: string) =>
+  get.mock.calls.some(([url]) => String(url).includes(fragment));
 
 describe('InvoicesPage', () => {
   beforeEach(() => {
@@ -71,5 +85,41 @@ describe('InvoicesPage', () => {
       invoice_ids: ['inv1'], decision: 'not_payable', comment: 'Нет бюджета на квартал',
     });
     expect(await screen.findByText('Решение ждёт не вас.', { exact: false })).toBeInTheDocument();
+  });
+
+  it('открывает вкладку из адреса — ссылка сводки «Ждут закрывающих»', async () => {
+    renderAt('/bpp/invoices?tab=awaiting_docs');
+
+    expect(await screen.findByRole('tab', { name: 'Ждут закрывающих' }))
+      .toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(requested('?tab=awaiting_docs')).toBe(true));
+    expect(requested('?tab=all')).toBe(false);
+  });
+
+  it('смена вкладки пишет её в адрес и начинает с первой страницы, поиск остаётся', async () => {
+    // 500 строк — третья страница существует, реестр её не прижимает.
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.includes('invoices') ? {
+      items: [ROW], total: 500, page: 3, page_size: 50,
+      totals: { amount_kzt: '1000.00', paid_bank_amount: '0.00' },
+    } : [] }));
+    renderAt('/bpp/invoices?page=3&q=145');
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'К оплате' }));
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toContain('tab=to_pay'));
+    const search = new URLSearchParams(screen.getByTestId('search').textContent ?? '');
+    expect(search.get('page')).toBeNull();
+    expect(search.get('q')).toBe('145');
+    await waitFor(() => expect(requested('?tab=to_pay')).toBe(true));
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Все' }));
+    await waitFor(() => expect(screen.getByTestId('search').textContent).not.toContain('tab='));
+  });
+
+  it('неизвестная вкладка в адресе — «Все», параметр убран', async () => {
+    renderAt('/bpp/invoices?tab=bogus');
+
+    expect(await screen.findByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe(''));
+    expect(requested('?tab=bogus')).toBe(false);
   });
 });

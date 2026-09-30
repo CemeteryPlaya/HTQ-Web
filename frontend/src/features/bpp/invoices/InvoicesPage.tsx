@@ -4,9 +4,13 @@
  * «Оплачено, банк не подтвердил», «Расхождения с банком»; итоговая строка —
  * Σ в KZT и Σ оплачено по банку по всей выборке (сервер).
  *
- * - Вкладка — параметр `tab` адреса реестра; фильтры и колонки у вкладок
- *   общие (один ключ `localStorage`), отметки строк — свои: смена вкладки
- *   пересоздаёт таблицу.
+ * - Вкладка — параметр `tab` запроса реестра и адреса страницы
+ *   (`/bpp/invoices?tab=awaiting_docs`): ссылки дашборда и ежедневной сводки
+ *   открывают нужную вкладку, «К списку» с карточки счёта возвращает на неё
+ *   же. Смена вкладки правит адрес с `replace` (как листание страниц реестра)
+ *   и начинает выборку с первой страницы; неизвестная вкладка в адресе — «Все».
+ *   Фильтры и колонки у вкладок общие (один ключ `localStorage`), отметки
+ *   строк — свои: смена вкладки пересоздаёт таблицу.
  * - ФД на вкладке «На решение ФД» решает отмеченные разом: «Оплатить» — с
  *   плановой датой (пусто — срок оплаты каждого счёта), «Не оплачивать» — с
  *   причиной; итог — по каждому счёту (успешные и отклонённые с причиной).
@@ -15,10 +19,11 @@
  * - Кнопки «Создать» нет: счёт оформляется из Плана закупок или из
  *   действующего договора.
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Download } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { newIdempotencyKey } from '@/api/files';
@@ -35,6 +40,7 @@ import type {
   BulkOutcome, RegistryBulkAction, RegistryColumn, RegistryFilter,
 } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
+import { URL_PAGE } from '../core/useRegistryState';
 import { formatDate } from '../format';
 import { projectApi, projectKeys } from '../projects/api';
 
@@ -55,6 +61,11 @@ const INVOICE_TABS = [
 ] as const;
 type TabKey = (typeof INVOICE_TABS)[number]['key'];
 
+/** Параметр адреса с вкладкой — тот же, что у ручки реестра. */
+export const URL_TAB = 'tab';
+const isTab = (value: string | null): value is TabKey =>
+  INVOICE_TABS.some((entry) => entry.key === value);
+
 const DOC_SHORT: Record<string, string> = { avr: 'АВР', waybill: 'накл.', vat_invoice: 'СФ' };
 const COMMENT_MIN = 10;
 
@@ -62,7 +73,22 @@ export function InvoicesPage() {
   const { t } = useTranslation();
   const permissions = usePermissions();
   const prompt = usePrompt();
-  const [tab, setTab] = useState<TabKey>('all');
+  const [urlParams, setUrlParams] = useSearchParams();
+  const rawTab = urlParams.get(URL_TAB);
+  const tab: TabKey = isTab(rawTab) ? rawTab : 'all';
+  const setTab = useCallback((next: TabKey) => {
+    setUrlParams((current) => {
+      const params = new URLSearchParams(current);
+      if (next === 'all') params.delete(URL_TAB); else params.set(URL_TAB, next);
+      params.delete(URL_PAGE);   // другая выборка — с первой страницы
+      return params;
+    }, { replace: true });
+  }, [setUrlParams]);
+  // `?tab=all` и неизвестная вкладка — в канонический вид (без параметра):
+  // такая ссылка не должна жить в адресе и уходить дальше при копировании.
+  useEffect(() => {
+    if (rawTab !== null && (!isTab(rawTab) || rawTab === 'all')) setTab('all');
+  }, [rawTab, setTab]);
   const [exporting, setExporting] = useState(false);
   const canDecide = permissions.can('bpp.invoices.decision', 'edit');
   const canPay = permissions.can('bpp.invoices.payment', 'edit');
