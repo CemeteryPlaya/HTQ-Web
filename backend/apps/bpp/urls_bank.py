@@ -15,6 +15,7 @@ from . import views_bank as views
 A = "bank/accounts/<str:account_id>"
 T = "bank/templates/<str:template_id>"
 IMP = "bank/imports/<str:import_id>"
+LINE = "bank/lines/<str:line_id>"
 
 urlpatterns = [
     path("bank/accounts", views.accounts_collection),
@@ -34,4 +35,23 @@ urlpatterns = [
     path(f"{IMP}/", views.import_get),
     path(f"{IMP}/lines", views.import_lines),
     path(f"{IMP}/lines/", views.import_lines),
+    # Сверка (A4.2, этап 4 A, задача 3).
+    path(f"{IMP}/reconcile", views.import_reconcile),
+    path(f"{IMP}/reconcile/", views.import_reconcile),
+    path(f"{IMP}/impact", views.import_impact),
+    path(f"{IMP}/impact/", views.import_impact),
+    path(f"{IMP}/cancel", views.import_cancel),
+    path(f"{IMP}/cancel/", views.import_cancel),
+    path(f"{IMP}/export", views.import_export),
+    path(f"{IMP}/export/", views.import_export),
+    path(f"{LINE}/candidates", views.line_candidates),
+    path(f"{LINE}/candidates/", views.line_candidates),
+    path(f"{LINE}/match", views.line_match),
+    path(f"{LINE}/match/", views.line_match),
+    path(f"{LINE}/confirm", views.line_confirm),
+    path(f"{LINE}/confirm/", views.line_confirm),
+    path(f"{LINE}/cancel-match", views.line_cancel_match),
+    path(f"{LINE}/cancel-match/", views.line_cancel_match),
+    path(f"{LINE}/exclude", views.line_exclude),
+    path(f"{LINE}/exclude/", views.line_exclude),
 ]

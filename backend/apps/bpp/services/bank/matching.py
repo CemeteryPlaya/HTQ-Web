@@ -24,8 +24,21 @@ CALC-010, AC-010, AC-011, BR-073; A4.2, план этапа 4 A, задача 2)
   (или причину строки, если у счёта замечаний нет).
 
 Идемпотентность: берутся только строки «Не сопоставлена» без исключения и
-без действующих сопоставлений — повтор автосверки ничего не удваивает;
-«Не сопоставлена» проверяется заново (счёт с этим номером мог появиться).
+без единого сопоставления — даже отменённого: сопоставление, которое ФД
+отменил, автосверка не создаёт снова (его решение важнее номера в
+назначении). Повтор автосверки ничего не удваивает; строка без
+сопоставлений проверяется заново (счёт с этим номером мог появиться).
+
+**Ручные действия ФД** (ТЗ §11.4, задача 3) — ниже, после автосверки:
+кандидаты ``candidates``, ручное сопоставление ``match_line`` (сразу
+``active``, ``manual=True``), подтверждение ``confirm`` (``review`` →
+``active`` на месте), отмена ``cancel_match``, исключение ``exclude``,
+отмена загрузки ``cancel_import`` (мягкая) и её охват ``impact``, «Сверить»
+``reconcile`` (автосверка загрузки «Загружена», если она упала после
+разбора). Каждое — одна транзакция: запись в журнал загрузки и
+``recalc_invoice`` затронутых счетов в ней же. Комментарий подтверждения,
+отмены сопоставления и исключения обязателен (BR-060: «Отменить» — среди
+отказных действий), ручного сопоставления и отмены загрузки — нет.
 
 **Блокировки** — один порядок у всех, кто меняет сопоставления: загрузка →
 её строки → счета по ``id`` (``_lock_invoices``). Строки обрабатываются
@@ -47,11 +60,25 @@ CALC-010, AC-010, AC-011, BR-073; A4.2, план этапа 4 A, задача 2)
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, DecimalField, Exists, F, OuterRef, Q, Subquery, Sum
-from django.db.models.functions import Coalesce
+from django.db.models import (
+    Case,
+    Count,
+    DecimalField,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
+from django.db.models.functions import Abs, Coalesce
 from django.utils import timezone
 
 from apps.bpp import interface as bpp_interface
@@ -67,17 +94,30 @@ from apps.bpp.models import (
     ReconStatus,
 )
 from apps.bpp.services.core import audit
-from apps.bpp.services.money import money
+from apps.bpp.services.money import fmt, money
+from htqweb.errors import DomainError
 
 from . import recon
 
 __all__ = [
+    "AUDIT_TYPE",
+    "CANDIDATES_LIMIT",
     "CHUNK",
+    "COMMENT_MIN",
+    "FORBIDDEN_STATUSES",
     "PAYABLE_STATUSES",
     "REVIEW_REASONS",
     "allocated_subquery",
     "auto_match",
+    "cancel_import",
+    "cancel_match",
+    "candidates",
+    "confirm",
+    "exclude",
+    "impact",
+    "match_line",
     "recalc_invoice",
+    "reconcile",
     "totals",
 ]
 
@@ -105,7 +145,23 @@ REVIEW_REASONS = {
     CURRENCY_MISMATCH: "Валюта платежа ≠ валюте счёта",
 }
 
+#: ТЗ §11.4: с «Отменён» и «Не к оплате» платёж не сопоставляется вручную;
+#: «Заменён альтернативой» — такой же финал счёта. Эти же статусы не
+#: подтверждаются из «Требует проверки» (подтверждение — то же ручное
+#: сопоставление) и не предлагаются кандидатами.
+FORBIDDEN_STATUSES = frozenset({
+    InvoiceStatus.CANCELLED, InvoiceStatus.NOT_PAYABLE, InvoiceStatus.REPLACED,
+})
+#: BR-060: комментарий подтверждения, отмены сопоставления и исключения — не короче.
+COMMENT_MIN = 10
+#: Кандидатов для ручного сопоставления — не больше (ТЗ §11.2).
+CANDIDATES_LIMIT = 5
+#: «Близкая сумма» кандидата — ±10 % суммы строки (мастер-план A4.2).
+CANDIDATE_SPREAD = Decimal("0.10")
+
 _LIVE_IMPORT = (BankImportStatus.LOADED, BankImportStatus.RECONCILED)
+#: Журнал загрузки выписки — тип объекта = ``app_label.model``.
+AUDIT_TYPE = BankImport._meta.label_lower
 
 
 # ── CALC-010 ────────────────────────────────────────────────────────────
@@ -121,7 +177,7 @@ def _recon_status(paid: Decimal, amount: Decimal) -> str:
 
 
 def recalc_invoice(invoice_id, *, actor_id: int | None = None) -> None:
-    """P = Σ подтверждённых (``active``) сопоставлений (D-S4-1).
+    """P = Σ подтверждённых сопоставлений (``recon.active_matches``, D-S4-1).
     P = 0 → «Нет данных банка»; 0 < P < Сумма → «Оплачен частично»;
     P = Сумма → «Оплачен полностью»; P > Сумма → «Переплата».
 
@@ -136,7 +192,9 @@ def recalc_invoice(invoice_id, *, actor_id: int | None = None) -> None:
            .only("amount", "paid_bank_amount", "recon_status").filter(pk=invoice_id).first())
     if inv is None:
         return
-    paid = (PaymentMatch.objects.filter(invoice_id=invoice_id, state=PaymentMatchState.ACTIVE)
+    # Одно определение «подтверждённого» сопоставления на всех читателей
+    # суммы (дашборд, «Оплачено факт», фильтр реестра) — ``recon.active_matches``.
+    paid = (recon.active_matches().filter(invoice_id=invoice_id)
             .aggregate(total=Sum("amount"))["total"]) or ZERO
     paid = money(paid)
     status = _recon_status(paid, inv.amount)
@@ -220,13 +278,13 @@ def _decide(line: BankStatementLine, numbers: list[str], by_number: dict[str, In
 
 def _pending(import_id):
     """Строки загрузки, которые автосверка берёт: действующие, «Не
-    сопоставлена», не исключённые, без действующих сопоставлений."""
-    live_match = PaymentMatch.objects.filter(line=OuterRef("pk")).exclude(
-        state=PaymentMatchState.CANCELLED)
+    сопоставлена», не исключённые и без единого сопоставления — отменённое
+    ФД сопоставление автосверка не возвращает."""
+    any_match = PaymentMatch.objects.filter(line=OuterRef("pk"))
     return (BankStatementLine.objects
             .filter(bank_import_id=import_id, cancelled_at__isnull=True,
                     match_status=LineMatchStatus.UNMATCHED, excluded_at__isnull=True)
-            .exclude(Exists(live_match)))
+            .exclude(Exists(any_match)))
 
 
 def _match_chunk(import_id, after: tuple[int, str] | None) -> tuple[int, str] | None:
@@ -282,11 +340,12 @@ def _match_chunk(import_id, after: tuple[int, str] | None) -> tuple[int, str] | 
         return lines[-1].row_no, lines[-1].pk
 
 
-def auto_match(import_id) -> dict:
+def auto_match(import_id, *, actor_id: int | None = None) -> dict:
     """Автосверка загрузки ``import_id`` (в контексте её компании). Загрузка
     «Загружена» после неё — «Сверена»; повтор на «Сверена» доводит только
     то, что осталось «Не сопоставлена». Загрузка в ином статусе
-    (разбирается, ошибка, отменена) не сверяется. Ответ — ``totals``."""
+    (разбирается, ошибка, отменена) не сверяется. Ответ — ``totals``.
+    ``actor_id`` — кто нажал «Сверить» (пусто — автосверка после разбора)."""
     after = None
     while True:
         after = _match_chunk(import_id, after)
@@ -297,9 +356,28 @@ def auto_match(import_id) -> dict:
     reconciled = BankImport.objects.filter(pk=import_id, status=BankImportStatus.LOADED).update(
         status=BankImportStatus.RECONCILED, updated_at=now)
     if reconciled:
-        audit.record_for("bpp.bankimport", str(import_id), "reconciled", actor_id=None,
+        audit.record_for(AUDIT_TYPE, str(import_id), "reconciled", actor_id=actor_id,
                          changes={tab: result[tab]["count"] for tab in LineMatchStatus.values})
     return result
+
+
+def reconcile(actor_id: int, import_id) -> dict:
+    """«Сверить» (ФД): автосверка загрузки, оставшейся «Загружена», — после
+    разбора она идёт сама, и ручка нужна, только если та упала (M-2 ревью
+    задачи 2). Только для «Загружена» — иначе ``E-STATE-01``; уже
+    сопоставленные, исключённые и отменённые ФД строки автосверка не трогает
+    (``_pending``), поэтому повтор ничего не удваивает. Две одновременные
+    «Сверить» безопасны: пачки автосверки блокируют загрузку. Ответ —
+    ``totals``."""
+    key = _as_uuid(import_id)
+    imp = (BankImport.objects.only("id", "number", "status").filter(pk=key).first()
+           if key else None)
+    if imp is None:
+        raise _not_found("Загрузка выписки")
+    if imp.status != BankImportStatus.LOADED:
+        raise _state(f"Загрузка {imp.number} — «{imp.get_status_display()}»: сверить можно "
+                     f"только загрузку «Загружена».")
+    return auto_match(imp.pk, actor_id=actor_id)
 
 
 # ── итоги по вкладкам ───────────────────────────────────────────────────
@@ -333,3 +411,387 @@ def totals(import_id) -> dict:
             .aggregate(total=Sum(F("amount") - F("allocated")))["total"])
     result["unallocated"] = money(rest or ZERO)
     return result
+
+
+# ── ручные действия ФД (ТЗ §11.4, задача 3) ────────────────────────────
+
+def _invalid(field: str, message: str) -> DomainError:
+    return DomainError("E-VAL-01", message, fields=[{"field": field, "message": message}])
+
+
+def _state(message: str) -> DomainError:
+    return DomainError("E-STATE-01", message, status=409)
+
+
+def _not_found(what: str) -> DomainError:
+    return DomainError("E-NOT-FOUND", f"{what} не найдена.", status=404)
+
+
+def _as_uuid(value) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _comment(comment, *, required: bool) -> str:
+    """BR-060: обязательный комментарий — не короче ``COMMENT_MIN``;
+    необязательный хранится как есть."""
+    text = str(comment or "").strip()
+    if required and len(text) < COMMENT_MIN:
+        raise DomainError(
+            "BR-060", "Опишите причину: комментарий не короче 10 символов.",
+            fields=[{"field": "comment", "message": f"Минимум {COMMENT_MIN} символов"}])
+    return text
+
+
+_IMPORT_STATE_TEXT = {
+    BankImportStatus.PROCESSING: "ещё разбирается",
+    BankImportStatus.FAILED: "не загрузилась",
+    BankImportStatus.CANCELLED: "отменена",
+}
+
+
+def _lock_import(import_id) -> BankImport:
+    key = _as_uuid(import_id)
+    imp = (BankImport.objects.select_for_update().defer("source").filter(pk=key).first()
+           if key else None)
+    if imp is None:
+        raise _not_found("Загрузка выписки")
+    return imp
+
+
+def _locked_line(line_id) -> tuple[BankImport, BankStatementLine]:
+    """Строка под блокировкой в общем порядке: сначала её загрузка, потом
+    строка. Загрузка должна быть «Загружена» или «Сверена», строка — не
+    отменена."""
+    key = _as_uuid(line_id)
+    import_id = (BankStatementLine.objects.filter(pk=key)
+                 .values_list("bank_import_id", flat=True).first() if key else None)
+    if import_id is None:
+        raise _not_found("Строка выписки")
+    imp = _lock_import(import_id)
+    line = BankStatementLine.objects.select_for_update().get(pk=key)
+    if imp.status not in _LIVE_IMPORT or line.cancelled_at is not None:
+        state = _IMPORT_STATE_TEXT.get(imp.status, "отменена")
+        raise _state(f"Загрузка {imp.number} {state} — строки её выписки не меняются.")
+    return imp, line
+
+
+def _record(imp: BankImport, action: str, *, actor_id: int, line: BankStatementLine | None = None,
+            changes: dict | None = None, comment: str = "") -> None:
+    data = dict(changes or {})
+    if line is not None:
+        data = {"line_id": str(line.pk), "row_no": line.row_no, "doc_number": line.doc_number,
+                "amount": str(line.amount), **data}
+    audit.record_for(AUDIT_TYPE, str(imp.pk), action, actor_id=actor_id, changes=data,
+                     comment=comment)
+
+
+def _recalc_all(invoice_ids, actor_id: int | None) -> None:
+    for key in sorted({str(key) for key in invoice_ids}):
+        recalc_invoice(key, actor_id=actor_id)
+
+
+def _refuse_invoice(inv: Invoice | None, line: BankStatementLine, action: str) -> None:
+    """ТЗ §11.4 и M-4: счёт существует, не в финальном статусе отказа, в
+    валюте платежа — иначе ``E-VAL-01`` на ``invoice_id``."""
+    if inv is None:
+        raise _invalid("invoice_id", "Счёт не найден. Выберите счёт из списка.")
+    if inv.status in FORBIDDEN_STATUSES:
+        raise _invalid("invoice_id", f"Счёт {inv.number} в статусе «{inv.get_status_display()}» "
+                                     f"— {action} с ним нельзя.")
+    if _plain(line.currency) != _plain(inv.currency_code):
+        raise _invalid("invoice_id", REVIEW_REASONS[CURRENCY_MISMATCH])
+
+
+def _amount(value) -> Decimal:
+    try:
+        amount = money(Decimal(str(value).replace(" ", "").replace(",", ".")))
+    except (ArithmeticError, ValueError, TypeError):
+        raise _invalid("amount", "Укажите сумму сопоставления числом.") from None
+    if not amount.is_finite():
+        raise _invalid("amount", "Укажите сумму сопоставления числом.")
+    if amount <= 0:
+        raise _invalid("amount", "Сумма сопоставления должна быть больше нуля.")
+    return amount
+
+
+# ── кандидаты ────────────────────────────────────────────────────────────
+
+def _query_filter(text: str) -> Q:
+    """Поиск кандидата по номеру счёта (часть номера или полный номер в
+    «грязном» виде — как в назначении платежа), контрагенту (название, БИН)
+    и сумме."""
+    number = recon.normalize_purpose(text).replace(" ", "")
+    condition = (Q(number__icontains=number) | Q(counterparty__name__icontains=text)
+                 | Q(counterparty__short_name__icontains=text)
+                 | Q(counterparty__reg_number__icontains=text.replace(" ", "")))
+    numbers = recon.find_numbers(text)
+    if numbers:  # «сч 2026 000123» — тот же разбор, что у автосверки
+        condition |= Q(number__in=numbers)
+    try:
+        amount = money(Decimal(text.replace(" ", "").replace("\u00a0", "").replace(",", ".")))
+    except (ArithmeticError, ValueError):
+        return condition
+    return condition | Q(amount=amount) if amount.is_finite() else condition
+
+
+def candidates(line_id, query: str = "") -> list[dict]:
+    """До 5 счетов для «Сопоставить вручную» (ТЗ §11.2, §11.4).
+
+    Без ``query`` — счета с тем же БИН контрагента, что у получателя
+    платежа, и суммой в пределах ±10 % суммы строки. С ``query`` — поиск по
+    номеру, контрагенту (название, БИН) и сумме, где счета «тот же БИН и
+    близкая сумма» идут первыми. В обоих случаях — только счета в валюте
+    платежа и не «Отменён» / «Не к оплате» / «Заменён альтернативой»;
+    ближе по сумме — выше."""
+    key = _as_uuid(line_id)
+    line = BankStatementLine.objects.filter(pk=key).first() if key else None
+    if line is None:
+        raise _not_found("Строка выписки")
+    rows = (Invoice.objects.select_related("counterparty")
+            .exclude(status__in=FORBIDDEN_STATUSES)
+            .filter(currency_code__iexact=_plain(line.currency)))
+    reg = _plain(line.recipient_bin)
+    spread = money(line.amount * CANDIDATE_SPREAD)
+    close = (Q(counterparty__reg_number=reg, amount__gte=line.amount - spread,
+               amount__lte=line.amount + spread) if reg else None)
+    text = " ".join(str(query or "").split())
+    if text:
+        rows = rows.filter(_query_filter(text))
+    elif close is None:
+        return []
+    else:
+        rows = rows.filter(close)
+    rank = (Case(When(close, then=Value(0)), default=Value(1), output_field=IntegerField())
+            if close is not None else Value(1, output_field=IntegerField()))
+    rows = (rows.annotate(rank=rank, diff=Abs(F("amount") - line.amount))
+            .order_by("rank", "diff", "number")[:CANDIDATES_LIMIT])
+    return [_candidate(inv, reg) for inv in rows]
+
+
+def _candidate(inv: Invoice, reg: str) -> dict:
+    cp = inv.counterparty
+    return {
+        "id": str(inv.pk), "number": inv.number, "status": inv.status,
+        "status_label": inv.get_status_display(), "amount": inv.amount,
+        "currency_code": inv.currency_code, "paid_bank_amount": inv.paid_bank_amount,
+        "remainder": max(inv.amount - inv.paid_bank_amount, ZERO),
+        "recon_status": inv.recon_status, "recon_status_label": inv.get_recon_status_display(),
+        "counterparty": ({"id": str(cp.pk), "name": cp.short_name or cp.name,
+                          "reg_number": cp.reg_number} if cp else None),
+        "same_bin": bool(cp and reg and _plain(cp.reg_number) == reg),
+        "ext_number": inv.ext_number, "ext_date": inv.ext_date,
+    }
+
+
+# ── сопоставить, подтвердить, отменить, исключить ──────────────────────
+
+@transaction.atomic
+def match_line(actor_id: int, line_id, allocations: list[dict], comment: str = ""
+               ) -> BankStatementLine:
+    """«Сопоставить вручную» (ТЗ §11.4): строка «Не сопоставлена» →
+    «Сопоставлена», сопоставления ``manual=True`` сразу ``active``.
+    ``allocations`` — ``[{invoice_id, amount}]``; у единственного счёта
+    сумму можно не указывать — вся строка. Σ распределения ≤ суммы строки
+    (остаток строки остаётся «не распределено»)."""
+    comment = _comment(comment, required=False)
+    imp, line = _locked_line(line_id)
+    if line.match_status != LineMatchStatus.UNMATCHED:
+        raise _state("Сопоставить вручную можно только строку «Не сопоставлена». Сначала "
+                     "отмените её сопоставление.")
+    items = list(allocations or [])
+    if not items:
+        raise _invalid("invoice_id", "Выберите счёт для сопоставления.")
+    plan: list[tuple[str, Decimal]] = []
+    for item in items:
+        key = _as_uuid((item or {}).get("invoice_id"))
+        if key is None:
+            raise _invalid("invoice_id", "Счёт не найден. Выберите счёт из списка.")
+        raw = (item or {}).get("amount")
+        if raw in (None, "") and len(items) == 1:
+            amount = line.amount
+        elif raw in (None, ""):
+            raise _invalid("amount", "Укажите сумму для каждого счёта распределения.")
+        else:
+            amount = _amount(raw)
+        if str(key) in {k for k, _ in plan}:
+            raise _invalid("invoice_id", "Один счёт указан в распределении дважды.")
+        plan.append((str(key), amount))
+    total = sum((amount for _, amount in plan), ZERO)
+    if total > line.amount:
+        raise _invalid("amount", f"Сумма распределения {fmt(total, line.currency)} больше суммы "
+                                 f"строки выписки {fmt(line.amount, line.currency)}.")
+    locked = _lock_invoices(key for key, _ in plan)
+    for key, _ in plan:
+        _refuse_invoice(locked.get(key), line, "сопоставить платёж")
+    now = timezone.now()
+    PaymentMatch.objects.bulk_create([
+        PaymentMatch(line=line, invoice=locked[key], amount=amount, manual=True,
+                     state=PaymentMatchState.ACTIVE, comment=comment, created_by=actor_id,
+                     updated_by=actor_id)
+        for key, amount in plan])
+    line.match_status, line.review_reason, line.updated_at = LineMatchStatus.MATCHED, "", now
+    line.updated_by = actor_id
+    line.save(update_fields=["match_status", "review_reason", "updated_at", "updated_by"])
+    _recalc_all(locked, actor_id)
+    _record(imp, "line_matched", actor_id=actor_id, line=line, comment=comment, changes={
+        "allocations": [{"invoice": locked[key].number, "amount": str(amount)}
+                        for key, amount in plan]})
+    return line
+
+
+@transaction.atomic
+def confirm(actor_id: int, line_id, comment: str) -> BankStatementLine:
+    """«Подтвердить сопоставление» строки «Требует проверки» (ТЗ §11.2,
+    BR-073): комментарий обязателен (BR-060), сопоставления ``review`` →
+    ``active`` на месте, статус сверки счетов пересчитывается. Счёт в
+    «Отменён» / «Не к оплате» / «Заменён альтернативой» и платёж в другой
+    валюте не подтверждаются — ``E-VAL-01`` на ``invoice_id``."""
+    comment = _comment(comment, required=True)
+    imp, line = _locked_line(line_id)
+    if line.match_status != LineMatchStatus.NEEDS_REVIEW:
+        raise _state("Подтвердить можно только строку «Требует проверки».")
+    matches = list(line.matches.filter(state=PaymentMatchState.REVIEW)
+                   .select_for_update().order_by("created_at", "pk"))
+    if not matches:
+        raise _state("У строки нет сопоставлений на проверке — сопоставьте её вручную.")
+    locked = _lock_invoices(m.invoice_id for m in matches)
+    for match in matches:
+        _refuse_invoice(locked.get(str(match.invoice_id)), line, "подтвердить сопоставление")
+    now = timezone.now()
+    PaymentMatch.objects.filter(pk__in=[m.pk for m in matches]).update(
+        state=PaymentMatchState.ACTIVE, confirmed_by_id=actor_id, confirmed_at=now,
+        comment=comment, updated_at=now, updated_by=actor_id)
+    reason = line.review_reason
+    line.match_status, line.review_reason, line.updated_at = LineMatchStatus.MATCHED, "", now
+    line.updated_by = actor_id
+    line.save(update_fields=["match_status", "review_reason", "updated_at", "updated_by"])
+    _recalc_all(locked, actor_id)
+    _record(imp, "match_confirmed", actor_id=actor_id, line=line, comment=comment, changes={
+        "review_reason": reason,
+        "invoices": [locked[str(m.invoice_id)].number for m in matches]})
+    return line
+
+
+@transaction.atomic
+def cancel_match(actor_id: int, line_id, comment: str) -> BankStatementLine:
+    """«Отменить сопоставление» (вкладки «Сопоставлены» и «Требуют
+    проверки»): все неотменённые сопоставления строки — ``cancelled`` (в
+    истории остаются), строка — «Не сопоставлена», счета пересчитываются.
+    Комментарий обязателен (BR-060 — «Отменить»). Автосверка эту строку
+    больше не трогает — дальше только вручную. У строки «Исключена» то же
+    действие снимает исключение."""
+    comment = _comment(comment, required=True)
+    imp, line = _locked_line(line_id)
+    now = timezone.now()
+    if line.match_status == LineMatchStatus.EXCLUDED:
+        changes = {"excluded_comment": line.excluded_comment}
+        line.match_status, line.updated_at, line.updated_by = (LineMatchStatus.UNMATCHED, now,
+                                                                actor_id)
+        line.excluded_comment, line.excluded_by_id, line.excluded_at = "", None, None
+        line.save(update_fields=["match_status", "excluded_comment", "excluded_by_id",
+                                 "excluded_at", "updated_at", "updated_by"])
+        _record(imp, "exclusion_cancelled", actor_id=actor_id, line=line, comment=comment,
+                changes=changes)
+        return line
+    if line.match_status not in (LineMatchStatus.MATCHED, LineMatchStatus.NEEDS_REVIEW):
+        raise _state("Строка не сопоставлена — отменять нечего.")
+    matches = list(line.matches.exclude(state=PaymentMatchState.CANCELLED)
+                   .select_for_update().order_by("created_at", "pk"))
+    locked = _lock_invoices(m.invoice_id for m in matches)
+    PaymentMatch.objects.filter(pk__in=[m.pk for m in matches]).update(
+        state=PaymentMatchState.CANCELLED, cancelled_by_id=actor_id, cancelled_at=now,
+        updated_at=now, updated_by=actor_id)
+    previous = line.match_status
+    line.match_status, line.review_reason, line.updated_at = LineMatchStatus.UNMATCHED, "", now
+    line.updated_by = actor_id
+    line.save(update_fields=["match_status", "review_reason", "updated_at", "updated_by"])
+    _recalc_all(locked, actor_id)
+    _record(imp, "match_cancelled", actor_id=actor_id, line=line, comment=comment, changes={
+        "match_status": previous,
+        "matches": [{"invoice": locked[str(m.invoice_id)].number, "amount": str(m.amount),
+                     "state": m.state} for m in matches]})
+    return line
+
+
+@transaction.atomic
+def exclude(actor_id: int, line_id, comment: str) -> BankStatementLine:
+    """«Исключить — не относится к закупкам» (ТЗ §11.4): строка «Не
+    сопоставлена» → «Исключена», комментарий обязателен (BR-060). Счета не
+    затрагиваются; в показатель дашборда «Не сопоставлено» строка больше не
+    входит (ТЗ §11.4 называет её «Прочие списания»; отдельного показателя в
+    таблице D-01 §11.5 нет)."""
+    comment = _comment(comment, required=True)
+    imp, line = _locked_line(line_id)
+    if line.match_status != LineMatchStatus.UNMATCHED:
+        raise _state("Исключить можно только строку «Не сопоставлена». Сначала отмените её "
+                     "сопоставление.")
+    now = timezone.now()
+    line.match_status, line.review_reason = LineMatchStatus.EXCLUDED, ""
+    line.excluded_comment, line.excluded_by_id, line.excluded_at = comment, actor_id, now
+    line.updated_at, line.updated_by = now, actor_id
+    line.save(update_fields=["match_status", "review_reason", "excluded_comment",
+                             "excluded_by_id", "excluded_at", "updated_at", "updated_by"])
+    _record(imp, "line_excluded", actor_id=actor_id, line=line, comment=comment)
+    return line
+
+
+# ── отмена загрузки ─────────────────────────────────────────────────────
+
+def _impact_matches(import_id):
+    return PaymentMatch.objects.filter(line__bank_import_id=import_id,
+                                       line__cancelled_at__isnull=True).exclude(
+        state=PaymentMatchState.CANCELLED)
+
+
+def impact(import_id) -> dict:
+    """Для диалога «Отменить загрузку» (ТЗ §11.4): ``invoices`` — сколько
+    счетов затронет отмена (у них есть действующие или проверяемые
+    сопоставления строк загрузки), ``lines`` — действующих строк."""
+    key = _as_uuid(import_id)
+    if key is None or not BankImport.objects.filter(pk=key).exists():
+        raise _not_found("Загрузка выписки")
+    invoices = _impact_matches(key).order_by().values("invoice_id").distinct().count()
+    lines = BankStatementLine.objects.filter(bank_import_id=key,
+                                             cancelled_at__isnull=True).count()
+    return {"invoices": invoices, "lines": lines}
+
+
+@transaction.atomic
+def cancel_import(actor_id: int, import_id, comment: str = "") -> BankImport:
+    """«Отменить загрузку» (ТЗ §11.4, мягко): строки загрузки и их
+    сопоставления получают ``cancelled_at`` (сопоставления — ещё и
+    ``cancelled``), статусы сверки затронутых счетов пересчитываются,
+    загрузка — «Отменена». Ключи дублей строк освобождаются (индекс BR-075
+    — среди неотменённых строк), поэтому та же выписка потом грузится и
+    сверяется заново. Отметка оплаты БУХ, которую держала сверка
+    (``PaymentMark`` не отменяется при ``paid_bank_amount > 0``), снова
+    отменяема."""
+    comment = _comment(comment, required=False)
+    imp = _lock_import(import_id)
+    if imp.status not in _LIVE_IMPORT:
+        state = _IMPORT_STATE_TEXT.get(imp.status, "отменена")
+        raise _state(f"Загрузка {imp.number} {state} — отменить можно загрузку «Сверена» "
+                     f"или «Загружена».")
+    lines = list(imp.lines.filter(cancelled_at__isnull=True).select_for_update()
+                 .order_by("row_no", "pk").values_list("pk", flat=True))
+    matches = list(_impact_matches(imp.pk).values_list("pk", "invoice_id"))
+    invoice_ids = {str(invoice_id) for _, invoice_id in matches}
+    _lock_invoices(invoice_ids)
+    now = timezone.now()
+    PaymentMatch.objects.filter(pk__in=[pk for pk, _ in matches]).update(
+        state=PaymentMatchState.CANCELLED, cancelled_by_id=actor_id, cancelled_at=now,
+        updated_at=now, updated_by=actor_id)
+    BankStatementLine.objects.filter(pk__in=lines).update(cancelled_at=now, updated_at=now,
+                                                          updated_by=actor_id)
+    previous = imp.status
+    BankImport.objects.filter(pk=imp.pk).update(status=BankImportStatus.CANCELLED,
+                                                updated_at=now, updated_by=actor_id)
+    _recalc_all(invoice_ids, actor_id)
+    _record(imp, "cancelled", actor_id=actor_id, comment=comment, changes={
+        "status": [previous, BankImportStatus.CANCELLED], "lines": len(lines),
+        "matches": len(matches), "invoices": len(invoice_ids)})
+    imp.refresh_from_db()
+    return imp

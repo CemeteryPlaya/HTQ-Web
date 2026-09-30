@@ -26,8 +26,9 @@ from apps.bpp.models.bank import (
 )
 from apps.bpp.tests.counterparties.common import kz_iban
 
-__all__ = ["HEADERS", "csv_file", "iban", "loaded_import", "onec_bytes", "onec_doc",
-           "onec_file", "org_account", "template", "truncated_xlsx", "xlsx_file"]
+__all__ = ["HEADERS", "counterparty", "csv_file", "iban", "loaded_import", "onec_bytes",
+           "onec_doc", "onec_file", "orm_invoice", "org_account", "template", "truncated_xlsx",
+           "xlsx_file"]
 
 #: Заголовки «как у банка» → поле шаблона.
 HEADERS = {
@@ -160,3 +161,31 @@ def loaded_import(account: OrgBankAccount, lines, *, author_id: int | None = Non
             dedup_hash=dedup_hash(account.pk, doc_date=doc_date, doc_number=doc_number,
                                   amount=amount, recipient_bin=recipient_bin))
     return imp
+
+
+# ── счёт прямо в базе (сверка, A4.2, задача 3) ─────────────────────────
+
+def counterparty(reg: str = "100000000001", **over):
+    """Контрагент прямо в базе — как ``test_invoices._counterparty``."""
+    from apps.bpp.models import Counterparty
+
+    fields = {"name": f"ТОО «Контрагент {reg[-3:]}»", "kind": "legal", "country_code": "KZ",
+              "reg_number": reg, "is_vat_payer": True, "verified_override": True, **over}
+    return Counterparty.objects.create(**fields)
+
+
+def orm_invoice(cp, amount, *, status: str = "to_pay", currency: str = "KZT",
+                author_id: int = 904):
+    """Счёт в нужном статусе прямо в базе, без потока B: сверке нужны только
+    номер, статус, сумма, валюта и контрагент. Номер и номер счёта
+    контрагента — уникальные по базе."""
+    import uuid
+
+    from apps.bpp.models import Invoice
+
+    seq = Invoice.objects.count() + 1
+    return Invoice.objects.create(
+        number=f"СЧ-2026-{800000 + seq:06d}", project_id=uuid.uuid4(),
+        article_id=uuid.uuid4(), counterparty=cp, ext_number=f"E-{seq}",
+        ext_date=date.today(), amount=Decimal(str(amount)), currency_code=currency,
+        status=status, author_id=author_id)

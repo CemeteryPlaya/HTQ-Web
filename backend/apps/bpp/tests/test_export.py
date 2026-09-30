@@ -169,6 +169,27 @@ def test_write_limit_is_enforced_while_streaming():
     assert exc.value.code == "E-EXP-01"
 
 
+def test_write_xlsx_sheets_keeps_column_formats_and_unique_titles():
+    """Книга из нескольких листов («Экспорт результата» сверки выписки):
+    форматы колонок те же, что у одного листа; имена листов — по правилам
+    Excel и без повторов; без листов — книга с одним пустым листом."""
+    rows = [{"number": "СЧ-1", "amount": "1250.50", "created": "2026-09-27"}]
+    data = export.write_xlsx_sheets("Книга", [("Сопоставлены", COLUMNS, rows),
+                                              ("Требуют: проверки", COLUMNS, ()),
+                                              ("Сопоставлены", COLUMNS, ())])
+
+    book = openpyxl.load_workbook(io.BytesIO(data))
+    assert book.sheetnames == ["Сопоставлены", "Требуют проверки", "Сопоставлены 2"]
+    ws = book["Сопоставлены"]
+    assert [cell.value for cell in ws[1]] == ["Номер", "Сумма", "Создано"]
+    assert (ws.cell(row=2, column=2).value, ws.cell(row=2, column=2).number_format) == (
+        1250.5, "#,##0.00")
+    assert ws.cell(row=2, column=3).value == datetime(2026, 9, 27)
+    assert book["Требуют проверки"].max_row == 1
+    empty = openpyxl.load_workbook(io.BytesIO(export.write_xlsx_sheets("Пусто", [])))
+    assert empty.sheetnames == ["Пусто"]
+
+
 # ── отказ и ошибки вызывающего ──────────────────────────────────────────
 
 def test_over_hard_limit_is_422(company_context):

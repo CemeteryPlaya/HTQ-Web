@@ -298,23 +298,18 @@ def test_failed_auto_match_leaves_the_import_loaded(slug, django_capture_on_comm
 
 # ── гонка двух загрузок по одному счёту (Review Focus 4) ───────────────
 
-@pytest.mark.django_db(transaction=True)
-def test_two_imports_race_for_one_invoice(monkeypatch):
-    """Две загрузки из разных выписок сверяются одновременно и платят один
-    счёт; обе дошли до блокировки счетов (барьер) — итог «Оплачено по банку»
-    равен сумме обоих платежей. Каждый поток — в своём соединении; таблицы
-    модуля в тестовой базе есть и в ``public``."""
-    cp = invoice_flow._counterparty(CP_BIN)
-    inv = Invoice.objects.create(
-        number="СЧ-2026-000777", project_id=uuid.uuid4(), article_id=uuid.uuid4(),
-        counterparty=cp, ext_number="777", ext_date=timezone.localdate(),
-        amount=D("1000000.00"), status=InvoiceStatus.TO_PAY, author_id=s.SN)
-    account = common.org_account()
-    ids = [common.loaded_import(account, [
-        {"amount": amount, "purpose": f"Оплата по счёту {inv.number}", "recipient_bin": CP_BIN,
-         "doc_number": f"R-{amount}"}]).pk for amount in ("400000", "600000")]
+def _race_invoice(cp, n: int, amount: str) -> Invoice:
+    return Invoice.objects.create(
+        number=f"СЧ-2026-000{n}", project_id=uuid.uuid4(), article_id=uuid.uuid4(),
+        counterparty=cp, ext_number=str(n), ext_date=timezone.localdate(),
+        amount=D(amount), status=InvoiceStatus.TO_PAY, author_id=s.SN)
 
-    barrier = threading.Barrier(2)
+
+def _race(monkeypatch, import_ids) -> list[str]:
+    """Автосверка двух загрузок в двух потоках (у каждого своё соединение);
+    барьер перед блокировкой счетов — обе дошли до неё, пока держат свою
+    загрузку и строки. Ответ — упавшие потоки (``repr`` исключений)."""
+    barrier = threading.Barrier(len(import_ids))
     real_lock = matching._lock_invoices
 
     def wait_then_lock(keys):
@@ -336,13 +331,28 @@ def test_two_imports_race_for_one_invoice(monkeypatch):
         finally:
             connection.close()
 
-    threads = [threading.Thread(target=worker, args=(pk,)) for pk in ids]
+    threads = [threading.Thread(target=worker, args=(pk,)) for pk in import_ids]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    return crashes
 
-    assert crashes == []
+
+@pytest.mark.django_db(transaction=True)
+def test_two_imports_race_for_one_invoice(monkeypatch):
+    """Две загрузки из разных выписок сверяются одновременно и платят один
+    счёт; обе дошли до блокировки счетов (барьер) — итог «Оплачено по банку»
+    равен сумме обоих платежей. Каждый поток — в своём соединении; таблицы
+    модуля в тестовой базе есть и в ``public``."""
+    inv = _race_invoice(invoice_flow._counterparty(CP_BIN), 777, "1000000.00")
+    account = common.org_account()
+    ids = [common.loaded_import(account, [
+        {"amount": amount, "purpose": f"Оплата по счёту {inv.number}", "recipient_bin": CP_BIN,
+         "doc_number": f"R-{amount}"}]).pk for amount in ("400000", "600000")]
+
+    assert _race(monkeypatch, ids) == []
+
     inv.refresh_from_db()
     assert (inv.paid_bank_amount, inv.recon_status) == (D("1000000.00"), ReconStatus.FULL)
     assert PaymentMatch.objects.filter(invoice=inv, state=PaymentMatchState.ACTIVE).count() == 2
@@ -350,3 +360,33 @@ def test_two_imports_race_for_one_invoice(monkeypatch):
         BankImportStatus.RECONCILED}
     assert set(BankStatementLine.objects.values_list("match_status", flat=True)) == {
         LineMatchStatus.MATCHED}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_two_imports_race_several_numbers_split_from_the_committed_remainder(monkeypatch):
+    """M-5 ревью задачи 2: строки с несколькими номерами «A и B» в двух
+    выписках сверяются одновременно по одним и тем же счетам. Вторая
+    раскладывает сумму от остатков, зафиксированных первой (остатки
+    читаются под блокировкой счетов): первая закрыла оба счёта ровно, второй
+    делить нечего — её строка остаётся «Не сопоставлена», а не оплачивает
+    счета второй раз (иначе «Переплата» по обоим)."""
+    cp = invoice_flow._counterparty(CP_BIN)
+    a, b = _race_invoice(cp, 781, "400.00"), _race_invoice(cp, 782, "600.00")
+    account = common.org_account()
+    ids = [common.loaded_import(account, [
+        {"amount": "1000", "purpose": f"Оплата по счетам {a.number} и {b.number}",
+         "recipient_bin": CP_BIN, "doc_number": f"S-{n}"}]).pk for n in (1, 2)]
+
+    assert _race(monkeypatch, ids) == []
+
+    a.refresh_from_db()
+    b.refresh_from_db()
+    assert (a.paid_bank_amount, a.recon_status) == (D("400.00"), ReconStatus.FULL)
+    assert (b.paid_bank_amount, b.recon_status) == (D("600.00"), ReconStatus.FULL)
+    assert sorted(PaymentMatch.objects.values_list("invoice_id", "amount", "state")) == sorted([
+        (a.pk, D("400.00"), PaymentMatchState.ACTIVE),
+        (b.pk, D("600.00"), PaymentMatchState.ACTIVE)])
+    assert sorted(BankStatementLine.objects.values_list("match_status", flat=True)) == [
+        LineMatchStatus.MATCHED, LineMatchStatus.UNMATCHED]
+    assert set(BankImport.objects.filter(pk__in=ids).values_list("status", flat=True)) == {
+        BankImportStatus.RECONCILED}
