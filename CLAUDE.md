@@ -127,6 +127,7 @@ cd backend
 ../.venv/Scripts/python.exe manage.py retire_purchase_request_template [--slug zayavka-na-zakup] [--dry-run]  # БЗО B6.3: шаблон закупа — «удалён», его заявки удалены (согласования отозваны), справочники целы
 ../.venv/Scripts/python.exe manage.py bpp_migrate_contracts --company SLUG --draft-maps DIR  # БЗО B6.1: черновики карт «администратор → Проект» и «программа → статья»; ничего не пишет
 ../.venv/Scripts/python.exe manage.py bpp_migrate_contracts --company SLUG --projects-map CSV --articles-map CSV --actor ID [--dry-run] [--report XLSX]  # перенос «Договоров» одной транзакцией: справочники, бюджеты (годы суммой, только KZT), открытые документы (закрытые — сальдо статьи), сверка остатков — расхождение сверх ожидаемых = стоп; повтор ничего не дублирует; ранбук — docs/deploy/bpp-migrate-contracts-runbook.md
+../.venv/Scripts/python.exe manage.py bpp_import_cashflow BOOK.xlsx --company SLUG [--draft-maps DIR | --projects-map CSV --articles-map CSV --actor ID] [--dry-run] [--report XLSX]  # БЗО B6.2: книга CashFlow в модуль — только добавляет (договор по LARK, операция по отпечатку строки, в т.ч. перенесённые B6.1), бюджет проекта без бюджета — черновик для ФД, документы после утверждения; расхождения с книгой — в отчёт
 ../.venv/Scripts/python.exe manage.py mail_check [--mailbox ADDR] [--password PW] [--send-to ADDR]  # corporate-mail diagnostics
 ../.venv/Scripts/python.exe manage.py tenancy_status [--json] [--exact]   # слепок раскладки тенантных таблиц по схемам (только чтение); снимать до и после каждой боевой выкатки
 ```
