@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Sum
+from django.db.models import CharField, F, Func, Sum, Value
+from django.db.models.functions import Upper
 
 from apps.bpp.models import BankImportStatus, PaymentMatch, PaymentMatchState
 
@@ -33,6 +34,19 @@ def find_numbers(text: str) -> list[str]:
     for year, seq in _NUMBER.findall(normalize_purpose(text)):
         seen.setdefault(f"СЧ-{year}-{seq}", None)
     return list(seen)
+
+
+def plain_reg(value: str) -> str:
+    """БИН/ИИН или рег. номер для сравнения: без пробельных символов, в
+    верхнем регистре. Одно правило на автосверку, кандидатов и дашборд —
+    «1234 5678 9012» в выписке и «123456789012» у контрагента совпадают."""
+    return "".join((value or "").split()).upper()
+
+
+def plain_reg_sql(field: str) -> Upper:
+    """То же, что ``plain_reg``, выражением SQL над столбцом ``field``."""
+    return Upper(Func(F(field), Value(r"\s"), Value(""), Value("g"),
+                      function="REGEXP_REPLACE", output_field=CharField()))
 
 
 def _money(value: Decimal) -> Decimal:

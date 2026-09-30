@@ -115,6 +115,10 @@ BANK_URL = "/bpp/bank"
 BANK_WAIT_WORKING_DAYS = 3
 #: Топ контрагентов по оплатам (ТЗ §11.5).
 TOP_COUNTERPARTIES = 10
+#: Самый длинный период дашборда — 5 лет (1827 дней: 5 × 365 и два
+#: високосных). Длиннее ручка отвечает 422 на ``period_to``: недельный график
+#: заполняет нулями каждую неделю периода.
+MAX_PERIOD_DAYS = 5 * 365 + 2
 
 INVOICES = "bpp_invoices"
 BANK = "bpp_bank"
@@ -273,9 +277,12 @@ def _unmatched_lines(filters: Filters):
     if filters.period_to:
         rows = rows.filter(doc_date__lte=filters.period_to)
     if filters.counterparty_id:
-        reg = (Counterparty.objects.filter(pk=filters.counterparty_id)
-               .values_list("reg_number", flat=True).first())
-        rows = rows.filter(recipient_bin=reg) if reg else rows.none()
+        # БИН — как у автосверки и кандидатов (``recon.plain_reg``): без
+        # пробелов и регистра с обеих сторон.
+        reg = bank_recon.plain_reg(Counterparty.objects.filter(pk=filters.counterparty_id)
+                                   .values_list("reg_number", flat=True).first())
+        rows = (rows.alias(recipient_plain=bank_recon.plain_reg_sql("recipient_bin"))
+                .filter(recipient_plain=reg) if reg else rows.none())
     return rows.order_by()
 
 
@@ -407,12 +414,17 @@ def weekly_paid(actor: Actor, filters: Filters) -> list[dict]:
         return []
     first = _week_start(filters.period_from) if filters.period_from else min(by_week)
     last = _week_start(filters.period_to) if filters.period_to else max(by_week)
-    out = []
-    week = first
-    while week <= last:
-        out.append({"week_start": week, "amount": by_week.get(week, ZERO)})
-        week += timedelta(days=7)
-    return out
+    weeks = (last - first).days // 7 + 1
+    if weeks > MAX_PERIOD_DAYS // 7 + 1:
+        # Период с одной открытой границей шире предела (закрытый период
+        # длиннее ``MAX_PERIOD_DAYS`` отсекает ручка): нулевые недели не
+        # дорисовываются — иначе «с 0001-01-01» дало бы сотни тысяч точек.
+        return [{"week_start": week, "amount": amount}
+                for week, amount in sorted(by_week.items())]
+    # Недели — отступом от первой, а не ``week += 7 дней`` до последней:
+    # у 9999-12-27 следующей недели нет (``OverflowError``).
+    return [{"week_start": week, "amount": by_week.get(week, ZERO)}
+            for week in (first + timedelta(days=7 * n) for n in range(max(weeks, 0)))]
 
 
 def top_counterparties(actor: Actor, filters: Filters) -> list[dict]:

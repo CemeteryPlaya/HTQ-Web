@@ -18,7 +18,7 @@
 
 **Architecture:**
 - Сверка — подмодуль `bank` (`bpp_bank`): модели `PaymentMatch` и новые поля строки выписки в `models/bank.py`, сервисы `services/bank/recon.py` (чистые функции номера и распределения) и `services/bank/matching.py` (запись под блокировками). Ручки добавляются в `views_bank.py` / `urls_bank.py`.
-- Статус сверки счёта пишет только `recon.recalc_invoice` — в той же транзакции, что и изменение сопоставлений (контракт §2.6).
+- Статус сверки счёта пишет только `matching.recalc_invoice` (`services/bank/matching.py`) — в той же транзакции, что и изменение сопоставлений (контракт §2.6).
 - Дашборд — `services/dashboard/payments.py` и ручка `bank/dashboard`. Это агрегаты SQL, без кэша: ТЗ требует свежих цифр при каждом открытии. Экран — `features/bpp/dashboard/` на `recharts` (уже в проекте).
 
 **Tech Stack:** Django 5.2.7, PostgreSQL (схема на компанию), Celery, openpyxl 3.1.5, pytest-django; React 18 + TypeScript + react-query + recharts 2.15, vitest.
@@ -92,7 +92,7 @@
 - **Окружение.** Интерпретатор — корневой `.venv`; команды из `backend/`: `../.venv/Scripts/python.exe …`. **Один прогон pytest за раз на машине:** пока контроллер гоняет набор, разработчики pytest не запускают.
 - **Ветки и коммиты.** Ветки не создавать; коммитить только файлы своей задачи. Правка в зоне B (`services/invoices/*`, `views_invoices.py`, экраны B) — отдельным коммитом с пометкой.
 - **Межаппный доступ** — только `apps.<x>.interface`.
-  - Внутри аппки `bpp` подмодуль A читает модели счёта напрямую; счёт пишет только через `recon.recalc_invoice` — поля сверки, по контракту §2.6.
+  - Внутри аппки `bpp` подмодуль A читает модели счёта напрямую; счёт пишет только через `matching.recalc_invoice` — поля сверки, по контракту §2.6.
   - Задачи Celery — `@company_task`, первой строкой `require_service("bpp")`, затем `require_service("bpp_bank")`.
 - **Ручки и права.**
   - Ручки — `api_view(module="bpp", level=…)` с явным уровнем.

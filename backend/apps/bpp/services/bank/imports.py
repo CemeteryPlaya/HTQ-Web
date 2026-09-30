@@ -62,6 +62,7 @@ from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.numbering import next_number
 from apps.users import interface as users
 from htqweb.errors import DomainError
+from htqweb.fallback import fallback
 from htqweb.tenancy import current_company
 
 from . import matching, templates
@@ -410,12 +411,18 @@ def run_import(import_id) -> None:
         "loaded": imp.debits - imp.duplicates, "errors": len(imp.errors or [])})
     try:
         matching.auto_match(key)
-    except Exception:
+    except Exception as exc:
         # Строки загружены и зафиксированы — загрузка остаётся «Загружена»
         # (не «Сверена»: ФД видит, что сверки не было), сделанные пачки
-        # сверки остаются, повтор ``auto_match`` доводит остальное.
-        logger.exception("bpp bank import: автосверка import=%s упала — загрузка "
-                         "остаётся «Загружена»", import_id)
+        # сверки остаются, повтор ``auto_match`` («Сверить») доводит остальное.
+        # Через политику fallback'ов, а не ``logger.exception``: подмена
+        # «сверки нет — оставляем загруженной» должна дойти до алерта
+        # (``htqweb-fallback-worker-logs`` ищет FALLBACK в логах воркера).
+        # ``expected=False``: у автосверки нет штатной причины падать — это
+        # дефект или сбой базы, в strict (dev, pytest) он должен упасть громко.
+        fallback("bpp.bank.auto_match_failed", None,
+                 reason="автосверка упала — загрузка остаётся «Загружена»",
+                 exc=exc, import_id=str(key))
 
 
 def reap_stale(*, now=None) -> dict:

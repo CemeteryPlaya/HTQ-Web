@@ -556,6 +556,8 @@ def test_supplier_gets_403(company_context):
     ({"period_from": "2026-09-30", "period_to": "2026-09-01"}, "period_to"),
     ({"project_id": "abc"}, "project_id"),
     ({"author_id": "x"}, "author_id"),
+    # 1828 дней — длиннее 5 лет (``MAX_PERIOD_DAYS`` = 1827).
+    ({"period_from": "2020-01-01", "period_to": "2025-01-02"}, "period_to"),
 ])
 def test_bad_params_are_422(company_context, params, field):
     slug = company_context["slug"]
@@ -563,3 +565,54 @@ def test_bad_params_are_422(company_context, params, field):
     assert response.status_code == 422, response.content
     assert response.json()["fields"][0]["field"] == field
 
+
+
+def test_five_year_period_is_the_limit_and_open_periods_do_not_explode(company_context):
+    """Предел периода (M-c): ровно 5 лет — 200 и недели нулями по всему
+    периоду; открытая с одной стороны граница на краю календаря не роняет
+    ручку (``OverflowError`` у 9999-12-27) и не рисует сотни тысяч нулевых
+    недель — только недели с платежами."""
+    from datetime import date
+
+    slug = company_context["slug"]
+    ok = _get(slug, s.FD, "bpp-fd", period_from="2020-01-01", period_to="2025-01-01")
+    assert ok.status_code == 200, ok.content
+    weeks = ok.json()["weekly_paid"]
+    assert (weeks[0]["week_start"], weeks[-1]["week_start"], len(weeks)) == (
+        "2019-12-30", "2024-12-30", 262)
+
+    today = timezone.localdate()
+    monday = today - timedelta(days=today.weekday())
+    inv = _inv(InvoiceStatus.PAID, 100, recon=ReconStatus.FULL, paid_bank=100)
+    _Statement().pay(inv, 100, today)
+    fd = invoice_flow._fd(slug)
+    for filters in (dashboard.Filters(period_from=date(1, 1, 1)),
+                    dashboard.Filters(period_to=date(9999, 12, 31))):
+        assert dashboard.weekly_paid(fd, filters) == [
+            {"week_start": monday, "amount": D("100.00")}], filters
+    for params in ({"period_from": "0001-01-01"}, {"period_to": "9999-12-31"}):
+        response = _get(slug, s.FD, "bpp-fd", **params)
+        assert response.status_code == 200, (params, response.content)
+
+
+def test_unmatched_counterparty_filter_compares_bin_normalised(company_context):
+    """Фильтр контрагента у «Не сопоставлено» (M-d) сравнивает БИН так же, как
+    автосверка и кандидаты: без пробелов и регистра с обеих сторон."""
+    slug = company_context["slug"]
+    today = timezone.localdate()
+    cp = _cp()
+    reg = cp.reg_number
+    foreign = invoice_flow._counterparty("AB123", country_code="GB", name="Foreign Ltd")
+    bank = _Statement()
+    bank.line(10, today, status=LineMatchStatus.UNMATCHED, bin_=f"{reg[:4]} {reg[4:8]} {reg[8:]}")
+    bank.line(20, today, status=LineMatchStatus.UNMATCHED, bin_=reg)
+    bank.line(40, today, status=LineMatchStatus.UNMATCHED, bin_="999999999999")
+    bank.line(80, today, status=LineMatchStatus.UNMATCHED, bin_="ab 123")
+
+    fd = invoice_flow._fd(slug)
+    row = _by_key(dashboard.dashboard(
+        fd, dashboard.Filters(counterparty_id=str(cp.pk))))["unmatched"]
+    assert (row["count"], row["amount"]) == (2, D("30.00"))
+    row = _by_key(dashboard.dashboard(
+        fd, dashboard.Filters(counterparty_id=str(foreign.pk))))["unmatched"]
+    assert (row["count"], row["amount"]) == (1, D("80.00"))

@@ -272,9 +272,11 @@ def test_import_becomes_reconciled_with_totals(slug, django_capture_on_commit_ca
 
 
 def test_failed_auto_match_leaves_the_import_loaded(slug, django_capture_on_commit_callbacks,
-                                                    monkeypatch):
+                                                    monkeypatch, fallback_log_mode, caplog):
     """Автосверка упала — строки загружены, загрузка «Загружена» (не
-    «Ошибка»), повтор ``auto_match`` доводит её до «Сверена»."""
+    «Ошибка»), повтор ``auto_match`` доводит её до «Сверена». Это поведение
+    боя (``FALLBACK_MODE=log``): подмена пишет строку ``FALLBACK`` — по ней
+    срабатывает правило ``htqweb-fallback-worker-logs``."""
     _, _, inv = _payable(slug, D("1000"))
     account = common.org_account()
 
@@ -284,16 +286,49 @@ def test_failed_auto_match_leaves_the_import_loaded(slug, django_capture_on_comm
         raise RuntimeError("сбой сверки")
 
     monkeypatch.setattr(matching, "auto_match", broken)
-    imp = _upload(django_capture_on_commit_callbacks, account,
-                  [_doc(account, "901", "1000.00", f"Оплата {inv.number}")])
+    with caplog.at_level("WARNING", logger="htqweb.fallback"):
+        imp = _upload(django_capture_on_commit_callbacks, account,
+                      [_doc(account, "901", "1000.00", f"Оплата {inv.number}")])
     assert imp.status == BankImportStatus.LOADED
     assert imp.lines.get().match_status == LineMatchStatus.UNMATCHED
+    assert any("FALLBACK site=bpp.bank.auto_match_failed" in record.getMessage()
+               and str(imp.pk) in record.getMessage() for record in caplog.records)
 
     monkeypatch.setattr(matching, "auto_match", real)
     matching.auto_match(imp.pk)
     imp.refresh_from_db()
     assert imp.status == BankImportStatus.RECONCILED
     assert _recon(inv) == (D("1000.00"), ReconStatus.FULL)
+
+
+def test_failed_auto_match_is_loud_in_strict_mode(slug, django_capture_on_commit_callbacks,
+                                                  monkeypatch):
+    """В strict (dev, pytest) упавшая автосверка не проглатывается:
+    ``FallbackNotAllowed`` с исходной причиной, а строки и статус «Загружена»
+    уже записаны — «Сверить» доводит загрузку и после такого падения."""
+    from htqweb.fallback import FallbackNotAllowed
+
+    _, _, inv = _payable(slug, D("1000"))
+    account = common.org_account()
+    upload = common.onec_file(account.iban,
+                              [_doc(account, "902", "1000.00", f"Оплата {inv.number}")],
+                              period=(_day(7), _day(0)))
+    # Задачу разбора не выполняем на фиксации: в eager-режиме её исключение
+    # перехватил бы ``_enqueue`` (сбой постановки в очередь), — зовём тело
+    # задачи сами, как воркер.
+    with django_capture_on_commit_callbacks(execute=False):
+        imp, _ = imports.start_import(account_id=account.pk, upload=upload, actor_id=s.FD)
+
+    def broken(import_id):
+        raise RuntimeError("сбой сверки")
+
+    monkeypatch.setattr(matching, "auto_match", broken)
+    with pytest.raises(FallbackNotAllowed) as exc:
+        imports.run_import(imp.pk)
+    assert "bpp.bank.auto_match_failed" in str(exc.value)
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    imp.refresh_from_db()
+    assert imp.status == BankImportStatus.LOADED
 
 
 # ── гонка двух загрузок по одному счёту (Review Focus 4) ───────────────

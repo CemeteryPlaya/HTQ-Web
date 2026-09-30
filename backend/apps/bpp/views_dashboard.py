@@ -8,7 +8,8 @@
 
 Параметры: ``period_from``/``period_to`` (ГГГГ-ММ-ДД, дата платежа в
 выписке), ``project_id``, ``article_id``, ``counterparty_id`` (UUID),
-``author_id`` (целое). Неверное значение — 422 ``E-VAL-01`` на поле.
+``author_id`` (целое). Неверное значение — 422 ``E-VAL-01`` на поле; период
+длиннее 5 лет (``payments.MAX_PERIOD_DAYS``) — тоже, на ``period_to``.
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ def _filters(params) -> payments.Filters:
     if period_from and period_to and period_from > period_to:
         raise DomainError("E-VAL-01", "Дата «по» раньше даты «с».",
                           fields=[{"field": "period_to", "message": "Раньше даты «с»"}])
+    if period_from and period_to and (period_to - period_from).days > payments.MAX_PERIOD_DAYS:
+        raise DomainError("E-VAL-01", "Период дашборда — не длиннее 5 лет.",
+                          fields=[{"field": "period_to", "message": "Период длиннее 5 лет"}])
     return payments.Filters(
         period_from=period_from, period_to=period_to,
         project_id=_uuid(params, "project_id"), article_id=_uuid(params, "article_id"),

@@ -54,8 +54,9 @@ CALC-010, AC-010, AC-011, BR-073; A4.2, план этапа 4 A, задача 2)
 **CALC-010** — ``recalc_invoice``: «Оплачено по банку» = Σ ``active``
 сопоставлений (D-S4-1, «на проверке» не входит), статус сверки — по нему.
 Единственная точка записи ``Invoice.paid_bank_amount`` / ``recon_status``
-(контракт мастер-плана §2.6 называет её ``recon.recalc_invoice``; живёт
-здесь, рядом с записью сопоставлений).
+(контракт мастер-плана §2.6 — ``matching.recalc_invoice``: живёт здесь,
+рядом с записью сопоставлений; в ``recon`` её не перенести — ``recon``
+импортируется отсюда, реэкспорт дал бы цикл).
 """
 
 from __future__ import annotations
@@ -226,7 +227,7 @@ def _lock_invoices(ids) -> dict:
 # ── правила сопоставления ───────────────────────────────────────────────
 
 def _plain(value: str) -> str:
-    return "".join((value or "").split()).upper()
+    return recon.plain_reg(value)
 
 
 def _problem(line: BankStatementLine, inv: Invoice) -> str:
