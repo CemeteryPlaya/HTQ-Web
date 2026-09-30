@@ -62,6 +62,18 @@ def test_every_document_of_the_module_gets_a_route(company_context):
         assert len(stages) == 1 and routes[key].forbid_self_approval
 
 
+def test_fd_and_gd_choose_the_option_of_an_agreement(company_context):
+    """Альтернативу договора выбирают ФД и ГД, решает ГД (D-25, B5.1): признак
+    «Выбирает вариант» — только у их этапов и только в маршруте договора."""
+    _positions()
+    _run(company_context["slug"])
+    voting = {(route.subject_type, route.scope, stage.name)
+              for route in ApprovalRoute.objects.filter(is_active=True)
+              for stage in route.stages.all() if stage.votes_option}
+    assert voting == {("bpp.agreement", "", "Финансовый директор"),
+                      ("bpp.agreement", "", "Генеральный директор")}
+
+
 def test_dry_run_writes_nothing(company_context):
     _positions()
     assert "завести маршрут" in _run(company_context["slug"], "--dry-run")
