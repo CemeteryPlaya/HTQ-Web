@@ -49,7 +49,7 @@
 | файлы `*_file_id` (media) | `apps.files.interface.adopt_media_file` | тип по документу: `agreement`, `invoice`, `act`, `waybill`, `advance_report` |
 | закрытые документы | сальдо на статью (D-B61-1) | вклад по правилам `contracts/services/budget_calc.py` |
 
-Автор документа — `created_by` старого. Если он пуст — `--default-author <user_id>`. Без этого ключа команда останавливается и печатает перечень документов без автора.
+Автор документа — `created_by` старого. Если он пуст — `--actor <user_id>`: тот, кто выполняет перенос (обычно АДМ). Он же пишется в журнал изменений исполнителем переноса.
 
 Роль инициатора технической заявки берётся по группе статьи: «Снабжение» → СН, «Проектное управление» → ПМ.
 
@@ -61,14 +61,13 @@
 manage.py bpp_migrate_contracts --company <slug> --draft-maps <dir>
     # черновики карт: projects.csv, articles.csv + отчёт конфликтов кодов; ничего не пишет
 manage.py bpp_migrate_contracts --company <slug> --projects-map <csv> --articles-map <csv>
-    [--default-author <user_id>] [--dry-run] [--report <xlsx>]
+    --actor <user_id> [--dry-run] [--report <xlsx>]
 ```
 
 **Порядок одной транзакции:**
 1. Проверки:
    - обе карты полные;
    - все статьи и страны есть в справочниках;
-   - у документов есть автор;
    - маршруты БЗО и роли не нужны — документы переносятся без запуска согласования.
 
    Любой отказ — стоп и перечень, ничего не записано.
