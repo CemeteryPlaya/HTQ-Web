@@ -168,8 +168,9 @@ def test_open_documents_move_in_their_status(company_context, tmp_path):
     assert sorted(accountable.reports.values_list("approval_state", flat=True)) == [
         "approved", "draft"]
 
-    # Технические заявки скрыты и утверждены — по одной на договор и счёт без договора.
-    assert PurchaseRequest.objects.filter(is_migrated=True, status="approved").count() == 5
+    # Технические заявки скрыты и утверждены — по одной на договор и счёт без
+    # договора, плюс сальдо закрытых документов статьи (задача 6).
+    assert PurchaseRequest.objects.filter(is_migrated=True, status="approved").count() == 6
     assert links.targets("contracts.agreement", [running.id])[str(running.id)]
 
 

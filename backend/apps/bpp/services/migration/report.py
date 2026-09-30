@@ -19,6 +19,8 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "Не перенесено": ("kind", "old_id", "reason"),
     "Сверка": ("project_code", "article_code", "old_limit", "old_committed", "old_remaining",
                "new_limit", "new_committed", "new_remaining", "expected_diff", "diff"),
+    "Ожидаемые расхождения": ("project_code", "article_code", "kind", "number", "delta",
+                              "reason"),
 }
 
 

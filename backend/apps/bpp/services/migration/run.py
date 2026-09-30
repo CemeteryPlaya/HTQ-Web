@@ -12,6 +12,7 @@ from apps.bpp.services.actor import Actor
 
 from . import reference
 from .documents import Documents
+from .reconcile import Reconciliation
 from .report import MigrationReport
 
 
@@ -35,4 +36,5 @@ def run(ctx: MigrationContext) -> MigrationContext:
     ctx.limits_by_admin = reference.budgets_for(ctx.snapshot, ctx.project_by_admin,
                                                 ctx.article_map, ctx.actor, ctx.report)
     ctx.documents = Documents(ctx).run()
+    Reconciliation(ctx, ctx.documents).run()
     return ctx
