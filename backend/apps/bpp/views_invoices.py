@@ -15,6 +15,7 @@ from django.utils import timezone
 from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error
 
+from .models import ReconStatus
 from .schemas import invoices as schemas
 from .services import calc
 from .services.actor import Actor
@@ -30,6 +31,31 @@ def _card(request, inv, *, vat_warning: str | None = None) -> dict:
 
 def _list_param(request, name: str) -> list[str]:
     return [value for value in request.GET.getlist(name) if value]
+
+
+def _date_param(request, name: str) -> str | None:
+    """ГГГГ-ММ-ДД или пусто; строкой — фильтры уходят и в фоновую выгрузку
+    (JSON задачи)."""
+    raw = request.GET.get(name) or None
+    if raw is None:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        raise DomainError("E-VAL-01", "Дата — в формате ГГГГ-ММ-ДД.",
+                          fields=[{"field": name, "message": "Дата ГГГГ-ММ-ДД"}]) from None
+
+
+def _recon_statuses(request) -> list[str]:
+    """Повторяемый ``recon_status``; неизвестное значение — 422, а не тихо
+    пустой реестр (опечатка в ссылке дашборда видна сразу)."""
+    values = _list_param(request, "recon_status")
+    unknown = [value for value in values if value not in ReconStatus.values]
+    if unknown:
+        raise DomainError("E-VAL-01", f"Неизвестный статус сверки: {', '.join(unknown)}.",
+                          fields=[{"field": "recon_status",
+                                   "message": "Допустимо: " + ", ".join(ReconStatus.values)}])
+    return values
 
 
 EXPORT_COLUMNS = (
@@ -78,6 +104,12 @@ def invoice_list(request):
         "date_from": params.get("date_from") or None,
         "date_to": params.get("date_to") or None,
         "search": params.get("search") or None,
+        # Для ссылок дашборда D-01 (D-S4-8, задача A4.3).
+        "author_id": int_param(params, "author_id"),
+        "recon_statuses": _recon_statuses(request),
+        "bank_date_from": _date_param(request, "bank_date_from"),
+        "bank_date_to": _date_param(request, "bank_date_to"),
+        "bank_wait_days": int_param(params, "bank_wait_days", minimum=0),
     }
     actor = Actor(request)
     if params.get("format") == "xlsx":

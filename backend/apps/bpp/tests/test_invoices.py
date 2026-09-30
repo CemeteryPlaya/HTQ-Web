@@ -397,6 +397,34 @@ def test_find_by_number_for_reconciliation(company_context):
     assert find_by_number("СЧ-2000-000001") is None
 
 
+def test_draft_with_bank_match_is_not_deleted(company_context):
+    """Сверка выписки (A4.2, D-S4-3) сопоставляет платёж и с черновиком — «на
+    проверку». Пока сопоставление не отменено, черновик не удаляется (409
+    ``E-STATE-01``, а не 500 от PROTECT); отменённое уходит вместе со счётом."""
+    from apps.bpp.models import PaymentMatch
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    sn, _, inv = _invoice(slug, 100)
+    imp = bank.loaded_import(bank.org_account(), [
+        {"amount": "100", "purpose": f"Оплата по счёту {inv.number}",
+         "recipient_bin": "100000000001"}])
+    matching.auto_match(imp.pk)
+    match = PaymentMatch.objects.get(invoice=inv)
+    assert (match.state, match.review_reason) == ("review", "invoice_status")
+
+    with pytest.raises(DomainError) as exc:
+        service.delete_draft(sn, inv.id, expected_version=None)
+    assert (exc.value.code, exc.value.status) == ("E-STATE-01", 409)
+    assert inv.number in exc.value.message
+
+    PaymentMatch.objects.filter(pk=match.pk).update(state="cancelled")
+    service.delete_draft(sn, inv.id, expected_version=None)
+    assert not Invoice.objects.filter(pk=inv.pk).exists()
+    assert not PaymentMatch.objects.filter(pk=match.pk).exists()
+
+
 def test_http_create_patch_and_registry_tabs(company_context):
     slug = company_context["slug"]
     proj = _setup(slug)
@@ -426,3 +454,42 @@ def test_http_create_patch_and_registry_tabs(company_context):
     tab = client.get(f"{BASE}/invoices?tab=fd", **s.auth(slug, s.FD)).json()
     assert [row["number"] for row in tab["items"]] == [card["number"]]
     assert client.get(f"{BASE}/invoices?tab=to_pay", **s.auth(slug, s.FD)).json()["total"] == 0
+
+
+def test_fd_cannot_cancel_invoice_while_bank_holds_payment(company_context):
+    """Выписка пришла раньше отметки БУХ: автосверка поставила действующее
+    сопоставление на счёт «К оплате» (D-S4-3). Отмена такого счёта
+    освободила бы статью бюджета, а «Оплачено факт» платёж продолжал бы
+    считать, — поэтому 409 ``E-STATE-01``, как у отмены отметки оплаты, и
+    «Отменить» нет в действиях. Отменили сопоставление — счёт отменяется."""
+    from apps.bpp.models import PaymentMatch
+    from apps.bpp.services.bank import matching
+    from apps.bpp.tests.bank import common as bank
+
+    slug = company_context["slug"]
+    _, _, inv = _to_pay(slug, 1000)
+    imp = bank.loaded_import(bank.org_account(), [
+        {"amount": "1000", "purpose": f"Оплата по счёту {inv.number}",
+         "recipient_bin": "100000000001"}])
+    matching.auto_match(imp.pk)
+    assert PaymentMatch.objects.get(invoice=inv).state == "active"
+    inv.refresh_from_db()
+    assert inv.paid_bank_amount == Decimal("1000")
+    assert not inv.payments.exists()                 # отметки БУХ ещё нет
+
+    fd = _fd(slug)
+    assert "cancel" not in service.allowed_actions(fd, inv)
+    with pytest.raises(DomainError) as exc:
+        service.cancel(fd, inv.id, expected_version=None, comment="Счёт выставлен ошибочно")
+    assert (exc.value.code, exc.value.status) == ("E-STATE-01", 409)
+    assert inv.number in exc.value.message and "сопоставление" in exc.value.message
+    inv.refresh_from_db()
+    assert inv.status == InvoiceStatus.TO_PAY
+
+    line = imp.lines.get()
+    matching.cancel_match(s.FD, line.pk, "Платёж не по этому счёту")
+    inv.refresh_from_db()
+    assert inv.paid_bank_amount == 0
+    assert "cancel" in service.allowed_actions(fd, inv)
+    inv = service.cancel(fd, inv.id, expected_version=None, comment="Счёт выставлен ошибочно")
+    assert inv.status == InvoiceStatus.CANCELLED

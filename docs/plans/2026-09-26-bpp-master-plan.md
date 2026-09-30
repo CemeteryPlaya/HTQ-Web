@@ -362,7 +362,7 @@ def pending_for_user(user_id: int) -> list[dict]: ...        # [{task_id, subjec
 # services/core/errors.py    (A1.1): DomainError(code: str, message: str, *, fields: list[dict] | None = None, status: int = 422)
 # services/core/permissions.py(A1.4): allowed_actions(request, obj) -> list[str]; article_groups_for(request) -> list[str]
 # services/budget/balance.py (B2.1): balance(project_id: str, article_id: str, *, exclude_request_id: str | None = None) -> dict  # {limit, committed, available, as_of}
-# services/bank/recon.py     (A4.2): recalc_invoice(invoice_id: str) -> None   # пишет Invoice.paid_bank_amount / recon_status
+# services/bank/matching.py  (A4.2): recalc_invoice(invoice_id: str) -> None   # пишет Invoice.paid_bank_amount / recon_status; matching.recalc_invoice, не recon (recon импортируется matching — реэкспорт дал бы цикл; решение финального ревью этапа 4)
 # apps/bpp/interface.py      (B3.2): find_by_number(number: str) -> dict | None  # services/invoices/read.py; {id, number, status, amount, currency_code, counterparty_reg_number, paid_bank_amount, recon_status}; номер — уже чистый «СЧ-ГГГГ-NNNNNN»: нормализацию назначения (латиница C/X, пробелы, регистр) делает сверка A4.2 до вызова
 
 # apps/bpp/interface.py  (B3.2) — для раздела ежедневной сводки (A3.2)
@@ -502,6 +502,8 @@ def closing_docs_pending_for_user(user_id: int) -> list[dict]: ...  # [{invoice_
 - B → A: B3.2 (счёт, `find_by_number`, поля сверки) — до сверки выписки.
 
 ### Этап 4 — Оплаты факт, дашборд, подотчёт
+
+Детальный план A — [сверка выписки A4.2 и дашборд D-01 A4.3](2026-09-30-bpp-stage4-executor-a.md) (A4.1 сделана на этапе 3; B4.1 и B4.2 сделаны B) с остатком B после этапа 3.
 
 | ID | Владелец | Задача | ТЗ | Тесты приёмки | Зависит от |
 |---|---|---|---|---|---|

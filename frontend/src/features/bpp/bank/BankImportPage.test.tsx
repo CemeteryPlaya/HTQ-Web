@@ -9,6 +9,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { Permissions } from '@/hooks/usePermissions';
 import { createTestQueryClient, renderWithProviders } from '@/test/renderWithProviders';
 
 import { registryOpenState } from '../core/registryBack';
@@ -18,6 +19,10 @@ import { BankImportPage } from './BankImportPage';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('@/api/client', () => ({ default: { get } }));
+
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({ atLeast: () => true, can: () => false }) as unknown as Permissions,
+}));
 
 const card = (over: Partial<BankImportCard> = {}): BankImportCard => ({
   id: 'imp-1', number: 'ВП-2026-0001',

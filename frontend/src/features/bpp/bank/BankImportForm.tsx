@@ -17,7 +17,7 @@
  *   состоянием перехода так же, как строки).
  */
 import { useMemo, useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Upload } from 'lucide-react';
@@ -42,7 +42,7 @@ import { useIdempotentAction } from '../core/useIdempotentAction';
 import { bankSettingsApi, settingsTabHref, ACCOUNTS_KEY } from '../settings/api';
 import { FORMAT_ACCEPT, FORMAT_LABELS } from '../settings/templateFields';
 
-import { BANK_BASE, bankImportApi, bankImportHref, MAX_FILE_MB } from './api';
+import { BANK_BASE, bankImportApi, bankImportHref, invalidateRecon, MAX_FILE_MB } from './api';
 
 type Field = 'account_id' | 'file' | 'period_from' | 'period_to' | 'comment' | 'form';
 type Errors = Partial<Record<Field, string>>;
@@ -77,6 +77,7 @@ function serverErrors(error: unknown): Errors | null {
 export function BankImportForm() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const permissions = usePermissions();
   const canUpload = permissions.can('bpp.bank', 'edit');
   const canConfigure = permissions.can('bpp.settings', 'edit');
@@ -137,6 +138,8 @@ export function BankImportForm() {
     }
     upload.run().then(
       (created) => {
+        // Новые списания — новые цифры реестра загрузок и дашборда «Оплаты».
+        void invalidateRecon(queryClient);
         navigate(bankImportHref(created.id), { state: { warnings: created.warnings ?? [] } });
       },
       (error: unknown) => {

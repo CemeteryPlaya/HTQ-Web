@@ -40,6 +40,8 @@ __all__ = [
     "BankStatementLine",
     "LineMatchStatus",
     "OrgBankAccount",
+    "PaymentMatch",
+    "PaymentMatchState",
     "StatementFormat",
     "StatementTemplate",
 ]
@@ -104,22 +106,31 @@ class OrgBankAccount(VersionedModel):
 # ── загрузка выписки (A4.1, план этапа 3 A, задача 3) ──────────────────
 
 class BankImportStatus(models.TextChoices):
-    """ТЗ §15.5: «Загружена → (автосверка) → Сверена → Отменена». До сверки
-    (A4.2, этап 4) загрузка останавливается на «Загружена» (D-S3-2);
-    «Сверена» появится вместе со сверкой. «Обрабатывается» и «Ошибка» —
+    """ТЗ §15.5: «Загружена → (автосверка) → Сверена → Отменена». Автосверка
+    (A4.2) переводит «Загружена» в «Сверена» (D-S3-2). «Обрабатывается» и «Ошибка» —
     состояния фонового разбора, которые опрашивает экран."""
 
     PROCESSING = "processing", "Обрабатывается"
     LOADED = "loaded", "Загружена"
+    RECONCILED = "reconciled", "Сверена"
     FAILED = "failed", "Ошибка загрузки"
     CANCELLED = "cancelled", "Отменена"
 
 
 class LineMatchStatus(models.TextChoices):
-    """Статус сопоставления строки выписки со счетами. До сверки (A4.2) все
-    строки — «Не сопоставлена»; остальные статусы добавит сверка."""
+    """Статус сопоставления строки выписки со счетами (ТЗ §11.3, A4.2).
+    Новая строка — «Не сопоставлена»; сверка переводит её дальше."""
 
     UNMATCHED = "unmatched", "Не сопоставлена"
+    MATCHED = "matched", "Сопоставлена"
+    NEEDS_REVIEW = "needs_review", "Требует проверки"
+    EXCLUDED = "excluded", "Исключена"
+
+
+class PaymentMatchState(models.TextChoices):
+    ACTIVE = "active", "Действует"
+    REVIEW = "review", "На проверке"
+    CANCELLED = "cancelled", "Отменено"
 
 
 class BankImport(BppModel):
@@ -213,6 +224,13 @@ class BankStatementLine(BppModel):
                                     default=LineMatchStatus.UNMATCHED,
                                     db_default=LineMatchStatus.UNMATCHED)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    # Сверка (A4.2, D-S4-2): номера счетов из назначения, код причины
+    # «Требует проверки» (пусто — замечаний нет), исключение строки.
+    found_numbers = models.JSONField(default=list, db_default=[], blank=True)
+    review_reason = models.CharField(max_length=32, default="", db_default="", blank=True)
+    excluded_comment = models.TextField(default="", db_default="", blank=True)
+    excluded_by_id = models.IntegerField(null=True, blank=True)
+    excluded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -230,3 +248,47 @@ class BankStatementLine(BppModel):
 
     def __str__(self) -> str:
         return f"{self.doc_number} {self.doc_date} {self.amount}"
+
+
+class PaymentMatch(BppModel):
+    """Сопоставление строки выписки со счётом (ТЗ §11.3, A4.2).
+
+    Одна строка может делиться между несколькими счетами, один счёт —
+    получать несколько строк. В «Оплачено по банку» входят только
+    сопоставления ``active`` (D-S4-1); ``review`` ждёт решения ФД,
+    ``cancelled`` остаётся в истории. Автор записи — ``created_by``.
+    """
+
+    line = models.ForeignKey(BankStatementLine, on_delete=models.PROTECT,
+                             related_name="matches", db_index=False)
+    invoice = models.ForeignKey("bpp.Invoice", on_delete=models.PROTECT,
+                                related_name="payment_matches", db_index=False)
+    amount = models.DecimalField(max_digits=18, decimal_places=2)
+    manual = models.BooleanField(default=False, db_default=False)
+    state = models.CharField(max_length=16, choices=PaymentMatchState.choices,
+                             default=PaymentMatchState.ACTIVE,
+                             db_default=PaymentMatchState.ACTIVE)
+    review_reason = models.CharField(max_length=32, default="", db_default="", blank=True)
+    comment = models.TextField(default="", db_default="", blank=True)
+    confirmed_by_id = models.IntegerField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by_id = models.IntegerField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["line", "invoice"],
+                                    condition=~Q(state="cancelled"),
+                                    name="uq_bpp_paymatch_line_invoice"),
+            models.CheckConstraint(condition=Q(amount__gt=0), name="ck_bpp_paymatch_amount"),
+        ]
+        indexes = [
+            models.Index(fields=["invoice", "state"], name="ix_bpp_paymatch_invoice"),
+            models.Index(fields=["line", "state"], name="ix_bpp_paymatch_line"),
+        ]
+        ordering = ("created_at",)
+        verbose_name = "Сопоставление платежа"
+        verbose_name_plural = "Сопоставления платежей"
+
+    def __str__(self) -> str:
+        return f"{self.line_id} -> {self.invoice_id} {self.amount}"

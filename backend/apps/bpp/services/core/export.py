@@ -189,15 +189,9 @@ def _cell(sheet, value, fmt: str | None) -> WriteOnlyCell:
     return cell
 
 
-def write_xlsx(name: str, columns: Sequence[Column], rows: Iterable, *,
-               limit: int | None = None) -> bytes:
-    """Собрать книгу потоком (``write_only``) — лист не держится в памяти
-    целиком, поэтому пригодно и для фоновой пересборки больших выборок.
-
-    ``limit`` — сколько строк допустимо; больше — ``E-EXP-01`` (фоновая
-    пересборка могла насчитать больше, чем ручка при заказе)."""
-    workbook = Workbook(write_only=True)
-    sheet = workbook.create_sheet(title=_sheet_title(name))
+def _fill(workbook, title: str, columns: Sequence[Column], rows: Iterable,
+          limit: int | None) -> None:
+    sheet = workbook.create_sheet(title=title)
     header = []
     for column in columns:
         cell = WriteOnlyCell(sheet, value=column.title)
@@ -212,17 +206,56 @@ def write_xlsx(name: str, columns: Sequence[Column], rows: Iterable, *,
         sheet.append([_cell(sheet, _coerce(_value_of(row, column.key), column.kind),
                             _NUMBER_FORMAT.get(column.kind))
                       for column in columns])
+
+
+def write_xlsx(name: str, columns: Sequence[Column], rows: Iterable, *,
+               limit: int | None = None) -> bytes:
+    """Собрать книгу потоком (``write_only``) — лист не держится в памяти
+    целиком, поэтому пригодно и для фоновой пересборки больших выборок.
+
+    ``limit`` — сколько строк допустимо; больше — ``E-EXP-01`` (фоновая
+    пересборка могла насчитать больше, чем ручка при заказе)."""
+    workbook = Workbook(write_only=True)
+    _fill(workbook, _sheet_title(name), columns, rows, limit)
     buf = io.BytesIO()
     workbook.save(buf)
     return buf.getvalue()
 
 
-def _xlsx_response(name: str, columns: Sequence[Column], rows: Iterable) -> HttpResponse:
-    data = write_xlsx(name, columns, rows)
+def write_xlsx_sheets(name: str, sheets: Sequence[tuple[str, Sequence[Column], Iterable]], *,
+                      limit: int | None = None) -> bytes:
+    """Книга из нескольких листов ``[(название листа, колонки, строки)]`` —
+    те же форматы колонок, что у ``write_xlsx`` (суммы — числа
+    ``#,##0.00``, даты — даты). Названия листов приводятся к правилам Excel
+    (до 31 знака, без запрещённых знаков) и не повторяются; ``limit`` — на каждый
+    лист. ``name`` — имя книги (для ``xlsx_response``)."""
+    workbook = Workbook(write_only=True)
+    used: set[str] = set()
+    for title, columns, rows in sheets:
+        base = _sheet_title(title)
+        title, n = base, 1
+        while title.lower() in used:
+            n += 1
+            title = f"{base[:28]} {n}"
+        used.add(title.lower())
+        _fill(workbook, title, columns, rows, limit)
+    if not used:
+        _fill(workbook, _sheet_title(name), (), (), limit)
+    buf = io.BytesIO()
+    workbook.save(buf)
+    return buf.getvalue()
+
+
+def xlsx_response(name: str, data: bytes) -> HttpResponse:
+    """Готовая книга ``data`` — ответом-вложением ``<name>.xlsx``."""
     response = HttpResponse(data, content_type=XLSX_MIME)
     # filename* (RFC 6266): имя реестра — кириллица, а заголовок HTTP — latin-1.
     response["Content-Disposition"] = content_disposition_header(True, _filename(name))
     return response
+
+
+def _xlsx_response(name: str, columns: Sequence[Column], rows: Iterable) -> HttpResponse:
+    return xlsx_response(name, write_xlsx(name, columns, rows))
 
 
 # ── публичная точка входа ────────────────────────────────────────────────
