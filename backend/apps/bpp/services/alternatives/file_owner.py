@@ -6,9 +6,8 @@
 - Тип ``alternative_offer`` («КП»: PDF, DOCX, JPG, PNG до 10 МБ — ТЗ §12.3;
   справочник, миграция ``files/0005_bpp_alternative_offer_type``), до пяти
   документов на АП; обязателен для подачи (проверяет ``offers.submit``).
-- Видит КП тот, кто видит АП (``_offer_can_view``). Задача 4 заменит
-  временное правило на ``read.can_view`` — одна проверка на карточку,
-  журнал и файлы.
+- Видит КП тот, кто видит АП: ``read.can_view`` (задача 4) — одна
+  проверка на карточку, журнал и файлы (ПМ — только АП к своим документам).
 - Менять КП через панель может только автор и только в «Черновике»:
   поданная АП — предмет сравнения и решения, её КП не подменяется.
 - «Отправлялась» — статус не «Черновик»: удалённый черновик стирает свои
@@ -54,21 +53,13 @@ def _offer(owner_id) -> AlternativeOffer | None:
     return AlternativeOffer.objects.filter(pk=owner_id).first()
 
 
-def _offer_can_view(actor: Actor, offer: AlternativeOffer) -> bool:
-    """Временное правило до задачи 4: автор; черновик — только он; поданную
-    — ФД, ТД, ОД, ГД. Их отличает от СН и ПМ (у тех тоже ``bpp.alternatives``
-    view) то же, что у реестра счетов (``invoices.sees_all``): просмотр
-    ``bpp.alternatives`` без права создавать счета."""
-    if offer.author_id == actor.user_id:
-        return True
-    if offer.status == OfferStatus.DRAFT:
-        return False
-    return actor.can(NODE, "view") and not actor.can("bpp.invoices", "create")
+#: Проверка видимости АП — та же, что у журнала (``read.can_view``).
+VIEW_CHECK = HISTORY_CHECKS["bpp.alternativeoffer"][1]
 
 
 def _can_view(owner_id, token) -> bool:
     offer = _offer(owner_id)
-    return offer is not None and _offer_can_view(actor_from_token(token), offer)
+    return offer is not None and import_string(VIEW_CHECK)(actor_from_token(token), offer)
 
 
 def _can_modify(owner_id, token) -> None:
