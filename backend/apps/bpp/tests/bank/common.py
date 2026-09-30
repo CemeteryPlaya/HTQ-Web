@@ -11,7 +11,9 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
-from datetime import date, timedelta
+from datetime import timedelta
+
+from django.utils import timezone
 from decimal import Decimal
 
 import openpyxl
@@ -143,7 +145,7 @@ def loaded_import(account: OrgBankAccount, lines, *, author_id: int | None = Non
     ``doc_date``. Ключ дубля — как у настоящей загрузки."""
     from apps.bpp.services.bank.imports import dedup_hash
 
-    today = date.today()
+    today = timezone.localdate()
     seq = BankImport.objects.count() + 1
     imp = BankImport.objects.create(
         number=f"ВП-2026-{9000 + seq:04d}", account=account, format="onec",
@@ -187,5 +189,5 @@ def orm_invoice(cp, amount, *, status: str = "to_pay", currency: str = "KZT",
     return Invoice.objects.create(
         number=f"СЧ-2026-{800000 + seq:06d}", project_id=uuid.uuid4(),
         article_id=uuid.uuid4(), counterparty=cp, ext_number=f"E-{seq}",
-        ext_date=date.today(), amount=Decimal(str(amount)), currency_code=currency,
+        ext_date=timezone.localdate(), amount=Decimal(str(amount)), currency_code=currency,
         status=status, author_id=author_id)
