@@ -365,13 +365,20 @@ def test_unmatched_link_only_for_bank_viewers_and_amount_in_kzt(company_context)
     bank.line(7, today, status=LineMatchStatus.UNMATCHED, currency="EUR")   # курса нет
     bank.line(55, today, status=LineMatchStatus.EXCLUDED)
 
-    fd_row = _by_key(dashboard.dashboard(invoice_flow._fd(slug), dashboard.Filters()))[
-        "unmatched"]
+    fd = invoice_flow._fd(slug)
+    fd_row = _by_key(dashboard.dashboard(fd, dashboard.Filters()))["unmatched"]
     assert fd_row["count"] == 3 and fd_row["amount"] == D("1100.00")
-    assert fd_row["link"] == "/bpp/bank?match_status=unmatched"
+    # Реестр загрузок понимает только период — других параметров в ссылке нет.
+    assert fd_row["link"] == "/bpp/bank"
+    week = dashboard.Filters(period_from=today - timedelta(days=6), period_to=today)
+    assert _by_key(dashboard.dashboard(fd, week))["unmatched"]["link"] == (
+        f"/bpp/bank?period_from={week.period_from.isoformat()}&period_to={today.isoformat()}")
+    only_to = dashboard.Filters(period_to=today)
+    assert _by_key(dashboard.dashboard(fd, only_to))["unmatched"]["link"] == (
+        f"/bpp/bank?period_to={today.isoformat()}")
 
     gd = s.actor(slug, GD, "bpp-gd")
-    assert _by_key(dashboard.dashboard(gd, dashboard.Filters()))["unmatched"]["link"] is None
+    assert _by_key(dashboard.dashboard(gd, week))["unmatched"]["link"] is None
 
 
 def _switch_off(company_id, name):
@@ -394,6 +401,9 @@ def test_invoices_off_drops_invoice_indicators_and_charts(company_context):
 
     assert [row["key"] for row in body["indicators"]] == ["unmatched"]
     assert body["weekly_paid"] == [] and body["top_counterparties"] == []
+    # Экран пишет «подмодуль выключен», а не «данных нет»; авторов нет — фильтр не нужен.
+    assert body["sections"] == {"invoices": False, "bank": True, "budget": True}
+    assert body["authors"] == []
 
 
 def test_bank_off_drops_bank_indicators_charts_and_paid_fact(company_context):
@@ -409,8 +419,56 @@ def test_bank_off_drops_bank_indicators_charts_and_paid_fact(company_context):
 
     assert [row["key"] for row in body["indicators"]] == ["fd", "to_pay", "awaiting_docs"]
     assert body["weekly_paid"] == [] and body["top_counterparties"] == []
+    assert body["sections"] == {"invoices": True, "bank": False, "budget": True}
     rows = dashboard.article_chart(proj.id, actor=fd)
     assert [row["paid_fact"] for row in rows] == [None]
+
+
+def test_budget_off_drops_article_chart_and_says_so(company_context):
+    slug = company_context["slug"]
+    s.user(s.SN)
+    proj = s.project(members=[s.SN])
+    s.approved_budget(slug, proj, {s.metal(): 1000})
+    fd = invoice_flow._fd(slug)
+    assert dashboard.dashboard(fd, dashboard.Filters(project_id=str(proj.id)))["article_chart"]
+    _switch_off(company_context["id"], "bpp_budget")
+
+    body = dashboard.dashboard(fd, dashboard.Filters(project_id=str(proj.id)))
+
+    assert body["article_chart"] == []
+    assert body["sections"] == {"invoices": True, "bank": True, "budget": False}
+
+
+# ── авторы (фильтр «Автор счёта») ───────────────────────────────────────
+
+def test_authors_are_invoice_authors_visible_to_the_actor(company_context):
+    """Список фильтра «Автор счёта» — из счетов реестра, а не из кадров: у
+    ролей дашборда нет прав ``hr``. Видимость — реестра (СН — только свои),
+    остальные фильтры дашборда список не сужают; автора без учётки — ``name:
+    null``."""
+    slug = company_context["slug"]
+    s.user(s.SN, "snab")
+    s.user(s.PM, "arman")
+    _inv(InvoiceStatus.UNDER_REVIEW, 100, author_id=s.SN)
+    _inv(InvoiceStatus.TO_PAY, 200, author_id=s.SN, project_id=OTHER_PROJECT)
+    _inv(InvoiceStatus.DRAFT, 300, author_id=s.PM)
+    _inv(InvoiceStatus.PAID, 400, author_id=99901)            # учётки нет
+    Invoice.objects.filter(pk=_inv(InvoiceStatus.PAID, 500, author_id=s.SN2).pk).update(
+        is_migrated=True)                                    # перенесённый — не в реестре
+    fd = invoice_flow._fd(slug)
+    expected = [{"id": s.PM, "name": "Тест Arman"}, {"id": s.SN, "name": "Тест Snab"},
+                {"id": 99901, "name": None}]
+
+    assert dashboard.authors(fd) == expected
+    narrowed = dashboard.Filters(project_id=str(OTHER_PROJECT), author_id=s.SN)
+    assert dashboard.dashboard(fd, narrowed)["authors"] == expected
+
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    assert dashboard.authors(sn) == [{"id": s.SN, "name": "Тест Snab"}]
+
+    response = _get(slug, s.FD, "bpp-fd")
+    assert response.status_code == 200, response.content
+    assert response.json()["authors"] == expected
 
 
 def test_top10_ties_are_ordered_by_name(company_context):
@@ -482,6 +540,8 @@ def test_dashboard_roles_by_matrix(company_context, user_id, code):
         "fd", "to_pay", "awaiting_docs", "bank_unconfirmed", "full", "underpaid",
         "overpaid", "no_mark", "unmatched"]
     assert body["article_chart"] == [] and body["weekly_paid"] == []
+    assert body["sections"] == {"invoices": True, "bank": True, "budget": True}
+    assert body["authors"] == []
 
 
 def test_supplier_gets_403(company_context):

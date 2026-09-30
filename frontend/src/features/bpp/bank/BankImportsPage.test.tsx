@@ -122,4 +122,49 @@ describe('BankImportsPage', () => {
     expect(await screen.findByText('Загрузка выписки')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Отмена' })).toHaveAttribute('href', '/bpp/bank?page=2');
   });
+
+  it('ссылка дашборда: период из адреса — в запрос, сохранённые фильтры не подмешиваются', { timeout: 20000 }, async () => {
+    window.localStorage.setItem('bpp:registry:bank-imports', JSON.stringify({
+      pageSize: 50, sort: null, filters: { status: 'cancelled', period_from: '2025-01-01' }, hidden: [],
+    }));
+    get.mockImplementation((url: string) => Promise.resolve({
+      data: url.includes('bank/imports')
+        ? { items: [ROW], total: 1, page: 1, page_size: 50 }
+        : [],
+    }));
+    renderRegistry('/bpp/bank?period_from=2026-09-01&period_to=2026-09-30&match_status=unmatched');
+    await screen.findByRole('link', { name: 'ВП-2026-0001' });
+
+    const registryCall = () => get.mock.calls.find(([url]) => String(url).includes('bank/imports?'));
+    await waitFor(() => expect(registryCall()).toBeDefined());
+    const [url, config] = registryCall()!;
+    // Посторонний параметр адреса в запрос не идёт — только период.
+    expect(Object.fromEntries(new URL(String(url), 'http://host').searchParams))
+      .toEqual({ period_from: '2026-09-01', period_to: '2026-09-30' });
+    // Сохранённые «Отменена» и «Период с 01.01.2025» сузили бы выборку ссылки.
+    expect(config.params).toEqual({ page: 1, page_size: 50 });
+
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent('Отбор по ссылке');
+    expect(note).toHaveTextContent('Период выписки: с 01.09.2026 по 30.09.2026');
+
+    get.mockClear();
+    await userEvent.click(within(note).getByRole('button', { name: 'Показать все загрузки' }));
+    await waitFor(() => expect(get.mock.calls.some(([next]) => String(next).endsWith('bank/imports'))).toBe(true));
+    expect(screen.queryByRole('note')).toBeNull();
+    const plain = get.mock.calls.find(([next]) => String(next).endsWith('bank/imports'))!;
+    expect(plain[1].params).toMatchObject({ status: 'cancelled', period_from: '2025-01-01' });
+  });
+
+  it('ссылка только с датой «по» — в запрос уходит одна она', { timeout: 20000 }, async () => {
+    get.mockImplementation((url: string) => Promise.resolve({
+      data: url.includes('bank/imports') ? { items: [ROW], total: 1, page: 1, page_size: 50 } : [],
+    }));
+    renderRegistry('/bpp/bank?period_to=2026-09-30');
+    await screen.findByRole('link', { name: 'ВП-2026-0001' });
+
+    const registryCall = get.mock.calls.find(([url]) => String(url).includes('bank/imports?'))!;
+    expect(String(registryCall[0])).toMatch(/bank\/imports\?period_to=2026-09-30$/);
+    expect(screen.getByRole('note')).toHaveTextContent('Период выписки: по 30.09.2026');
+  });
 });

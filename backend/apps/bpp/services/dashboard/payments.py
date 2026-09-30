@@ -25,8 +25,11 @@ D-S4-8). Видимость счетов — тоже реестра (СН и П
   частично»). Вкладка ``bank_mismatch`` уже этого (только частичные и
   переплаты), поэтому ссылка — фильтрами ``status`` и ``recon_status``;
 * ``unmatched`` — строки выписки «Не сопоставлена» загрузок «Загружена» и
-  «Сверена» за период; ссылка — экран «Оплаты факт» (``/bpp/bank``), и только
-  тому, кто его видит (``bpp.bank`` view — ФД, БУХ), остальным ``null``.
+  «Сверена» за период; ссылка — реестр загрузок «Оплаты факт» (``/bpp/bank``)
+  с тем же периодом (``period_from``/``period_to`` — загрузки, чей период
+  выписки пересекается с ним), и только тому, кто его видит (``bpp.bank``
+  view — ФД, БУХ), остальным ``null``. Число со строками реестра загрузок
+  не сравнивается: там загрузки, а не строки.
 
 Период (D-S4-6) — по дате платежа в выписке и только у банковских
 показателей (``full``, ``underpaid``, ``overpaid``, ``no_mark``,
@@ -38,12 +41,19 @@ D-S4-8). Видимость счетов — тоже реестра (СН и П
 к ней применяется только контрагент — по БИН получателя.
 
 **Рубильники подмодулей** (как ``digest.py``): выключен у компании
-``bpp_invoices`` — показателей по счетам и графиков оплат нет вовсе (их ссылки
-отвечали бы 503); выключен ``bpp_bank`` — нет показателей, которые пишет
-сверка (``bank_unconfirmed``, ``full``, ``underpaid``, ``overpaid``,
+``bpp_invoices`` — показателей по счетам, авторов и графиков оплат нет вовсе
+(их ссылки отвечали бы 503); выключен ``bpp_bank`` — нет показателей, которые
+пишет сверка (``bank_unconfirmed``, ``full``, ``underpaid``, ``overpaid``,
 ``no_mark``), ``unmatched``, графиков оплат, а ``paid_fact`` у статей —
 ``null``; выключен ``bpp_budget`` — статей нет. Пропавший показатель не
 отдаётся нулём: «не считали» и «ничего нет» не должны выглядеть одинаково.
+Поэтому состояние рубильников отдаётся и явно — ``sections`` ``{invoices,
+bank, budget}``: экран пишет «подмодуль выключен», а не «данных нет».
+
+**Авторы** (фильтр «Автор счёта», ТЗ §11.5) — ``authors``: авторы счетов,
+видимых пользователю по правилам реестра, без остальных фильтров дашборда
+(список не прыгает при их смене), имена — ``users.interface``. Кадровый
+список сотрудников для этого не годится: у ролей дашборда нет прав ``hr``.
 
 **Всё считается агрегатами SQL**, без кэша (ТЗ: свежие цифры при каждом
 открытии). Деньги — ``Decimal``: перевод в KZT — ``ROUND(сумма × курс, 2)``
@@ -90,6 +100,7 @@ from apps.bpp.services.invoices import read as registry
 from apps.bpp.services.money import money
 from apps.core.services import service_enabled
 from apps.refdata import interface as refdata
+from apps.users import interface as users
 
 ZERO = Decimal("0.00")
 KZT = "KZT"
@@ -283,11 +294,12 @@ def _unmatched(actor: Actor, filters: Filters) -> dict:
             amount += money(group["total"] * rate)
     link = None
     if actor.can("bpp.bank", "view"):
-        pairs = [("match_status", LineMatchStatus.UNMATCHED)]
-        pairs += [(key, value.isoformat()) for key, value in
-                  (("period_from", filters.period_from), ("period_to", filters.period_to))
-                  if value]
-        link = f"{BANK_URL}?{urlencode(pairs)}"
+        # Реестр загрузок понимает только период (загрузки, чей период
+        # выписки пересекается с ним) — других параметров в ссылке нет.
+        pairs = [(key, value.isoformat()) for key, value in
+                 (("period_from", filters.period_from), ("period_to", filters.period_to))
+                 if value]
+        link = f"{BANK_URL}?{urlencode(pairs)}" if pairs else BANK_URL
     return {"key": "unmatched", "label": UNMATCHED_LABEL, "count": agg["count"],
             "amount": amount, "link": link}
 
@@ -299,6 +311,29 @@ def indicators(actor: Actor, filters: Filters) -> list[dict]:
            if all(service_enabled(name) for name in spec.needs)]
     if service_enabled(BANK):
         out.append(_unmatched(actor, filters))
+    return out
+
+
+def sections() -> dict:
+    """``{invoices, bank, budget}`` — включены ли у компании подмодули, от
+    которых зависят части дашборда: экран отличает «подмодуль выключен» от
+    «данных нет». Показатели и графики уже отданы по ним же."""
+    return {"invoices": service_enabled(INVOICES), "bank": service_enabled(BANK),
+            "budget": service_enabled(BUDGET)}
+
+
+def authors(actor: Actor) -> list[dict]:
+    """``[{id, name}]`` — авторы счетов, видимых пользователю по правилам
+    реестра (``invoices.read.visible`` без фильтров), для фильтра «Автор
+    счёта»; по имени. Пользователя нет — ``name: null`` (фильтр по нему всё
+    равно работает). Выключен ``bpp_invoices`` — пусто."""
+    if not service_enabled(INVOICES):
+        return []
+    ids = sorted(set(registry.visible(actor).order_by()
+                     .values_list("author_id", flat=True).distinct()) - {None})
+    names = {row["id"]: row["full_name"] for row in users.get_users_brief(ids)} if ids else {}
+    out = [{"id": user_id, "name": names.get(user_id)} for user_id in ids]
+    out.sort(key=lambda row: (row["name"] is None, (row["name"] or "").casefold(), row["id"]))
     return out
 
 
@@ -405,6 +440,8 @@ def dashboard(actor: Actor, filters: Filters) -> dict:
     цифр при каждом открытии и после каждой загрузки выписки."""
     return {
         "filters": filters.as_dict(),
+        "sections": sections(),
+        "authors": authors(actor),
         "indicators": indicators(actor, filters),
         "article_chart": article_chart(filters.project_id, actor=actor,
                                        article_id=filters.article_id),
