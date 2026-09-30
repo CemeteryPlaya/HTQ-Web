@@ -237,6 +237,14 @@ def _author_role(actor: Actor) -> str:
     return InitiatorRole.SN.value
 
 
+def _require_create(actor: Actor) -> None:
+    """Право подавать АП проверяется на каждом шаге до подачи, а не только
+    при создании: снабженец, у которого роль сняли, свой черновик уже не
+    правит и не подаёт. Удалить черновик и отозвать поданную — может."""
+    if not actor.can(NODE, "create"):
+        raise _deny("Альтернативные предложения подают снабженцы.")
+
+
 def _require_author(actor: Actor, offer: AlternativeOffer, action: str) -> None:
     if offer.author_id != actor.user_id:
         raise _deny(f"«{action}» доступно только автору альтернативы {offer.number}.")
@@ -246,7 +254,7 @@ def allowed_actions(actor: Actor, offer: AlternativeOffer) -> list[str]:
     if offer.author_id != actor.user_id:
         return []
     if offer.status == OfferStatus.DRAFT:
-        return ["save", "submit", "delete"]
+        return ["save", "submit", "delete"] if actor.can(NODE, "create") else ["delete"]
     if offer.status == OfferStatus.SUBMITTED:
         source = _MODELS[offer.source_type].objects.filter(pk=offer.source_id).first()
         if source is not None and window_open(source):
@@ -407,8 +415,7 @@ def _touch(offer: AlternativeOffer, actor_id: int | None) -> None:
 
 @transaction.atomic
 def create(actor: Actor, *, source_type: str, source_id) -> AlternativeOffer:
-    if not actor.can(NODE, "create"):
-        raise _deny("Альтернативные предложения подают снабженцы.")
+    _require_create(actor)
     source = source_of(source_type, source_id, lock=True)
     if not actor.sees_project(source.project_id):
         raise _not_found("Документ не найден.")
@@ -527,6 +534,7 @@ def _apply_header(offer: AlternativeOffer, data: dict) -> None:
 @transaction.atomic
 def update_draft(actor: Actor, offer_id, *, expected_version: int | None,
                  data: dict) -> AlternativeOffer:
+    _require_create(actor)
     source, offer = _locked(offer_id)
     _require_author(actor, offer, "Изменить")
     if offer.status != OfferStatus.DRAFT:
@@ -633,6 +641,7 @@ def _notify_submitted(offer: AlternativeOffer, source, *, actor_id: int) -> None
 
 @transaction.atomic
 def submit(actor: Actor, offer_id, *, expected_version: int | None) -> AlternativeOffer:
+    _require_create(actor)
     source, offer = _locked(offer_id)
     _require_author(actor, offer, "Подать")
     # Окно — до статуса: черновик к решённому документу уже закрыт

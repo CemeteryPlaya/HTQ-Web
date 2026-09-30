@@ -15,7 +15,9 @@
   (CALC-013) и замораживаются в момент подтверждения.
 - Подтверждённую запись система аннулирует по тому же правилу, что и
   предварительную (ТЗ §12.5): новый счёт «Не к оплате»/«Отменён»/«Заменён»,
-  новый договор «Отклонён» или «Расторгнут» без оплаченных счетов.
+  новый договор «Отклонён»/«Заменён» или «Расторгнут» без оплаченных счетов,
+  а также удалённый новый документ (черновик) — его хук зовёт ``sync`` после
+  удаления.
 - ``annul`` — ручное аннулирование ФД с комментарием (узел ``bpp.kpi`` edit).
 
 Модуль зовётся из зоны B, поэтому не импортирует сервисы счёта и договора
@@ -60,6 +62,9 @@ INVOICE_ANNULS = (InvoiceStatus.NOT_PAYABLE, InvoiceStatus.CANCELLED, InvoiceSta
 #: Статусы счёта, где есть отметка оплаты БУХ (для «Расторгнут без оплаченных»).
 PAID_GROUP = (InvoiceStatus.PARTIALLY_PAID, *INVOICE_CONFIRMS)
 AGREEMENT_CONFIRMS = (AgreementStatus.ACTIVE, AgreementStatus.FULFILLED)
+#: «Заменён альтернативой» аннулирует так же, как у счёта (D-S5-7). BR-096 [У]
+#: («KPI по цепочке замен — каждому СН») — вопрос Алгазы, план этапа 5.
+AGREEMENT_ANNULS = (AgreementStatus.REJECTED, AgreementStatus.REPLACED)
 
 
 def _deny(text: str) -> DomainError:
@@ -208,7 +213,7 @@ def _target_status(kpi: KpiRecord, doc) -> str | None:
         return None
     if doc.status in AGREEMENT_CONFIRMS:
         return KpiStatus.CONFIRMED
-    if doc.status == AgreementStatus.REJECTED:
+    if doc.status in AGREEMENT_ANNULS:
         return KpiStatus.ANNULLED
     if doc.status == AgreementStatus.TERMINATED and not Invoice.objects.filter(
             agreement=doc, status__in=PAID_GROUP).exists():
@@ -224,17 +229,26 @@ def _annul_reason(doc) -> str:
 def sync_for_document(doc_type: str, doc_id) -> None:
     """Привести запись KPI в соответствие статусу нового документа (D-S5-8).
 
-    Нет записи по документу — ничего (обычный счёт или договор). Вызов
+    Нет записи по документу — ничего (обычный счёт или договор). Запись
+    есть, а документа нет (удалён черновик) — «Аннулирован». Вызов
     идемпотентен и безопасен на любом статусе."""
     kpi = (KpiRecord.objects.select_for_update()
            .filter(result_type=doc_type, result_id=doc_id).first())
     if kpi is None or kpi.status == KpiStatus.ANNULLED:
         return
     doc = _document(doc_type, doc_id)
+    now = timezone.now()
     if doc is None:
+        # Новый документ удалён (черновик, ТЗ §12.4 п.3): следующего вызова
+        # не будет, поэтому запись аннулируется здесь (ТЗ §12.5).
+        before = kpi.status
+        kpi.status, kpi.status_changed_at = KpiStatus.ANNULLED, now
+        kpi.annul_comment = f"Новый документ удалён ({kpi.result_number})"
+        _touch(kpi, None, "status", "status_changed_at", "annul_comment")
+        audit.record(kpi, "annulled_system", actor_id=None, comment=kpi.annul_comment,
+                     changes={"status": [before, KpiStatus.ANNULLED]})
         return
     target = _target_status(kpi, doc)
-    now = timezone.now()
     if target == KpiStatus.ANNULLED:
         before = kpi.status
         kpi.status, kpi.status_changed_at = KpiStatus.ANNULLED, now

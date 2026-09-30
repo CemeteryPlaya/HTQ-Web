@@ -13,9 +13,10 @@
  *   (нет даты — ячейка пуста). Знак отклонения — плюс: АП дороже исходного.
  * - `renderSelect` — слот для кнопки «Выбрать» (B5.1); зовётся для каждой
  *   АП «Подано». Блок сам ничего не выбирает.
- * - Автор документа-СН поднимает лимит альтернатив (по умолчанию 3, до 10).
- * - Нет права на просмотр, документ не виден или альтернатив нет и подать
- *   нельзя — блока нет совсем.
+ * - Автор документа-СН (автор и держатель `bpp.alternatives` create) поднимает
+ *   лимит альтернатив (по умолчанию 3, до 10); ПМ-автору поле не показывается.
+ * - Нет права `bpp.alternatives` view — сравнение не запрашивается и блока
+ *   нет; документ не виден или альтернатив нет и подать нельзя — тоже.
  */
 import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -30,6 +31,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
@@ -59,6 +61,8 @@ export function AlternativesBlock({ sourceType, sourceId, renderSelect }: Props)
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const profile = useActiveProfile();
+  const permissions = usePermissions();
+  const canView = permissions.can('bpp.alternatives', 'view');
   const currentUserId = parseInt(profile.activeProfile?.id ?? '0', 10) || 0;
   const [creating, setCreating] = useState(false);
   const [limit, setLimit] = useState('');
@@ -68,8 +72,9 @@ export function AlternativesBlock({ sourceType, sourceId, renderSelect }: Props)
     queryKey: comparisonKey(sourceType, sourceId),
     queryFn: () => alternativesApi.comparison(sourceType, sourceId),
     retry: false,
+    enabled: canView,
   });
-  if (!data || !Array.isArray(data.offers)) return null;
+  if (!canView || !data || !Array.isArray(data.offers)) return null;
 
   const offers = data.offers.filter((offer) => offer.status !== 'draft' || offer.id === data.my_offer_id);
   if (offers.length === 0 && !data.can_propose && !data.my_offer_id) return null;
@@ -87,7 +92,10 @@ export function AlternativesBlock({ sourceType, sourceId, renderSelect }: Props)
     }
   };
 
-  const isSourceAuthor = data.source.author.id === currentUserId;
+  // Лимит поднимает автор документа-СН (сервер: автор, роль СН и create);
+  // ПМ-автор без create получил бы 403 — поля у него нет.
+  const canRaiseLimit = data.source.author.id === currentUserId
+    && permissions.can('bpp.alternatives', 'create');
   const limitNumber = Number(limit);
   const limitValid = Number.isInteger(limitNumber)
     && limitNumber >= Math.max(data.submitted_count, data.limit) && limitNumber <= LIMIT_MAX;
@@ -130,7 +138,7 @@ export function AlternativesBlock({ sourceType, sourceId, renderSelect }: Props)
         </div>
       </div>
 
-      {isSourceAuthor && data.window_open && data.limit < LIMIT_MAX && (
+      {canRaiseLimit && data.window_open && data.limit < LIMIT_MAX && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <label htmlFor="alt-limit">{t('bpp.alternatives.limitLabel', 'Лимит альтернатив')}:</label>
           <Input id="alt-limit" className="w-20 text-right" inputMode="numeric" value={limit}

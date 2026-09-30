@@ -380,7 +380,12 @@ def mark_selected(offer_id, *, actor_id: int, comment: str) -> AlternativeOffer:
 #   под блокировкой исходного документа, ДО смены его статуса и ДО close_for_source: выбранная → «Выбрано»
 #   (decided_by, decided_at, comment), прочие «Подано» → «Не выбрано», черновики → «Аннулировано»;
 #   у документа уже есть «Выбрано» (в т.ч. эта же АП) — 409 E-STATE-01 «Документ уже заменён альтернативой» (BR-096);
-#   АП не «Подано» или окно документа закрыто — 409 E-STATE-01. result_type/result_id АП пишет B.
+#   АП не «Подано» или окно документа закрыто — 409 E-STATE-01; АП нет (в т.ч. удалена между пробой и замком) — 404.
+#   result_type/result_id АП пишет B. Договор (B-2): ветвиться по signoff.final_option В НАЧАЛЕ on_approved
+#   (или в on_option последнего выбирающего этапа) — до UPDATE статуса, record_success и close_for_source:
+#   mark_selected требует открытого окна («На согласовании»).
+#   Блокировки (счёт): доменные ручки берут «строка счёта → процесс signoff», общий инбокс — «процесс → строка»;
+#   выбор по счёту наследует инверсию cancel() — брать процесс раньше документа или повторять на deadlock.
 def close_for_source(source_type: str, source_id, outcome: str, *, reason: str) -> int: ...
 #   outcome "not_selected" («Подано» → «Не выбрано», черновик → «Аннулировано») | "annulled" (обе → «Аннулировано»);
 #   зовут хуки счёта и договора (зона B, D-S5-6, сделано A); возвращает число закрытых АП, повтор — 0
@@ -389,9 +394,12 @@ def notify_buyers(source_type: str, source_id) -> None: ...   # из on_started:
 def create_preliminary(offer_id, *, result_type: str, result_id, selected_by_id: int) -> KpiRecord: ...
 #   в транзакции выбора, после mark_selected и создания черновика нового документа (при частичной АП — черновик по альтернативе, D-25)
 def sync_for_document(doc_type: str, doc_id) -> None: ...    # D-S5-8, идемпотентна; B зовёт на каждой смене статуса счёта и договора
-# Хуки в сервисах B (стоят с этапа 5 A): счёт — on_started → notify_buyers; on_approved → not_selected; on_rejected,
-# on_rework, cancel → annulled. Договор — on_started → notify_buyers; on_approved → not_selected; on_rejected, on_rework,
-# on_cancelled (в т.ч. withdraw) → annulled. Новая точка смены статуса исходного документа обязана их не обходить.
+#   «Смена статуса» включает отправку (on_started — «Предварительный» пересчитывается на отправленную сумму) и
+#   УДАЛЕНИЕ нового документа: delete_draft зовёт sync после delete() — запись есть, документа нет → «Аннулирован»
+#   («Новый документ удалён»). Заменённый новый документ (счёт или договор REPLACED) аннулирует KPI (D-S5-7).
+# Хуки в сервисах B (стоят с этапа 5 A): счёт — on_started → notify_buyers + sync; on_approved → not_selected; on_rejected,
+# on_rework, cancel → annulled; delete_draft → sync. Договор — on_started → notify_buyers + sync; on_approved → not_selected;
+# on_rejected, on_rework, on_cancelled (в т.ч. withdraw) → annulled; delete_draft → sync. Новая точка смены статуса исходного документа обязана их не обходить.
 ```
 
 ### 2.7 Владение файлами

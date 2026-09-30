@@ -18,6 +18,7 @@ from django.db import connection
 from django.test import Client
 from django.utils import timezone
 
+from apps.access.models import RoleAssignment
 from apps.bpp.models import AlternativeOffer, AuditLog, Invoice, OfferStatus
 from apps.bpp.services.alternatives import offers
 from apps.bpp.services.invoices import decisions
@@ -469,6 +470,28 @@ def test_foreign_buyer_cannot_touch_the_draft(company_context):
     with pytest.raises(DomainError) as exc:
         offers.get_visible(stranger, offer.id)
     assert exc.value.status == 404          # чужой черновик не виден вовсе
+
+
+def test_revoked_role_blocks_edit_and_submit_of_own_draft(company_context):
+    """M11: право ``bpp.alternatives`` create перепроверяется на правке и
+    подаче: СН без роли свой черновик не правит и не подаёт, но удаляет."""
+    slug = company_context["slug"]
+    _, _, inv = common.invoice_on_review(slug, 1000)
+    owner = common.sn(slug, common.SN2)
+    offer = common.fill(owner, common.draft(owner, inv), common.cp(2), price=900)
+    RoleAssignment.objects.filter(company_slug=slug, user_id=common.SN2,
+                                  role__code="bpp-sn").delete()
+    former = s.actor(slug, common.SN2)
+    for call in (
+            lambda: offers.update_draft(former, offer.id, expected_version=None,
+                                        data={"justification": "Правка без права на АП"}),
+            lambda: offers.submit(former, offer.id, expected_version=None)):
+        err = _fail(call)
+        assert (err.code, err.status) == ("E-ACC-01", 403)
+    assert offers.allowed_actions(former, AlternativeOffer.objects.get(pk=offer.pk)) == [
+        "delete"]
+    offers.delete_draft(former, offer.id, expected_version=None)
+    assert not AlternativeOffer.objects.filter(pk=offer.pk).exists()
 
 
 def test_stale_version_is_409_and_draft_delete_removes_the_row(company_context):

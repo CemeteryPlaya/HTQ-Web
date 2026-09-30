@@ -2,7 +2,9 @@
  * Блок «Альтернативы» форм договора и счёта (ТЗ §12.4): `can_propose=false`
  * прячет кнопку; чужой черновик не показывается; слот `renderSelect` зовётся
  * для каждой АП «Подано»; отозванные — приглушены; «Потребность» исходного
- * документа скрыта без даты; автор документа поднимает лимит.
+ * документа скрыта без даты; автор документа поднимает лимит (только с
+ * `bpp.alternatives` create); без `bpp.alternatives` view сравнение не
+ * запрашивается и блока нет.
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -21,6 +23,13 @@ vi.mock('@/api/client', () => ({ default: { get, post } }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => ({ activeProfile: { id: '7' } }),
+}));
+const granted = vi.hoisted(() => ({ flags: new Set(['view', 'create']) }));
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    can: (node: string, flag: string) => node === 'bpp.alternatives' && granted.flags.has(flag),
+    atLeast: () => true,
+  }),
 }));
 
 const CP = {
@@ -72,7 +81,34 @@ function renderBlock(comparison: Comparison, renderSelect?: (o: ComparisonOffer)
 }
 
 describe('AlternativesBlock', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    granted.flags = new Set(['view', 'create']);
+  });
+
+  it('без bpp.alternatives view сравнение не запрашивается и блока нет', async () => {
+    granted.flags = new Set();
+    const { container } = renderBlock(data());
+    // Даём запросу шанс уйти, если бы он был разрешён.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(get).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="alternatives-block"]')).toBeNull();
+  });
+
+  it('автор документа без bpp.alternatives create (ПМ) поля лимита не видит', async () => {
+    granted.flags = new Set(['view']);
+    renderBlock(data({ can_propose: false }));
+    expect(await screen.findByText('Подано 2 из 3')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Лимит альтернатив:')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Поднять' })).toBeNull();
+  });
+
+  it('держатель create, но не автор документа, поля лимита не видит', async () => {
+    const base = data();
+    renderBlock({ ...base, source: { ...base.source, author: { id: 99, name: 'Другой' } } });
+    expect(await screen.findByText('Подано 2 из 3')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Лимит альтернатив:')).toBeNull();
+  });
 
   it('can_propose=true — кнопка «Предложить альтернативу» заводит черновик', async () => {
     post.mockResolvedValue({ data: { id: 'new-offer' } });

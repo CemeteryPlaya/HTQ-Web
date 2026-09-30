@@ -234,6 +234,23 @@ def test_mark_selected_needs_submitted_offer_and_open_window(company_context):
     assert _fresh(live).status == OfferStatus.SUBMITTED
 
 
+def test_mark_selected_offer_deleted_after_probe_is_404(company_context, monkeypatch):
+    """M1: АП удалили между пробой и замком — 404, а не ``StopIteration`` (500)."""
+    slug = company_context["slug"]
+    _, _, inv = common.invoice_on_review(slug, 1000)
+    gone = common.filed(common.sn(slug, common.SN2), inv, common.cp(2), price=900)
+    real = offers.source_of
+
+    def source_then_delete(*args, **kwargs):
+        source = real(*args, **kwargs)
+        AlternativeOffer.objects.filter(pk=gone.pk).delete()
+        return source
+
+    monkeypatch.setattr(lifecycle.offers, "source_of", source_then_delete)
+    err = _fail(lambda: lifecycle.mark_selected(gone.pk, actor_id=s.FD, comment=""))
+    assert (err.code, err.status) == ("E-NOT-FOUND", 404)
+
+
 def test_options_for_agreement_lists_original_and_submitted(company_context):
     slug = company_context["slug"]
     _, _, agr = common.agreement_on_review(slug, 1000)

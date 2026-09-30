@@ -261,16 +261,19 @@ def mark_selected(offer_id, *, actor_id: int, comment: str) -> AlternativeOffer:
 
     Документ уже заменён (есть «Выбрано», в том числе эта же АП) — 409
     ``E-STATE-01`` (BR-096); АП не «Подано» или окно документа закрыто —
-    409 ``E-STATE-01``."""
+    409 ``E-STATE-01``; АП нет (в том числе удалена между пробой и замком) —
+    404 ``E-NOT-FOUND``."""
     key = _key(offer_id)
     probe = AlternativeOffer.objects.filter(pk=key).first() if key else None
     if probe is None:
         raise DomainError("E-NOT-FOUND", "Альтернатива не найдена.", status=404)
     source = offers.source_of(probe.source_type, probe.source_id, lock=True)
     rows = _locked_offers(probe.source_type, probe.source_id, OfferStatus.values)
+    offer = next((row for row in rows if row.pk == probe.pk), None)
+    if offer is None:  # удалена между пробой и замком
+        raise DomainError("E-NOT-FOUND", "Альтернатива не найдена.", status=404)
     if any(row.status == OfferStatus.SELECTED for row in rows):
         raise _state("Документ уже заменён альтернативой")
-    offer = next(row for row in rows if row.pk == probe.pk)
     if offer.status != OfferStatus.SUBMITTED:
         raise _state(OPTION_GONE)
     if not offers.window_open(source):

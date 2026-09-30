@@ -14,6 +14,7 @@ import pytest
 from django.utils import timezone
 
 from apps.bpp.models import AgreementStatus, AuditLog, InvoiceStatus, KpiRecord, KpiStatus
+from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.alternatives import kpi, report
 from apps.bpp.services.invoices import invoices as invoice_service
 from apps.bpp.services.invoices import payments
@@ -153,6 +154,38 @@ def test_sync_is_idempotent_and_unmark_does_not_revert(company_context):
     kpi.sync_for_document("agreement", new.pk)
 
 
+def test_deleted_draft_invoice_annuls_kpi(company_context):
+    """I-1: B5.1 заводит новый счёт черновиком, автор вправе его удалить —
+    запись не остаётся «Предварительной» навсегда (ТЗ §12.5)."""
+    slug = company_context["slug"]
+    _, new, _, record = _world()
+    number = new.number
+    invoice_service.delete_draft(s.actor(slug, new.author_id, "bpp-sn"), new.pk,
+                                 expected_version=None)
+    got = _fresh(record)
+    assert got.status == KpiStatus.ANNULLED and got.status_changed_at is not None
+    assert got.annul_comment == f"Новый документ удалён ({number})"
+    assert AuditLog.objects.filter(object_type="bpp.kpirecord", object_id=str(record.pk),
+                                   action="annulled_system").exists()
+    # Повтор ничего не меняет: «Аннулирован» финален.
+    version = got.version
+    kpi.sync_for_document("invoice", new.pk)
+    assert _fresh(record).version == version
+
+
+def test_on_started_recomputes_preliminary(company_context):
+    """M4: отправка нового счёта пересчитывает «Предварительный» на
+    отправленную сумму, не дожидаясь решения ФД."""
+    _, new, _, record = _world()
+    type(new).objects.filter(pk=new.pk).update(amount=D("2300000.00"),
+                                                amount_kzt=D("2300000.00"))
+    invoice_service.on_started(new.pk)
+    got = _fresh(record)
+    assert got.status == KpiStatus.PRELIMINARY
+    assert got.result_amount_kzt == D("2300000.00") and got.saving_amount == D("500000.00")
+    assert AuditLog.objects.filter(object_id=str(record.pk), action="recalculated").exists()
+
+
 def test_annulled_is_final(company_context):
     _, new, _, record = _world()
     _set(new, InvoiceStatus.CANCELLED)
@@ -183,6 +216,39 @@ def test_agreement_active_confirms_and_rejected_annuls(company_context):
     _set(agr2, AgreementStatus.REJECTED)
     kpi.sync_for_document("agreement", agr2.pk)
     assert _fresh(record2).status == KpiStatus.ANNULLED
+
+
+def test_agreement_replaced_annuls_like_invoice(company_context):
+    """I-2 (D-S5-7): новый договор, сам заменённый альтернативой, аннулирует
+    KPI так же, как заменённый счёт; BR-096 [У] — вопрос Алгазы."""
+    _, agr, _, record = _agreement_world()
+    _set(agr, AgreementStatus.REPLACED)
+    kpi.sync_for_document("agreement", agr.pk)
+    got = _fresh(record)
+    assert got.status == KpiStatus.ANNULLED
+    assert got.annul_comment.startswith("Новый документ аннулирован системой")
+
+
+def test_deleted_draft_agreement_annuls_kpi(company_context):
+    slug = company_context["slug"]
+    users()
+    src = invoice(2_800_000, status=InvoiceStatus.UNDER_REVIEW)
+    agr = agreement(2_450_000, status=AgreementStatus.DRAFT)
+    _, record = select_offer(src, agr, source_amount=2_800_000, result_type="agreement")
+    agreement_service.delete_draft(s.actor(slug, agr.author_id, "bpp-sn"), agr.pk,
+                                   expected_version=None)
+    got = _fresh(record)
+    assert got.status == KpiStatus.ANNULLED
+    assert got.annul_comment == f"Новый документ удалён ({agr.number})"
+
+
+def test_agreement_on_started_recomputes_preliminary(company_context):
+    _, agr, _, record = _agreement_world()
+    type(agr).objects.filter(pk=agr.pk).update(amount=D("2000000.00"))
+    agreement_service.on_started(agr.pk)
+    got = _fresh(record)
+    assert got.status == KpiStatus.PRELIMINARY
+    assert got.result_amount_kzt == D("2000000.00") and got.saving_amount == D("800000.00")
 
 
 def test_agreement_fulfilled_confirms(company_context):
