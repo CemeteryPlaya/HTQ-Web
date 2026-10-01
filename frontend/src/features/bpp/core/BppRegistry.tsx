@@ -93,6 +93,9 @@ interface Props<Row extends { id: string }> {
   /** Держать страницу и поиск в адресе (по умолчанию да). Выключать, если
    * на одной странице два реестра: параметры адреса у них общие. */
   syncUrl?: boolean;
+  /** Привести строки ответа к виду с `id` (у ленты L-09 ключ строки —
+   * `source_id`). Без него строки берутся как есть. */
+  mapItems?: (raw: unknown[]) => Row[];
 }
 
 const cellValue = (row: object, key: string): ReactNode => {
@@ -107,7 +110,7 @@ const sortField = <Row,>(column: RegistryColumn<Row>): string | null =>
 export function BppRegistry<Row extends { id: string }>({
   registryKey, endpoint, columns, filters = [], bulkActions = [], exportName,
   searchParam, searchPlaceholder, searchable = true, defaultSort, defaultHidden, rowHref,
-  rowLabel, toolbarExtra, syncUrl = true,
+  rowLabel, toolbarExtra, syncUrl = true, mapItems,
 }: Props<Row>) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -128,7 +131,9 @@ export function BppRegistry<Row extends { id: string }>({
   const { data, isLoading, isError, isFetching } = useQuery({
     queryKey,
     queryFn: () =>
-      api.get<RegistryPage<Row>>(endpoint, { params: state.params }).then((r) => r.data),
+      api.get<RegistryPage<Row>>(endpoint, { params: state.params }).then((r) => (mapItems
+        ? { ...r.data, items: mapItems(r.data.items as unknown[]) }
+        : r.data)),
     placeholderData: keepPreviousData,
   });
 

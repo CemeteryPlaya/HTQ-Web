@@ -277,9 +277,6 @@ export const bankImportApi = {
     api.post<StatementLine>(linePath(`${lineId}/exclude`), { comment }, idem(key)).then((r) => r.data),
 };
 
-/** Комментарий подтверждения, отмены сопоставления и исключения не короче (BR-060). */
-export const COMMENT_MIN = 10;
-
 export const bankImportKey = (id: string) => ['bpp', 'bank', 'import', id] as const;
 
 /**

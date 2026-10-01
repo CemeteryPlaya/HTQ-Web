@@ -20,6 +20,7 @@ from django.utils import timezone
 
 from apps.bpp.models import Invoice, InvoiceStatus
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.alternatives import kpi
 from apps.bpp.services.core import audit
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
@@ -69,6 +70,7 @@ def decide(actor: Actor, invoice_id, *, decision: str, planned_pay_date: date | 
     audit.record(inv, f"fd_{decision}", actor_id=actor.user_id, comment=comment,
                  changes={"planned_pay_date": inv.planned_pay_date.isoformat()
                           if inv.planned_pay_date else None})
+    kpi.sync_for_document("invoice", inv.pk)  # «Не к оплате» аннулирует KPI (A5.2)
     return inv
 
 

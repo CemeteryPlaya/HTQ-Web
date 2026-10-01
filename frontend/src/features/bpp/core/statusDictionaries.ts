@@ -113,6 +113,21 @@ export const STATUS_DICTIONARIES = {
     excluded: s('bankLine.excluded', 'Исключена', 'muted'),
     unmatched: s('bankLine.unmatched', 'Не сопоставлена', 'attention'),
   },
+  // Альтернативное предложение (A5.1, ТЗ §12); `OfferStatus`.
+  alternative_offer: {
+    draft: s('alternativeOffer.draft', 'Черновик', 'draft'),
+    submitted: s('alternativeOffer.submitted', 'Подано', 'progress'),
+    selected: s('alternativeOffer.selected', 'Выбрано', 'success'),
+    not_selected: s('alternativeOffer.not_selected', 'Не выбрано', 'muted'),
+    withdrawn: s('alternativeOffer.withdrawn', 'Отозвано', 'muted'),
+    annulled: s('alternativeOffer.annulled', 'Аннулировано', 'danger'),
+  },
+  // Запись KPI снабжения (A5.2, D-S5-7); `KpiStatus`.
+  kpi_record: {
+    preliminary: s('kpiRecord.preliminary', 'Предварительный', 'progress'),
+    confirmed: s('kpiRecord.confirmed', 'Подтверждён', 'success'),
+    annulled: s('kpiRecord.annulled', 'Аннулирован', 'muted'),
+  },
   // Фоновая выгрузка реестра (задача 6); `ExportStatus`.
   export: {
     queued: s('export.queued', 'Готовится', 'progress'),
