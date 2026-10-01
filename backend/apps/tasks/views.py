@@ -1166,6 +1166,24 @@ def contractors_collection(request):
     return _method_not_allowed(request)
 
 
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def contractor_counterparty_search(request):
+    """Выбор контрагента в карточке партнёра (A6.1): поиск по реестру модуля
+    «Закупки и оплаты» — только «Активен». Своя ручка, а не реестр ``bpp``:
+    карточку партнёра правит администратор задач, у которого ролей модуля
+    закупок может не быть, а выбрать контрагента ему нужно. Уровень — как у
+    правки партнёра: искать незачем тому, кто не может связать.
+    Выключенный модуль — 503 (``ServiceDisabled``)."""
+    from apps.bpp import interface as bpp
+
+    try:
+        limit = _int_param(request, "limit", 20, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.BppCounterpartyOption.model_validate(card)
+            for card in bpp.search_counterparties(_str_param(request, "q"), limit=limit)]
+
+
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_contractor(request, contractor_id: int):
     return schemas.ContractorResponse.model_validate(

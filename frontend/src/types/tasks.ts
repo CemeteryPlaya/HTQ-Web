@@ -19,13 +19,25 @@ export type ContractorStatus = 'active' | 'suspended' | 'blacklisted' | 'archive
  */
 export type ContractorLevel = 'junior' | 'middle' | 'senior';
 
-/** Та же организация в «Договорах» — бейдж со ссылкой на карточку. */
+/** Та же организация в модуле «Закупки и оплаты» (A6.1) — бейдж со
+ *  ссылкой на карточку контрагента: наименование, БИН/ИИН, статус. */
 export interface ContractorCounterpartyRef {
-  id: number;
+  id: string;
   name: string;
-  bin_iin: string;
+  reg_number: string;
   status: string;
-  approval_state: string;
+}
+
+/** Строка поиска контрагента для формы партнёра
+ *  (`GET /tasks/v1/contractors/counterparty-search`): плюс то, что форма
+ *  подтягивает к себе при выборе. Только действующие. */
+export interface ContractorCounterpartyOption extends ContractorCounterpartyRef {
+  short_name: string;
+  country_code: string;
+  contact_person: string;
+  phone: string;
+  email: string;
+  legal_address: string;
 }
 
 /** Договор из «Договоров», по которому партнёр привлечён. */
@@ -48,11 +60,12 @@ export interface Contractor {
   address: string | null;
   notes: string;
   status: ContractorStatus;
-  /** Связь с контрагентом из «Договоров» (необязательна). */
-  counterparty_id: number | null;
-  /** `null` при заполненном `counterparty_id` — «Договоры» выключены или
-   *  контрагент удалён: связь есть, показать её нечем. */
-  counterparty: ContractorCounterpartyRef | null;
+  /** Связь с контрагентом модуля «Закупки и оплаты» (UUID, необязательна;
+   *  `null` в PATCH снимает связь). */
+  bpp_counterparty_id: string | null;
+  /** `null` при заполненном `bpp_counterparty_id` — модуль выключен: связь
+   *  есть, показать её нечем. */
+  bpp_counterparty: ContractorCounterpartyRef | null;
   /** См. API: количество активных работников и привлечений. */
   workers_count?: number;
   engagements_count?: number;

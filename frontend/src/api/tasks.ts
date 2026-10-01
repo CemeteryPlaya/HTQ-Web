@@ -7,7 +7,7 @@ import type {
   Label, Project, Task, TaskComment, TaskAttachment, TaskStats, TaskStatus,
   TaskLink, Notification, TaskAssigneeRef, AssigneeRole, TaskTypeRef,
   Equipment, ResourceGanttResponse, Assignment, Site, ProjectSiteRef,
-  Contractor, ContractorWorker, ContractorEngagement,
+  Contractor, ContractorCounterpartyOption, ContractorWorker, ContractorEngagement,
   Roadmap, RoadmapStatus, RoadmapMetrics, SiteBlock, BlockStatus, BlockVolume,
   BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
@@ -544,6 +544,17 @@ export const fetchContractors = async (params?: {
 }): Promise<Contractor[]> => {
   const res = await api.get(`${BASE}contractors/`, { params });
   return unwrap<Contractor>(res.data);
+};
+
+/** Поиск контрагента модуля «Закупки и оплаты» для карточки партнёра
+ *  (A6.1): только действующие, по наименованию или БИН/ИИН. */
+export const searchContractorCounterparties = async (
+  q: string, limit = 20,
+): Promise<ContractorCounterpartyOption[]> => {
+  const res = await api.get(`${BASE}contractors/counterparty-search`, {
+    params: { q: q || undefined, limit },
+  });
+  return unwrap<ContractorCounterpartyOption>(res.data);
 };
 
 export const createContractor = async (data: Partial<Contractor>): Promise<Contractor> => {

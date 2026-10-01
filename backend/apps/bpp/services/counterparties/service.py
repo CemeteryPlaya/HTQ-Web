@@ -244,6 +244,16 @@ def _filtered(*, q: str | None = None, countries=(), statuses=()):
     return rows
 
 
+def search_active(query: str | None, *, limit: int = 20) -> list[Counterparty]:
+    """Действующие контрагенты по наименованию или рег. номеру — для выбора
+    в чужих формах (партнёр ``tasks``, A6.1): то же правило поиска, что у
+    реестра, но только «Активен» — заблокированный и архивный новым связям
+    не годятся. Пустой запрос — первые по алфавиту."""
+    limit = max(1, min(int(limit), 100))
+    rows = _filtered(q=query, statuses=[CounterpartyStatus.ACTIVE])
+    return list(rows.order_by("name", "pk")[:limit])
+
+
 def _ordered(rows, sort: str | None):
     sort = sort or "name"
     field = sort[1:] if sort.startswith("-") else sort

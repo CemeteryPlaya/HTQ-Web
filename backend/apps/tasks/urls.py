@@ -92,6 +92,8 @@ urlpatterns = [
     # Contractors (партнёры) — new domain, no FastAPI original.
     path("contractors/", views.contractors_collection),
     path("contractors", views.contractors_collection),
+    path("contractors/counterparty-search", views.contractor_counterparty_search),
+    path("contractors/counterparty-search/", views.contractor_counterparty_search),
     path("contractors/<int:contractor_id>", views.contractor_detail),
     path("contractors/<int:contractor_id>/", views.contractor_detail),
     path("contractors/<int:contractor_id>/workers", views.contractor_workers),

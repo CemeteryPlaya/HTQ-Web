@@ -159,52 +159,85 @@ class ContractorLinkConflict(Exception):
     ``apps.tasks.services``, а ловить ему что-то нужно."""
 
 
-def get_contractors_by_counterparty(counterparty_ids) -> dict[int, dict]:
-    """Партнёры, связанные с контрагентами, — ``{counterparty_id: {id, name,
-    status}}``. Для карточки контрагента в «Договорах»: «работает у нас на
-    объектах как партнёр …». Батчем — реестр контрагентов показывает всех
-    разом. Контрагенты без партнёра в ответ не попадают."""
-    require_service("tasks")
-    from .models import Contractor
+def _bpp_counterparties_of(source_ids) -> dict[str, str]:
+    """``{ключ контрагента contracts строкой: ключ контрагента bpp}`` — по
+    связям переноса B6.1. Неперенесённых в ответе нет."""
+    from apps.bpp import interface as bpp
 
-    ids = sorted({int(cp_id) for cp_id in counterparty_ids if cp_id is not None})
+    from .services.contractor_service import MIGRATED_COUNTERPARTY
+
+    source_type, target_type = MIGRATED_COUNTERPARTY
+    out = {}
+    for source, targets in bpp.migrated_targets(source_type, source_ids).items():
+        for target in targets:
+            if target["target_type"] == target_type:
+                out[source] = target["target_id"]
+    return out
+
+
+def get_contractors_by_counterparty(source_ids) -> dict[int, dict]:
+    """Партнёры, связанные с контрагентами «Договоров», — ``{ключ
+    контрагента contracts: {id, name, status}}``. Для карточки контрагента в
+    «Договорах»: «работает у нас на объектах как партнёр …». Батчем — реестр
+    контрагентов показывает всех разом. Контрагенты без партнёра в ответ не
+    попадают.
+
+    С A6.1 партнёр ссылается на контрагента ``bpp``, поэтому контрагент
+    «Договоров» находит своего партнёра через связь переноса B6.1: не
+    перенесён — партнёра у него нет. Модуль ``bpp`` выключен —
+    ``ServiceDisabled`` (сосед его уже ловит)."""
+    require_service("tasks")
+    from .services import contractor_service
+
+    ids = sorted({int(source) for source in source_ids if source is not None})
     if not ids:
         return {}
-    return {
-        row["counterparty_id"]: {"id": row["id"], "name": row["name"],
-                                 "status": row["status"]}
-        for row in Contractor.objects.filter(counterparty_id__in=ids)
-        .values("id", "name", "status", "counterparty_id")
-    }
+    moved = _bpp_counterparties_of(ids)
+    partners = contractor_service.contractors_by_counterparty(moved.values())
+    out = {}
+    for source, key in moved.items():
+        row = partners.get(key)
+        if row is not None:
+            out[int(source)] = {"id": row.id, "name": row.name, "status": str(row.status)}
+    return out
 
 
-def link_contractor_to_counterparty(contractor_id: int,
-                                    counterparty_id: int) -> dict:
-    """Связать партнёра с контрагентом — для карточки контрагента, заведённой
-    «из партнёра». Зовётся в транзакции соседа: откатится создание
-    контрагента — откатится и связь.
+def link_contractor_to_counterparty(contractor_id: int, source_id: int) -> dict:
+    """Связать партнёра с контрагентом «Договоров» — для карточки
+    контрагента, заведённой «из партнёра». Зовётся в транзакции соседа:
+    откатится создание контрагента — откатится и связь.
 
-    Те же проверки, что у правки карточки партнёра (БИН/ИИН пары, один
-    партнёр на контрагента), плюс запрет молча перепривязать уже связанного
-    партнёра. Неизвестный партнёр — ``Http404``.
+    С A6.1 партнёр связывается с контрагентом ``bpp``, в который перенесён
+    контрагент «Договоров» (связь переноса B6.1). Неперенесённый — отказ
+    ``ContractorLinkConflict``: связывать партнёра теперь нужно на его
+    карточке, выбором контрагента «Закупок и оплат». Дальше — те же
+    проверки, что у правки карточки партнёра (БИН/ИИН пары, один партнёр на
+    контрагента), плюс запрет молча перепривязать уже связанного партнёра.
+    Неизвестный партнёр — ``Http404``.
     """
     require_service("tasks")
     from .services import contractor_service
 
+    target = _bpp_counterparties_of([source_id]).get(str(source_id))
+    if target is None:
+        raise ContractorLinkConflict(
+            "Контрагент не перенесён в модуль «Закупки и оплаты» — свяжите партнёра "
+            "с контрагентом на карточке партнёра")
     try:
-        row = contractor_service.link_counterparty(contractor_id, counterparty_id)
+        row = contractor_service.link_counterparty(contractor_id, target)
     except contractor_service.CounterpartyLinkConflict as exc:
         raise ContractorLinkConflict(str(exc)) from exc
     return {"id": row.id, "name": row.name, "status": str(row.status)}
 
 
-def unlink_counterparty(counterparty_id: int) -> None:
-    """Контрагента удалили — снять ссылку с партнёра, чтобы она не вела в
-    пустоту. Идемпотентно: нет связанного партнёра — ничего не делает."""
+def unlink_counterparty(source_id: int) -> None:
+    """Контрагента «Договоров» удалили. С A6.1 партнёр ссылается на
+    контрагента ``bpp``, а не «Договоров», поэтому снимать нечего: удаление
+    старой карточки контрагента ``bpp`` не трогает. Функция остаётся ради
+    вызова из ``apps.contracts`` (раздел заморожен, A6.2) — идемпотентно и
+    без действия."""
     require_service("tasks")
-    from .services import contractor_service
-
-    contractor_service.unlink_counterparty(counterparty_id)
+    del source_id
 
 
 def push_notification(*, recipient_id: int, verb: str,

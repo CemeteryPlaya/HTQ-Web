@@ -56,17 +56,29 @@ class ContractorRef(BaseModel):
     name: str
 
 
-class CounterpartyRef(BaseModel):
-    """Контрагент из «Договоров» в карточке партнёра — бейдж со ссылкой.
+class BppCounterpartyRef(BaseModel):
+    """Контрагент модуля «Закупки и оплаты» в карточке партнёра (A6.1) —
+    бейдж со ссылкой: наименование, БИН/ИИН (``reg_number``) и статус.
 
-    ``status``/``approval_state`` — строками, а не enum'ами ``apps.contracts``:
-    импортировать чужие модели нельзя, а сверять значения здесь незачем."""
+    ``status`` — строкой, а не enum'ом ``apps.bpp``: импортировать чужие
+    модели нельзя, а сверять значения здесь незачем."""
 
-    id: int
+    id: str
     name: str
-    bin_iin: str
+    reg_number: str
     status: str
-    approval_state: str
+
+
+class BppCounterpartyOption(BppCounterpartyRef):
+    """Строка поиска контрагента для формы партнёра: плюс то, что форма
+    подтягивает к себе при выборе (краткое имя, страна, контакты)."""
+
+    short_name: str = ""
+    country_code: str = ""
+    contact_person: str = ""
+    phone: str = ""
+    email: str = ""
+    legal_address: str = ""
 
 
 class AgreementRef(BaseModel):
@@ -253,9 +265,10 @@ class ContractorCreate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str = Field(default="", max_length=5000)
     status: ContractorStatus = Field(default=ContractorStatus.ACTIVE)
-    # Та же организация в «Договорах». Необязательно — см. докстринг
-    # ``models.Contractor``; проверки — ``contractor_service``.
-    counterparty_id: int | None = None
+    # Та же организация в модуле «Закупки и оплаты» (ключ UUID строкой).
+    # Необязательно — см. докстринг ``models.Contractor``; проверки —
+    # ``contractor_service``.
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorUpdate(BaseModel):
@@ -269,8 +282,9 @@ class ContractorUpdate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str | None = Field(None, max_length=5000)
     status: ContractorStatus | None = None
-    # ``null`` снимает связь (PATCH разбирается с exclude_unset).
-    counterparty_id: int | None = None
+    # ``null`` (или пустая строка) снимает связь (PATCH разбирается с
+    # exclude_unset).
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorResponse(BaseModel):
@@ -284,8 +298,10 @@ class ContractorResponse(BaseModel):
     address: str | None = None
     notes: str
     status: ContractorStatus
-    counterparty_id: int | None = None
-    counterparty: CounterpartyRef | None = None
+    bpp_counterparty_id: str | None = None
+    # ``None`` при заполненном ``bpp_counterparty_id`` — модуль «Закупки и
+    # оплаты» выключен: связь есть, показать её нечем.
+    bpp_counterparty: BppCounterpartyRef | None = None
     created_at: datetime
     updated_at: datetime
 
