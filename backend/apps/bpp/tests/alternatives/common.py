@@ -71,7 +71,7 @@ def agreement_on_review(slug, *amounts):
     agr, _ = agreement_service.update_draft(author, agr.id, expected_version=None, data={
         "counterparty_id": str(invoice_flow._counterparty("100000000009").pk),
         "ext_number": "Д-1", "ext_date": timezone.localdate()})
-    with_file(agr, "agreement")
+    invoice_flow._attach(agr, "agreement", "dogovor.pdf")  # скан обязателен для отправки, ТЗ §21
     agreement_service.submit(author, agr.id, expected_version=None)
     agr.refresh_from_db()
     assert agr.status == AgreementStatus.ON_REVIEW
