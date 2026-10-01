@@ -1,7 +1,8 @@
 /**
  * «Обзор» модуля по ролям (ТЗ §05, §17): карточки — только пришедших
- * блоков, раздел без карточек не рисуется; показатели сверху — деньги
- * бюджетов (их нет у АДМ), «Ждут моего решения» и главная очередь роли;
+ * блоков, раздел без карточек не рисуется; показатели сверху — «Ждут моего
+ * решения» и главная очередь роли; бюджеты — каждый проект отдельно, без
+ * общей суммы (у АДМ денег нет вовсе), строка — ссылка на карточку бюджета;
  * очереди счетов ведут на вкладку реестра (`?tab=`), статусы — без ссылки и
  * без нулей; «Создать» — по `can_create`; ошибка загрузки — с повтором;
  * ссылки «Обзора» — на настоящие маршруты подмодулей.
@@ -13,19 +14,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { bppModules } from '../modules';
-import { OVERVIEW_ENDPOINT, OVERVIEW_LINKS, type Overview } from './api';
+import {
+  OVERVIEW_ENDPOINT, OVERVIEW_LINKS, type BudgetProjectMoney, type Overview,
+} from './api';
 import { OverviewPage } from './OverviewPage';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('@/api/client', () => ({ default: { get, post: vi.fn() } }));
 
-const KZT = { limit_amount: '20000000.00', committed: '7500000.00', available: '12500000.00' };
+const budget = (n: number, over: Partial<BudgetProjectMoney> = {}): BudgetProjectMoney => ({
+  budget_id: `b${n}`, project: { id: `p${n}`, code: `П-0${String(n).padStart(2, '0')}`, name: `Объект ${n}` },
+  currency_code: 'KZT', limit_amount: '20000000.00', committed: '7500000.00',
+  available: '12500000.00', ...over,
+});
 
 const FD: Overview = {
   shows_money: true,
   budgets: {
     total: 3, approved: 2, draft: 1, can_create: true,
-    money: { USD: { limit_amount: '1000.00', committed: '0.00', available: '1000.00' }, KZT },
+    projects: [
+      budget(1),
+      budget(2, { currency_code: 'USD', limit_amount: '1000.00', committed: '1500.00',
+        available: '-500.00' }),
+    ],
   },
   approvals: { pending: 2 },
   requests: { total: 5, draft: 0, in_approval: 2, rework: 1, approved: 2, can_create: false },
@@ -61,7 +72,10 @@ const ADM: Overview = {
 
 const SN: Overview = {
   shows_money: true,
-  budgets: { total: 2, approved: 2, draft: 0, can_create: false, money: { KZT } },
+  budgets: {
+    total: 12, approved: 12, draft: 0, can_create: false,
+    projects: Array.from({ length: 12 }, (_, i) => budget(i + 1)),
+  },
   approvals: { pending: 0 },
   requests: { total: 2, draft: 1, in_approval: 0, rework: 0, approved: 1, can_create: true },
   plan: { open: 1 },
@@ -89,7 +103,7 @@ beforeEach(() => {
 });
 
 describe('«Обзор» — по ролям', () => {
-  it('ФД: все блоки, деньги в KZT первыми, очередь «на решение ФД» — вкладка реестра', async () => {
+  it('ФД: все блоки, бюджет каждого проекта отдельно, очередь «на решение ФД» — вкладка реестра', async () => {
     const { container } = renderAs(FD);
     await screen.findByText('Бюджет и закупки');
     expect(get).toHaveBeenCalledWith(OVERVIEW_ENDPOINT);
@@ -98,20 +112,20 @@ describe('«Обзор» — по ролям', () => {
       'budgets', 'requests', 'plan', 'agreements', 'invoices', 'accountable', 'bank', 'dashboard',
       'alternatives', 'kpi', 'admin',
     ]);
-    const available = stat(container, 'available')!;
-    expect(within(available).getByText('12 500 000,00')).toBeInTheDocument();
-    expect(within(available).getByText(/из 20 000 000,00 KZT по утверждённым бюджетам · другие валюты/))
-      .toBeInTheDocument();
-    expect(available).toHaveAttribute('href', OVERVIEW_LINKS.budgets);
+    // Общей суммы по проектам нет ни сверху, ни в карточке.
+    expect(stat(container, 'available')).toBeNull();
     expect(stat(container, 'approvals')).toHaveAttribute('href', OVERVIEW_LINKS.approvals);
     expect(stat(container, 'approvals')).toHaveTextContent('2');
     expect(stat(container, 'fd')).toHaveAttribute('href', '/bpp/invoices?tab=fd');
     expect(stat(container, 'fd')).toHaveTextContent('3');
 
     const budgets = block(container, 'budgets')!;
-    const currencies = Array.from(budgets.querySelectorAll<HTMLElement>('[data-currency]'))
-      .map((el) => el.dataset.currency);
-    expect(currencies).toEqual(['KZT', 'USD']);
+    const rows = Array.from(budgets.querySelectorAll<HTMLElement>('[data-project]'));
+    expect(rows.map((el) => el.dataset.project)).toEqual(['П-001', 'П-002']);
+    expect(within(rows[0]).getByRole('link', { name: /Объект 1/ })).toHaveAttribute('href', '/bpp/budgets/b1');
+    expect(within(rows[0]).getByText('12 500 000,00 KZT')).toBeInTheDocument();
+    // Перерасход — красным, в валюте своего бюджета.
+    expect(within(rows[1]).getByText('-500,00 USD')).toHaveClass('text-destructive');
     expect(within(budgets).getByRole('link', { name: 'Создать' }))
       .toHaveAttribute('href', OVERVIEW_LINKS.budgetNew);
 
@@ -154,8 +168,7 @@ describe('«Обзор» — по ролям', () => {
     const { container } = renderAs(ADM);
     await screen.findByText('Администрирование');
 
-    expect(stat(container, 'available')).toBeNull();
-    expect(container.querySelector('[data-currency]')).toBeNull();
+    expect(screen.queryByTestId('budget-projects')).not.toBeInTheDocument();
     expect(within(block(container, 'budgets')!).queryByRole('link', { name: 'Создать' }))
       .not.toBeInTheDocument();
     expect(stat(container, 'no_executor')).toHaveTextContent('2');
@@ -181,6 +194,18 @@ describe('«Обзор» — по ролям', () => {
       .not.toBeInTheDocument();
     expect(within(block(container, 'alternatives')!).getByText('Мои поданные')).toBeInTheDocument();
     expect(block(container, 'admin')).toBeNull();
+  });
+
+  it('бюджеты: первые 10 проектов, «Показать все» раскрывает остальные', async () => {
+    const { container } = renderAs(SN);
+    await screen.findByText('Бюджет и закупки');
+    const budgets = block(container, 'budgets')!;
+    const rows = () => budgets.querySelectorAll('[data-project]');
+    expect(rows()).toHaveLength(10);
+    await userEvent.click(within(budgets).getByRole('button', { name: 'Показать все (12)' }));
+    expect(rows()).toHaveLength(12);
+    await userEvent.click(within(budgets).getByRole('button', { name: 'Свернуть' }));
+    expect(rows()).toHaveLength(10);
   });
 
   it('ошибка загрузки — сообщение и «Повторить»', async () => {

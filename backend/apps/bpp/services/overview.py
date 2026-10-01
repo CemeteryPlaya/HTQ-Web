@@ -67,7 +67,9 @@ def _budgets(actor: Actor, money: bool) -> dict | None:
              "draft": counts.get(BudgetStatus.DRAFT, 0),
              "can_create": actor.can("bpp.budgets", "create")}
     if money:
-        block["money"] = budget_read.money_totals(actor)
+        # Бюджет каждого проекта отдельно (решение 01.10): общая сумма по
+        # проектам не показывается — деньги одного проекта другому не отдать.
+        block["projects"] = budget_read.project_money(actor)
     return block
 
 

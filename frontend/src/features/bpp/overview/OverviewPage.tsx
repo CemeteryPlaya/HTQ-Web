@@ -6,10 +6,13 @@
  *
  * - Карточка — только у пришедшего блока: нет права или подмодуль выключен
  *   у компании — нет и карточки (а не «0»). Раздел без карточек не рисуется.
- * - Сверху до трёх показателей: «Свободно в бюджетах» (только с деньгами),
- *   «Ждут моего решения» и главная очередь роли — «На решение ФД» у ФД, «К
- *   оплате» у БУХ, «Нет исполнителя» у АДМ, «Ждут закрывающих» у авторов
- *   счетов, черновики заявок у остальных инициаторов.
+ * - Сверху — «Ждут моего решения» и главная очередь роли: «На решение ФД» у
+ *   ФД, «К оплате» у БУХ, «Нет исполнителя» у АДМ, «Ждут закрывающих» у
+ *   авторов счетов, черновики заявок у остальных инициаторов.
+ * - Бюджеты — каждый проект отдельно (решение Руслана 01.10): таблица
+ *   «Лимит / Задействовано / Доступно» по проектам в карточке «Бюджеты»,
+ *   строка — ссылка на карточку бюджета. Общей суммы по проектам нет —
+ *   деньги одного проекта другому не отдать.
  * - Ссылка у числа — только туда, где его можно пересчитать: очереди счетов
  *   ведут на вкладку реестра (`?tab=`), и число совпадает с её `total`. Чипы
  *   статусов заявок, договоров и подотчёта — без ссылки (эти реестры по
@@ -23,7 +26,7 @@
  * - Свежие числа при каждом открытии (`staleTime: 0`, `refetchOnMount:
  *   'always'`).
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -37,16 +40,21 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
 import { formatMoney } from '../format';
 
 import {
-  invoiceTabHref, OVERVIEW_LINKS as LINKS, overviewApi, overviewKeys,
-  type BudgetMoney, type InvoiceTab, type Overview, type OverviewAdmin,
+  budgetHref, invoiceTabHref, OVERVIEW_LINKS as LINKS, overviewApi, overviewKeys,
+  type BudgetProjectMoney, type InvoiceTab, type Overview, type OverviewAdmin,
 } from './api';
 
 const KZT = 'KZT';
+/** Сколько проектов в таблице бюджетов до «Показать все». */
+const BUDGET_ROWS = 10;
 
 /** Вкладки счетов в порядке реестра L-06 и их подписи там же. */
 const INVOICE_TABS: [InvoiceTab, string, string][] = [
@@ -57,10 +65,6 @@ const INVOICE_TABS: [InvoiceTab, string, string][] = [
   ['bank_unconfirmed', 'bpp.overview.tab.bankUnconfirmed', 'Оплачено, банк не подтвердил'],
 ];
 
-/** Валюты бюджетов: KZT первой, остальные по коду. */
-const currencies = (money: Record<string, BudgetMoney>): string[] =>
-  Object.keys(money).sort((a, b) => Number(b === KZT) - Number(a === KZT) || a.localeCompare(b));
-
 interface Stat {
   key: string;
   icon: LucideIcon;
@@ -68,8 +72,6 @@ interface Stat {
   value: ReactNode;
   hint?: string;
   to?: string;
-  /** Сумма с копейками — шрифт меньше, чтобы миллиарды не переносились. */
-  money?: boolean;
 }
 
 function StatCard({ stat }: { stat: Stat }) {
@@ -83,7 +85,7 @@ function StatCard({ stat }: { stat: Stat }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <p className={cn('font-bold tabular-nums', stat.money ? 'text-2xl' : 'text-3xl')}>{stat.value}</p>
+        <p className="text-3xl font-bold tabular-nums">{stat.value}</p>
         {stat.hint && <p className="mt-1 text-xs text-muted-foreground">{stat.hint}</p>}
       </CardContent>
     </Card>
@@ -95,27 +97,6 @@ function StatCard({ stat }: { stat: Stat }) {
       {body}
     </Link>
   );
-}
-
-function budgetStat(money: Record<string, BudgetMoney>, t: TFunction): Stat {
-  const [code, ...others] = currencies(money);
-  const label = t('bpp.overview.available', 'Свободно в бюджетах');
-  if (!code) {
-    return {
-      key: 'available', icon: Wallet, label, value: '—', to: LINKS.budgets,
-      hint: t('bpp.overview.noApproved', 'Утверждённых бюджетов пока нет'),
-    };
-  }
-  const hint = t('bpp.overview.availableOf', 'из {{limit}} по утверждённым бюджетам',
-    { limit: formatMoney(money[code].limit_amount, code) });
-  // Валюта — в подписи: в значении она переносилась бы отдельной строкой.
-  return {
-    key: 'available', icon: Wallet, label: `${label}, ${code}`, to: LINKS.budgets, money: true,
-    value: formatMoney(money[code].available),
-    hint: others.length
-      ? `${hint} · ${t('bpp.overview.otherCurrencies', 'другие валюты — в карточке бюджетов')}`
-      : hint,
-  };
 }
 
 /** Главная очередь роли: у нескольких ролей — первая по этому порядку. */
@@ -195,14 +176,16 @@ interface ModuleCardProps {
   chips?: Chip[];
   create?: { to: string; label: string } | null;
   children?: ReactNode;
+  /** На всю ширину раздела — под таблицу (бюджеты по проектам). */
+  wide?: boolean;
 }
 
 function ModuleCard({
-  block, icon: Icon, title, description, to, total, totalLabel, chips = [], create, children,
+  block, icon: Icon, title, description, to, total, totalLabel, chips = [], create, children, wide,
 }: ModuleCardProps) {
   const { t } = useTranslation();
   return (
-    <Card className="flex flex-col" data-block={block}>
+    <Card className={cn('flex flex-col', wide && 'md:col-span-2 xl:col-span-3')} data-block={block}>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Icon className="h-5 w-5 text-muted-foreground" />
@@ -237,29 +220,62 @@ function ModuleCard({
   );
 }
 
-function BudgetMoneyList({ money }: { money: Record<string, BudgetMoney> }) {
+/** Бюджет каждого проекта отдельно: лимит, задействовано, доступно — в
+ * валюте бюджета; строка ведёт в карточку бюджета. Первые `BUDGET_ROWS`,
+ * остальные — по «Показать все». */
+function BudgetProjects({ rows }: { rows: BudgetProjectMoney[] }) {
   const { t } = useTranslation();
-  const codes = currencies(money);
-  if (!codes.length) return null;
-  const rows: [keyof BudgetMoney, string][] = [
-    ['limit_amount', t('bpp.overview.budgets.limit', 'Лимит')],
-    ['committed', t('bpp.overview.budgets.committed', 'Задействовано')],
-    ['available', t('bpp.overview.budgets.available', 'Доступно')],
-  ];
+  const [all, setAll] = useState(false);
+  if (!rows.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t('bpp.overview.budgets.none', 'Утверждённых бюджетов по вашим статьям пока нет')}
+      </p>
+    );
+  }
+  const shown = all ? rows : rows.slice(0, BUDGET_ROWS);
+  const money = 'text-right tabular-nums whitespace-nowrap';
   return (
-    <div className="space-y-2">
-      {codes.map((code) => (
-        <dl key={code} data-currency={code} className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-          {rows.map(([key, label]) => (
-            <div key={key} className="contents">
-              <dt className="text-muted-foreground">{label}</dt>
-              <dd className={cn('text-right tabular-nums', key === 'available' && 'font-medium')}>
-                {formatMoney(money[code][key], code)}
-              </dd>
-            </div>
+    <div className="space-y-1">
+      <Table data-testid="budget-projects">
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('bpp.overview.budgets.project', 'Проект')}</TableHead>
+            <TableHead className="text-right">{t('bpp.overview.budgets.limit', 'Лимит')}</TableHead>
+            <TableHead className="text-right">
+              {t('bpp.overview.budgets.committed', 'Задействовано')}
+            </TableHead>
+            <TableHead className="text-right">{t('bpp.overview.budgets.available', 'Доступно')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {shown.map((row) => (
+            <TableRow key={row.budget_id} data-project={row.project.code ?? ''}>
+              <TableCell>
+                <Link to={budgetHref(row.budget_id)} className="hover:underline">
+                  {row.project.code && (
+                    <span className="mr-2 font-mono text-xs text-muted-foreground">{row.project.code}</span>
+                  )}
+                  {row.project.name ?? '—'}
+                </Link>
+              </TableCell>
+              <TableCell className={money}>{formatMoney(row.limit_amount, row.currency_code)}</TableCell>
+              <TableCell className={money}>{formatMoney(row.committed, row.currency_code)}</TableCell>
+              <TableCell className={cn(money, 'font-medium',
+                row.available.trim().startsWith('-') && 'text-destructive')}>
+                {formatMoney(row.available, row.currency_code)}
+              </TableCell>
+            </TableRow>
           ))}
-        </dl>
-      ))}
+        </TableBody>
+      </Table>
+      {rows.length > BUDGET_ROWS && (
+        <Button variant="link" size="sm" className="px-0" onClick={() => setAll((value) => !value)}>
+          {all
+            ? t('bpp.overview.budgets.fewer', 'Свернуть')
+            : t('bpp.overview.budgets.all', 'Показать все ({{n}})', { n: rows.length })}
+        </Button>
+      )}
     </div>
   );
 }
@@ -400,7 +416,6 @@ export function OverviewPage() {
   const rework = t('bpp.overview.rework', 'На доработке');
 
   const stats = [
-    budgets?.money ? budgetStat(budgets.money, t) : null,
     data.approvals ? {
       key: 'approvals', icon: Stamp, value: data.approvals.pending, to: LINKS.approvals,
       label: t('bpp.overview.approvals', 'Ждут моего решения'),
@@ -411,15 +426,17 @@ export function OverviewPage() {
   const procurement = [
     budgets && (
       <ModuleCard key="budgets" block="budgets" icon={Wallet} to={LINKS.budgets}
+        wide={budgets.projects !== undefined}
         title={t('bpp.budgets.title', 'Бюджеты')}
-        description={t('bpp.overview.budgets.description', 'Бюджеты проектов по статьям: лимиты и остатки.')}
+        description={t('bpp.overview.budgets.description',
+          'Бюджет каждого проекта отдельно: лимит, задействовано и доступно по статьям.')}
         total={budgets.total}
         chips={[
           { key: 'approved', label: t('bpp.overview.approved', 'Утверждены'), value: budgets.approved },
           { key: 'draft', label: drafts, value: budgets.draft },
         ]}
         create={budgets.can_create ? { to: LINKS.budgetNew, label: create } : null}>
-        {budgets.money && <BudgetMoneyList money={budgets.money} />}
+        {budgets.projects && <BudgetProjects rows={budgets.projects} />}
       </ModuleCard>
     ),
     requests && (

@@ -54,8 +54,12 @@ def _world(slug):
                                       "items": s.items((1, 200_000))})
 
 
-def _limit(view) -> D:
-    return view["budgets"]["money"]["KZT"]["limit_amount"]
+def _limits(view) -> dict[str, D]:
+    """Лимит бюджета по коду проекта — каждый проект отдельно (решение 01.10)."""
+    return {row["project"]["code"]: row["limit_amount"] for row in view["budgets"]["projects"]}
+
+
+ALL = {"П-001": D("15000000.00"), "П-002": D("10000000.00")}
 
 
 def test_fd_sees_every_block_and_all_the_money(company_context):
@@ -64,7 +68,9 @@ def test_fd_sees_every_block_and_all_the_money(company_context):
     view = overview.overview(s.actor(slug, s.FD, "bpp-fd"))
 
     assert view["shows_money"] and set(view) - {"shows_money"} == ALL_BLOCKS
-    assert _limit(view) == D("25000000.00")                  # все строки всех бюджетов
+    assert _limits(view) == ALL                               # все строки всех бюджетов
+    row = view["budgets"]["projects"][0]
+    assert row["available"] == row["limit_amount"] - row["committed"] and row["budget_id"]
     assert view["invoices"]["tabs"]["fd"] == 1 and view["approvals"]["pending"] == 1
     assert view["requests"]["total"] == 3
 
@@ -76,7 +82,7 @@ def test_gd_sees_everything_his_role_opens(company_context):
     _world(slug)
     view = overview.overview(s.actor(slug, invoice_flow.GD, "bpp-gd"))
 
-    assert _limit(view) == D("25000000.00") and view["requests"]["total"] == 3
+    assert _limits(view) == ALL and view["requests"]["total"] == 3
     assert view["invoices"]["total"] == 1 and view["invoices"]["tabs"] == {}
     assert "submitted" in view["alternatives"] and "kpi" in view
     assert not {"plan", "accountable", "bank", "admin"} & set(view)
@@ -98,7 +104,7 @@ def test_pm_sees_only_his_projects_and_his_documents(company_context):
     _world(slug)
     view = overview.overview(s.actor(slug, s.PM, "bpp-pm"))
 
-    assert _limit(view) == D("5000000.00")      # своя группа статей своего проекта
+    assert _limits(view) == {"П-001": D("5000000.00")}   # своя группа статей своего проекта
     assert view["requests"]["total"] == 1 and view["invoices"]["total"] == 0
     assert not {"kpi", "dashboard", "bank", "admin"} & set(view)
 
@@ -108,12 +114,25 @@ def test_sn_sees_his_documents_alternatives_and_kpi(company_context):
     _world(slug)
     view = overview.overview(s.actor(slug, s.SN, "bpp-sn"))
 
-    assert _limit(view) == D("17000000.00")     # «Снабжение» во всех проектах
+    assert _limits(view) == {"П-001": D("10000000.00"),  # «Снабжение» во всех проектах
+                             "П-002": D("7000000.00")}
     assert view["requests"]["total"] == 2 and view["invoices"]["total"] == 1
     assert set(view["invoices"]["tabs"]) == {"awaiting_docs"}
     assert {"plan", "alternatives", "kpi"} <= set(view)
     assert "mine_submitted" in view["alternatives"]
     assert not {"dashboard", "bank", "admin"} & set(view)
+
+
+def test_project_without_the_actors_lines_is_not_listed(company_context):
+    """СН видит все проекты, но бюджет ПМ-статей ему не принадлежит —
+    такого проекта в его списке нет (в реестре он с нулями)."""
+    slug = company_context["slug"]
+    _world(slug)
+    pm_only = s.project("П-004", manager=s.PM, members=[s.PM])
+    s.approved_budget(slug, pm_only, {s.design(): 1_000_000})
+
+    assert "П-004" not in _limits(overview.overview(s.actor(slug, s.SN, "bpp-sn")))
+    assert _limits(overview.overview(s.actor(slug, s.PM, "bpp-pm")))["П-004"] == D("1000000.00")
 
 
 @pytest.mark.parametrize("user_id, role", [(s.TD, "bpp-td"), (s.OD, "bpp-od")])
@@ -122,7 +141,7 @@ def test_td_and_od_see_every_request_and_the_budgets(company_context, user_id, r
     _world(slug)
     view = overview.overview(s.actor(slug, user_id, role))
 
-    assert view["requests"]["total"] == 3 and _limit(view) == D("25000000.00")
+    assert view["requests"]["total"] == 3 and _limits(view) == ALL
     assert {"approvals", "agreements", "invoices", "dashboard"} <= set(view)
     assert view["invoices"]["tabs"] == {}       # чужих очередей нет
     assert not {"plan", "bank", "admin"} & set(view)
@@ -134,7 +153,7 @@ def test_adm_sees_counts_without_money_and_the_admin_block(company_context):
     _world(slug)
     view = overview.overview(s.actor(slug, ADM, "bpp-adm"))
 
-    assert view["shows_money"] is False and "money" not in view["budgets"]
+    assert view["shows_money"] is False and "projects" not in view["budgets"]
     assert view["requests"]["total"] == 3
     assert view["admin"] == {"no_executor": 0, "routes": True, "settings": True,
                              "refdata": True, "projects": True}

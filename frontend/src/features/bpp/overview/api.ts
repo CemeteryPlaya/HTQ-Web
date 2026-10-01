@@ -8,8 +8,9 @@
  * - Числа сервер считает на выборках реестров: «свои» документы СН и ПМ,
  *   проекты-участия ПМ, группы статей — та же видимость, что в реестре, и
  *   очередь счетов совпадает с `total` реестра на своей вкладке (`?tab=`).
- * - Деньги (`budgets.money`, `kpi.saving_confirmed`) — только при
+ * - Деньги (`budgets.projects`, `kpi.saving_confirmed`) — только при
  *   `shows_money` (право видеть счета): у АДМ — количества без сумм (ТЗ §17).
+ *   Бюджеты — каждый проект отдельно: общей суммы по проектам нет.
  *   Суммы — строки-десятичные, на экран — только через `formatMoney`.
  * - Кеша нет: обзор открывают, чтобы увидеть текущие очереди.
  */
@@ -21,8 +22,12 @@ export const OVERVIEW_ENDPOINT = apiPath('bpp', 'overview');
 
 export type Money = string;
 
-/** Лимит, «Задействовано» и «Доступно» утверждённых бюджетов в одной валюте. */
-export interface BudgetMoney {
+/** Утверждённый бюджет одного проекта: итоги по строкам, видимым
+ * пользователю (СН и ПМ — свои группы статей), в валюте бюджета. */
+export interface BudgetProjectMoney {
+  budget_id: string;
+  project: { id: string; code: string | null; name: string | null };
+  currency_code: string;
   limit_amount: Money;
   committed: Money;
   available: Money;
@@ -33,8 +38,9 @@ export interface OverviewBudgets {
   approved: number;
   draft: number;
   can_create: boolean;
-  /** По коду валюты; только при `shows_money`. */
-  money?: Record<string, BudgetMoney>;
+  /** Каждый проект отдельно, по коду (суммы разных проектов не
+   * складываются); только при `shows_money`. */
+  projects?: BudgetProjectMoney[];
 }
 
 export interface OverviewApprovals {
@@ -134,6 +140,7 @@ export const OVERVIEW_LINKS = {
   approvals: '/bpp/approvals',
   budgets: '/bpp/budgets',
   budgetNew: '/bpp/budgets/new',
+  budget: '/bpp/budgets/:id',
   requests: '/bpp/requests',
   requestNew: '/bpp/requests/new',
   plan: '/bpp/plan',
@@ -149,6 +156,9 @@ export const OVERVIEW_LINKS = {
   refdata: '/bpp/refdata',
   projects: '/bpp/projects',
 } as const;
+
+/** Карточка бюджета проекта (F-01). */
+export const budgetHref = (id: string): string => OVERVIEW_LINKS.budget.replace(':id', id);
 
 /** Вкладка реестра счетов: её `total` совпадает с числом «Обзора». */
 export const invoiceTabHref = (tab: InvoiceTab): string => `${OVERVIEW_LINKS.invoices}?tab=${tab}`;
