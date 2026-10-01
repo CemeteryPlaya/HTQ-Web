@@ -9,8 +9,9 @@
   доработку; после отправки — только помеченное удаление (ТЗ §21 «до „На
   рассмотрении ФД“ — удаление; далее — нет»: был отправлен → файл остаётся).
 - ``act`` (АВР), ``waybill`` (накладная), ``vat_invoice`` (счёт-фактура, D-13)
-  — закрывающие, до 10 каждого. **Видят только автор, ФД и БУХ** (ТЗ §21:
-  «Автор, ФД, БУХ»; ТД, ОД и ГД видят сам счёт, но не закрывающие) — плюс
+  — закрывающие, до 10 каждого. **Видят только автор, ФД, БУХ и ГД** (ТЗ §21:
+  «Автор, ФД, БУХ»; ГД — решение 01.10 «ГД видит всё», просмотр узла
+  ``bpp.invoices.closing_docs``; ТД и ОД видят сам счёт, но не закрывающие) — плюс
   держатель ``bpp.invoices.closing_docs``, который вкладывает их от имени
   автора. Вкладываются, когда бухгалтер их запросил (статус «Ждёт закрывающих
   документов»), и только запрошенные типы; после возврата БУХ — снова в этом
@@ -64,8 +65,10 @@ def _can_view_type(owner_id, token, file_type) -> bool:
     if inv is None:
         return False
     actor = actor_from_token(token)
+    # Просмотр узла — ГД (решение 01.10 «ГД видит всё», access/0019).
     return (_closing_editor(actor, inv) or actor.can("bpp.invoices.decision", "edit")
-            or actor.can("bpp.invoices.payment", "edit"))
+            or actor.can("bpp.invoices.payment", "edit")
+            or actor.can("bpp.invoices.closing_docs", "view"))
 
 
 def _can_modify(owner_id, token) -> None:

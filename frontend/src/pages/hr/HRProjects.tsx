@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   AlertTriangle, Calendar, ChevronDown, ChevronRight, Edit, Gauge, MapPin,
@@ -508,9 +508,20 @@ const HRProjects: React.FC = () => {
   const { activeProfile } = useActiveProfile();
   const permissions = usePermissions();
   const elevated = permissions.atLeast('tasks', 'admin');
+  // Без кадровых прав сюда пускает только «Доска задач проекта» (ссылка с
+  // карточки «Проекта» БЗО, решение 01.10) — такой гость доски только смотрит:
+  // сервер открывает ему доски своих «Проектов» на чтение.
+  const canReadHr = permissions.atLeast('hr', 'read');
+  const boardVisitor = !elevated && !canReadHr;
   const myId = Number(activeProfile?.id);
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // `?board=<id>` — доска, открытая ссылкой с карточки «Проекта».
+  const [searchParams] = useSearchParams();
+  const boardParam = Number(searchParams.get('board')) || null;
+  const [selectedId, setSelectedId] = useState<number | null>(boardParam);
+  useEffect(() => {
+    if (boardParam) setSelectedId(boardParam);
+  }, [boardParam]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [siteFilter, setSiteFilter] = useState('all');
@@ -529,8 +540,10 @@ const HRProjects: React.FC = () => {
     queryFn: () => fetchProjects(),
   });
   const { data: sites = [] } = useQuery({ queryKey: ['sites'], queryFn: () => fetchSites() });
+  // Справочник отделов — кадровый: гостю доски без кадровых прав он ответил
+  // бы 403, а нужен лишь форме правки, которой у гостя нет.
   const { data: departments = [] } = useQuery({
-    queryKey: ['hr-departments'], queryFn: fetchDepartments,
+    queryKey: ['hr-departments'], queryFn: fetchDepartments, enabled: canReadHr,
   });
 
   /**
@@ -609,7 +622,7 @@ const HRProjects: React.FC = () => {
   const mirrorLocked = !editing || Boolean(editing.linked);
   // Mirrors `_project_for_write` on the server: inside their own scope a
   // regular employee may still only touch a project they own.
-  const canWrite = (project: Project) => elevated || project.owner_id === myId;
+  const canWrite = (project: Project) => elevated || (!boardVisitor && project.owner_id === myId);
 
   const openCreate = () => { setEditing(null); setForm(emptyForm); setDialogOpen(true); };
   const openEdit = (project: Project) => {
@@ -783,13 +796,16 @@ const HRProjects: React.FC = () => {
                   </div>
                   <div className="flex shrink-0 gap-2">
                     {/* План/факт доступен всем, кто видит проект: это
-                        отчётный экран, а не управление. */}
-                    <Button asChild size="sm" variant="outline">
-                      <Link to={`/tasks/projects/${selected.id}/plan-fact`}>
-                        <Gauge className="mr-1 h-4 w-4" />
-                        {t('tasks.planFact.title', 'План и факт')}
-                      </Link>
-                    </Button>
+                        отчётный экран, а не управление. Кроме гостя доски
+                        без кадровых прав: экран закрыт гейтом `hr:read`. */}
+                    {!boardVisitor && (
+                      <Button asChild size="sm" variant="outline">
+                        <Link to={`/tasks/projects/${selected.id}/plan-fact`}>
+                          <Gauge className="mr-1 h-4 w-4" />
+                          {t('tasks.planFact.title', 'План и факт')}
+                        </Link>
+                      </Button>
+                    )}
                   </div>
                   {canWrite(selected) && (
                     <div className="flex shrink-0 gap-2">

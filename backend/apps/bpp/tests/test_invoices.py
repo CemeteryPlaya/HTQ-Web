@@ -361,8 +361,9 @@ def _token(user_id):
 
 def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company_context):
     """ТЗ §21: счёт видят автор, ФД, БУХ, ТД, ОД, ГД, а АВР и накладную —
-    только автор, ФД и БУХ; закрывающие вкладываются по запросу БУХ и только
-    запрошенных типов, файл счёта после отправки не меняется."""
+    только автор, ФД и БУХ, плюс ГД (решение 01.10 «ГД видит всё»);
+    закрывающие вкладываются по запросу БУХ и только запрошенных типов, файл
+    счёта после отправки не меняется."""
     slug = company_context["slug"]
     sn, _, inv = _to_pay(slug, 1000)
     buh = _buh(slug)
@@ -370,6 +371,7 @@ def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company
     payments.request_docs(buh, inv.id, docs={"avr": False, "waybill": True,
                                              "vat_invoice": False})
     s.grant(slug, s.TD, "bpp-td")
+    s.grant(slug, GD, "bpp-gd")
     entry = files_registry.get_owner("bpp.invoice")
 
     def sees(user_id, file_type):
@@ -377,6 +379,9 @@ def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company
 
     assert sees(s.SN, "waybill") and sees(BUH, "waybill") and sees(s.FD, "waybill")
     assert sees(s.TD, "invoice") and not sees(s.TD, "waybill")
+    assert sees(GD, "waybill") and sees(GD, "act")
+    with pytest.raises(files_interface.FilesForbidden):       # ГД смотрит, но не вкладывает
+        entry.can_modify(inv.pk, _token(GD))
 
     with pytest.raises(files_interface.FilesLocked):          # счёт уже у ФД и оплачен
         entry.can_modify_type(inv.pk, _token(s.SN), "invoice")

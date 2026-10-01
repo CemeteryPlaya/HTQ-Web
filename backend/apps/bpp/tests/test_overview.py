@@ -75,17 +75,22 @@ def test_fd_sees_every_block_and_all_the_money(company_context):
     assert view["requests"]["total"] == 3
 
 
-def test_gd_sees_everything_his_role_opens(company_context):
-    """ГД — все деньги и все документы своих узлов; плана закупок, подотчёта
-    и выписки в его строке матрицы ролей нет (ТЗ §17) — и блоков нет."""
+def test_gd_sees_everything(company_context):
+    """ГД видит всё (решение 01.10, access/0019): все деньги и документы,
+    план закупок, подотчёт и выписки. Блока администрирования нет — он для
+    тех, кто правит настройки или маршруты, а ГД их только смотрит."""
     slug = company_context["slug"]
     _world(slug)
     view = overview.overview(s.actor(slug, invoice_flow.GD, "bpp-gd"))
 
     assert _limits(view) == ALL and view["requests"]["total"] == 3
-    assert view["invoices"]["total"] == 1 and view["invoices"]["tabs"] == {}
+    # Выписки ГД видит — и очередь «банк не подтвердил»; решать и оплачивать
+    # он не может, поэтому других очередей нет.
+    assert view["invoices"]["total"] == 1
+    assert view["invoices"]["tabs"] == {"bank_unconfirmed": 0}
     assert "submitted" in view["alternatives"] and "kpi" in view
-    assert not {"plan", "accountable", "bank", "admin"} & set(view)
+    assert {"plan", "accountable", "bank", "dashboard"} <= set(view) and "admin" not in view
+    assert view["plan"]["open"] > 0
 
 
 def test_buh_sees_only_the_payment_queues(company_context):

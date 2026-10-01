@@ -45,7 +45,9 @@ export const protectedRoutes: RouteConfig[] = [
   // (admins + staff) rather than ``editor`` — with ``editor`` an admin
   // without the editors role could not reach it at all, while a content
   // editor who can reach it would get 403 from every write.
-  { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
+  // Доски задач — и держателям «Доски задач проекта» (ТД, ОД, АДМ, ПМ) без
+  // кадровых прав: ссылка с карточки «Проекта» БЗО (решение 01.10).
+  { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read', orNode: { node: 'project.board', flag: 'view' } } },
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   // Экран выбора компании на голом домене (блок I.2): сюда RequireAuth уводит

@@ -9,7 +9,8 @@ OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.agreements.terminate", "bpp.invoices.decision", "bpp.invoices.payment",
               "bpp.counterparties.block", "bpp.alternatives.select",
               "bpp.accountable.payment", "bpp.invoices.closing_docs",
-              "project.all", "bpp.requests.all", "bpp.plan.reassign", "bpp.routes")
+              "project.all", "bpp.requests.all", "bpp.plan.reassign", "bpp.routes",
+              "project.board")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -79,3 +80,22 @@ def test_routes_are_edited_by_fd_and_adm():
     assert [c for c in ROLES if "edit" in _flags(c, "bpp.routes")] == ["bpp-fd", "bpp-adm"]
     for code in ROLES:
         assert _flags(code, "bpp.routes") <= {"edit"}, code
+
+
+@pytest.mark.django_db
+def test_gd_sees_every_section():
+    """Решение 01.10 «ГД видит всё» (access/0019): план закупок целиком,
+    подотчёт, выписки, настройки и закрывающие документы — только просмотр."""
+    for node in ("bpp.plan", "bpp.plan.all", "bpp.accountable", "bpp.bank", "bpp.settings",
+                 "bpp.invoices.closing_docs"):
+        assert _flags("bpp-gd", node) == {"view"}, node
+
+
+@pytest.mark.django_db
+def test_board_link_is_for_td_od_pm_and_adm():
+    """«Доска задач проекта» (access/0020): ссылка с «Проекта» и вход в доски
+    задач — у ТД, ОД, ПМ и АДМ; у остальных явная пустая строка."""
+    assert [c for c in ROLES if "view" in _flags(c, "project.board")] == [
+        "bpp-td", "bpp-od", "bpp-pm", "bpp-adm"]
+    for code in ROLES:
+        assert _flags(code, "project.board") <= {"view"}, code

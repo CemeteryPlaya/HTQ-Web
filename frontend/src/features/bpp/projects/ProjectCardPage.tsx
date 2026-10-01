@@ -9,6 +9,10 @@
  * `edit` (ПМ и HR, Q-B17). Руководитель — участник автоматически и не
  * снимается, пока он руководитель (сервер ответит 422 E-PRJ-02), поэтому
  * кнопки «Убрать» у него нет.
+ *
+ * «Доска задач» — ссылка на доску задач проекта (`/manage/projects?board=`)
+ * у держателей узла `project.board` (ТД, ОД, АДМ, ПМ — решение 01.10); доски
+ * нет — так и написано.
  */
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, X } from 'lucide-react';
 
+import { fetchProjectBoard } from '@/api/tasks';
 import { EmployeePicker } from '@/components/common/EmployeePicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -62,6 +67,12 @@ export function ProjectCardPage() {
 
   const canEdit = permissions.can('project.projects', 'edit');
   const canMembers = permissions.can('project.members', 'edit');
+  const canBoard = permissions.can('project.board', 'view');
+  const board = useQuery({
+    queryKey: ['tasks', 'project-board', id],
+    queryFn: () => fetchProjectBoard(id),
+    enabled: project.isSuccess && canBoard,
+  });
 
   const refreshMembers = () => queryClient.invalidateQueries({ queryKey: projectKeys.members(id) });
 
@@ -130,6 +141,24 @@ export function ProjectCardPage() {
         <Detail label={t('bpp.projects.customer', 'Заказчик')} value={data.customer_name} />
         <Detail label={t('bpp.projects.dateStart', 'Начало')} value={data.date_start ? formatDate(data.date_start) : ''} />
         <Detail label={t('bpp.projects.dateEnd', 'Окончание')} value={data.date_end ? formatDate(data.date_end) : ''} />
+        {canBoard && (
+          <div data-testid="project-board">
+            <dt className="text-xs text-muted-foreground">{t('bpp.projects.board', 'Доска задач')}</dt>
+            <dd className="text-sm">
+              {board.isLoading ? (
+                <Skeleton className="h-5 w-40" />
+              ) : board.data ? (
+                <Link to={`/manage/projects?board=${board.data.id}`} className="text-primary hover:underline">
+                  {board.data.name}
+                </Link>
+              ) : board.isError ? (
+                t('bpp.projects.boardLoadError', 'Не удалось проверить доску задач')
+              ) : (
+                t('bpp.projects.noBoard', 'Доски задач у проекта нет')
+              )}
+            </dd>
+          </div>
+        )}
       </dl>
 
       <section className="space-y-3">
