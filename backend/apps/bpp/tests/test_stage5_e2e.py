@@ -80,6 +80,7 @@ def test_alternative_selected_paid_and_reported(company_context, memory_storage)
     source, _ = invoice_service.update_draft(author, source.id, expected_version=None, data={
         "counterparty_id": str(invoice_flow._counterparty().pk), "ext_number": "145",
         "ext_date": timezone.localdate()})
+    invoice_flow._attach(source)  # файл счёта обязателен для отправки, ТЗ §21
     source = invoice_service.submit(author, source.id, expected_version=None)
     assert source.status == InvoiceStatus.UNDER_REVIEW
     for buyer in (BUYER_1, BUYER_2, BUYER_3):
@@ -128,6 +129,7 @@ def test_alternative_selected_paid_and_reported(company_context, memory_storage)
         "ext_date": timezone.localdate(), "amount": OFFER_1,
         "lines": [{"request_item_id": str(line.request_item_id), "qty": line.qty,
                    "amount": OFFER_1}]})
+    invoice_flow._attach(new)
     new = invoice_service.submit(author, new.id, expected_version=None)
     new = decisions.decide(fd, new.id, decision="pay")
     assert new.status == InvoiceStatus.TO_PAY

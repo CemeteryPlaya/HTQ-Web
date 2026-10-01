@@ -101,6 +101,7 @@ def test_offer_to_contract_invoice_is_422(company_context):
     inv = invoice_service.create_from_agreement(author, agr.id)
     inv, _ = invoice_service.update_draft(author, inv.id, expected_version=None,
                                           data={"ext_number": "1"})
+    invoice_flow._attach(inv)  # файл счёта обязателен для отправки, ТЗ §21
     inv = invoice_service.submit(author, inv.id, expected_version=None)
 
     err = _fail(lambda: common.draft(common.sn(slug, common.SN2), inv))
