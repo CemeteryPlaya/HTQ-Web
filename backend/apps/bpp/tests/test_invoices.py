@@ -533,6 +533,28 @@ def test_superuser_sees_every_invoice_agreement_and_accountable(company_context)
     assert not service.sees_all(s.actor(slug, s.SN, "bpp-sn"))
 
 
+def test_combined_roles_see_all_by_node(company_context):
+    """D-S6-5, Review Focus 4: СН + ФД видит все счета, договоры и АП,
+    СН без ФД — только свои, ПМ — только свои."""
+    from apps.bpp.services.accountable import accountable as accountable_service
+    from apps.bpp.services.alternatives import kpi as kpi_service
+    from apps.bpp.services.alternatives import read as alt_read
+
+    slug = company_context["slug"]
+    _, _, inv = _submitted(slug, 100_000)
+    combined = s.actor(slug, s.SN2, "bpp-sn", "bpp-fd")
+    assert service.sees_all(combined) and service.can_view(combined, inv)
+    assert agreement_service.sees_all(combined) and accountable_service.sees_all(combined)
+    assert alt_read.sees_all(combined) and kpi_service.sees_all(combined)
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    pm = s.actor(slug, s.PM, "bpp-pm")
+    for plain in (sn, pm):
+        assert not service.sees_all(plain)
+        assert not agreement_service.sees_all(plain)
+        assert not accountable_service.sees_all(plain)
+        assert not alt_read.sees_all(plain) and not kpi_service.sees_all(plain)
+
+
 def test_fd_cannot_cancel_invoice_while_bank_holds_payment(company_context):
     """Выписка пришла раньше отметки БУХ: автосверка поставила действующее
     сопоставление на счёт «К оплате» (D-S4-3). Отмена такого счёта
