@@ -2,7 +2,8 @@
  * Реестр L-06 «Счета на оплату» (ТЗ §10.5, §19): вкладки «Все», «На решение
  * ФД», «К оплате», «Ждут закрывающих», «Документы предоставлены»,
  * «Оплачено, банк не подтвердил», «Расхождения с банком»; итоговая строка —
- * Σ в KZT и Σ оплачено по банку по всей выборке (сервер).
+ * Σ в KZT и Σ оплачено по банку по всей выборке (сервер). «Статус сверки»
+ * (CALC-010, REQ-017) — колонка по умолчанию и фильтр панели `recon_status`.
  *
  * - Вкладка всегда живёт в адресе — параметр `tab` (смена вкладки пишет его
  *   с `replace`; «Все», неизвестная вкладка и `?tab=all` — адрес без
@@ -45,10 +46,9 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
 import { exportRegistry } from '../core/registryExport';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type {
   BulkOutcome, RegistryBulkAction, RegistryColumn, RegistryFilter,
 } from '../core/registryTypes';
@@ -62,6 +62,7 @@ import {
 } from './api';
 import { localToday } from './invoiceForm';
 import { usePrompt } from './PromptDialog';
+import { MigratedBadge } from '../migration/MigratedBadge';
 
 const INVOICE_TABS = [
   { key: 'all', label: 'Все' },
@@ -177,6 +178,7 @@ export function InvoicesPage() {
       render: (row) => (
         <span>
           {row.number}
+          <MigratedBadge migrated={row.is_migrated} />
           {row.possible_split && (
             <AlertTriangle className="ml-1 inline h-3.5 w-3.5 text-amber-600"
               aria-label={t('bpp.invoices.possibleSplit', 'Возможное дробление')} />
@@ -209,9 +211,9 @@ export function InvoicesPage() {
     { key: 'project_code', title: t('bpp.invoices.projectShort', 'Проект') },
     { key: 'article_name', title: t('bpp.invoices.article', 'Статья') },
     moneyColumn<InvoiceRow>('amount', t('bpp.invoices.amount', 'Сумма'),
-      (row) => row.amount, { currency: (row) => row.currency_code }),
+      { currency: 'currency_code' }),
     moneyColumn<InvoiceRow>('amount_kzt', t('bpp.invoices.amountKzt', 'В тенге'),
-      (row) => row.amount_kzt, { total: 'amount_kzt' }),
+      { totalKey: 'amount_kzt', totalCurrency: 'KZT' }),
     {
       key: 'due_date',
       title: t('bpp.invoices.dueDate', 'Срок оплаты'),
@@ -239,7 +241,17 @@ export function InvoicesPage() {
       },
     },
     moneyColumn<InvoiceRow>('paid_bank_amount', t('bpp.invoices.paidBank', 'Оплачено по банку'),
-      (row) => row.paid_bank_amount, { total: 'paid_bank_amount' }),
+      { totalKey: 'paid_bank_amount' }),
+    {
+      // Статус сверки с банком — колонка по умолчанию (ТЗ §10.5, REQ-017).
+      key: 'recon_status',
+      title: t('bpp.invoices.reconStatus', 'Статус сверки'),
+      render: (row) => (
+        <span className={row.recon_status === 'no_data' ? 'text-muted-foreground' : undefined}>
+          {t(`bpp.invoices.recon.${row.recon_status}`, RECON_LABELS[row.recon_status] ?? row.recon_status)}
+        </span>
+      ),
+    },
   ], [t]);
 
   const filters = useMemo<RegistryFilter[]>(() => [
@@ -266,6 +278,16 @@ export function InvoicesPage() {
       kind: 'select',
       options: (projects.data ?? []).map((project) => ({
         value: project.id, label: `${project.code} — ${project.name}`,
+      })),
+    },
+    {
+      // Фильтры панели в адрес не пишутся (там только `page` и `q`), поэтому
+      // режим ссылки дашборда этот фильтр не включает.
+      key: 'recon_status',
+      label: t('bpp.invoices.reconStatus', 'Статус сверки'),
+      kind: 'select',
+      options: Object.entries(RECON_LABELS).map(([value, label]) => ({
+        value, label: t(`bpp.invoices.recon.${value}`, label),
       })),
     },
     { key: 'date_from', label: t('bpp.invoices.dateFrom', 'Дата счёта с'), kind: 'date' },

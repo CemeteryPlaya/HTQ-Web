@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.utils import timezone
 
@@ -16,11 +17,15 @@ from apps.bpp.services.agreements import agreements as service
 from apps.bpp.services.agreements import read
 from apps.bpp.services.budget import balance
 from apps.bpp.services.budget import committed as calc
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.plan import service as plan
 from apps.bpp.services.requests import requests as request_service
 from apps.bpp.tests import stage2 as s
+from apps.bpp.tests.test_files import PDF, memory_storage  # noqa: F401  (фикстура)
+from apps.files.models import FileObject
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
+from htqweb.tenancy.db import use_company
 
 pytestmark = pytest.mark.django_db
 GD = 910
@@ -67,7 +72,13 @@ def _setup(slug, limit=10_000):
     return proj
 
 
-def _draft(slug, *amounts, counterparty=None, limit=10_000):
+def _attach(doc, file_type="agreement", name="dogovor.pdf"):
+    """Скан договора (обязателен для отправки, ТЗ §21) — загрузкой из кода."""
+    return core_files.attach(doc, file_type, data=PDF, filename=name, mime="application/pdf",
+                             actor_id=doc.author_id)
+
+
+def _draft(slug, *amounts, counterparty=None, limit=10_000, with_file=True):
     proj = _setup(slug, limit)
     sn = s.actor(slug, s.SN, "bpp-sn")
     req = _approved_request(slug, sn, proj, *amounts)
@@ -75,6 +86,8 @@ def _draft(slug, *amounts, counterparty=None, limit=10_000):
     cp = counterparty or _counterparty()
     agr, _ = service.update_draft(sn, agr.id, expected_version=None, data={
         "counterparty_id": str(cp.pk), "ext_number": "145", "ext_date": timezone.localdate()})
+    if with_file:
+        _attach(agr)
     return sn, proj, req, agr
 
 
@@ -186,6 +199,7 @@ def test_duplicate_number_and_date_is_br_032(company_context):
     second, _ = service.update_draft(sn, second.id, expected_version=None, data={
         "counterparty_id": str(first.counterparty_id), "ext_number": "145",
         "ext_date": first.ext_date})
+    _attach(second)
     with pytest.raises(DomainError) as exc:
         service.submit(sn, second.id, expected_version=None)
     assert exc.value.code == "BR-032"
@@ -271,6 +285,7 @@ def test_supplement_without_amount_change_takes_effect_at_once(company_context):
     supplement = service.create_supplement(sn, agr.id)
     supplement, _ = service.update_draft(sn, supplement.id, expected_version=None, data={
         "ext_number": "145-1", "valid_to": date(2099, 12, 31)})
+    _attach(supplement, name="ds-1.pdf")
 
     supplement = service.submit(sn, supplement.id, expected_version=None)
 
@@ -285,6 +300,7 @@ def test_supplement_with_growth_goes_to_fd_and_checks_balance(company_context):
     supplement = service.create_supplement(sn, agr.id)
     supplement, _ = service.update_draft(sn, supplement.id, expected_version=None, data={
         "ext_number": "145-2", "amount": 250})
+    _attach(supplement, name="ds-2.pdf")
     assert _code(lambda: service.submit(sn, supplement.id, expected_version=None)) == "BR-034"
 
     supplement, _ = service.update_draft(sn, supplement.id, expected_version=None,
@@ -316,6 +332,46 @@ def test_withdraw_before_decisions_returns_to_draft(company_context):
     service.submit(sn, agr.id, expected_version=None)
     agr = service.withdraw(sn, agr.id, expected_version=None)
     assert agr.status == AgreementStatus.DRAFT
+
+
+# ── файлы договора (ТЗ §21) ───────────────────────────────────────────
+
+def _upload(client, slug, user_id, agreement_id, file_type, name):
+    headers = {k: v for k, v in s.auth(slug, user_id).items() if k != "content_type"}
+    return client.post(f"/api/files/v1/bpp.agreement/{agreement_id}/files/", data={
+        "file_type": file_type,
+        "file": SimpleUploadedFile(name, PDF, content_type="application/pdf")}, **headers)
+
+
+def test_agreement_file_is_required_and_the_panel_follows_the_status(company_context):
+    slug = company_context["slug"]
+    sn, _, _, agr = _draft(slug, 100, with_file=False)
+    with pytest.raises(DomainError) as exc:
+        service.submit(sn, agr.id, expected_version=None)
+    assert exc.value.code == "E-FIL-04" and "«Договор»" in exc.value.message
+
+    s.user(s.SN2)
+    agreement_id, client = agr.id, Client()
+    # Чужой договор не виден — и его папка тоже (существование не раскрываем).
+    assert _upload(client, slug, s.SN2, agreement_id, "agreement", "x.pdf").status_code == 404
+    first = _upload(client, slug, s.SN, agreement_id, "agreement", "dogovor.pdf")
+    assert first.status_code in (200, 201), first.content
+
+    with use_company(slug):
+        agr = service.submit(sn, agreement_id, expected_version=None)
+        assert agr.status == AgreementStatus.ON_REVIEW
+    # На согласовании файлы не меняются — ни сам договор, ни приложения.
+    locked = _upload(client, slug, s.SN, agreement_id, "agreement_annex", "prilozhenie.pdf")
+    assert locked.status_code == 409 and locked.json()["code"] == "E-FIL-06"
+
+
+def test_deleting_a_draft_takes_its_files_along(company_context):
+    slug = company_context["slug"]
+    sn, _, _, agr = _draft(slug, 100)
+    rows = FileObject.objects.filter(owner_type="bpp.agreement", owner_id=str(agr.pk))
+    assert rows.count() == 1
+    service.delete_draft(sn, agr.id, expected_version=None)
+    assert not rows.exists()                    # черновик не отправлялся — файлы стёрты
 
 
 # ── ручки ──────────────────────────────────────────────────────────────

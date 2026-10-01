@@ -393,13 +393,11 @@ def test_real_owners_carry_the_tz_rules():
 
 @pytest.mark.django_db
 def test_bpp_adapter_writes_into_apps_files(company_context, memory_storage):
-    """Review Focus 1: заявка прикладывает КП тем же вызовом, что и раньше, а
-    файл лежит в ``apps.files`` — виден через её интерфейс и на панели
+    """Review Focus 1: заявка прикладывает КП загрузкой из кода модуля
+    (``services/core/files.py``), а файл лежит в ``apps.files`` — виден через её интерфейс и на панели
     ``/api/files/v1``, записан в журнал с IP и user-agent и остаётся на
     месте после отправки заявки."""
-    from django.core.files.uploadedfile import SimpleUploadedFile
-
-    from apps.bpp.services.requests import files as request_files
+    from apps.bpp.services.core import files as core_files
     from apps.bpp.services.requests import requests as service
     from apps.bpp.tests import stage2 as s
     from apps.files.models import FileEvent, FileObject
@@ -413,8 +411,8 @@ def test_bpp_adapter_writes_into_apps_files(company_context, memory_storage):
     sn.request.META.update(HTTP_USER_AGENT="pytest-agent", REMOTE_ADDR="10.9.8.7")
     req = service.create_draft(sn, {**s.header(proj, art), "items": s.items((1, 100))})
 
-    row = request_files.attach(
-        sn, req.id, SimpleUploadedFile("kp.pdf", PDF, content_type="application/pdf"))
+    row = core_files.attach(req, "request_attachment", data=PDF, filename="kp.pdf",
+                            mime="application/pdf", actor_id=s.SN, request=sn.request)
 
     current = files_interface.current_files(file_owners.REQUEST_OWNER, req.id)
     assert [(c["id"], c["name"], c["file_type"]) for c in current] == [
@@ -426,7 +424,7 @@ def test_bpp_adapter_writes_into_apps_files(company_context, memory_storage):
     assert (event.actor_id, event.ip, event.user_agent) == (s.SN, "10.9.8.7", "pytest-agent")
 
     service.submit(sn, req.id, expected_version=None)
-    assert [f["filename"] for f in request_files.list_files(sn, req.id)] == ["kp.pdf"]
+    assert [f["filename"] for f in core_files.list_files(req)] == ["kp.pdf"]
 
     resp = Client().get(f"/api/files/v1/{file_owners.REQUEST_OWNER}/{req.id}/files/",
                         **s.auth(slug, s.SN))

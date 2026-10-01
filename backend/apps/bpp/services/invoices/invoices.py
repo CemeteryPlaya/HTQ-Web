@@ -39,6 +39,7 @@ from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.budget import committed as committed_calc
 from apps.bpp.services.core import audit
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.counterparties import lookup as counterparties
@@ -74,8 +75,9 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД, БУХ, ТД, ОД, ГД и АДМ видят все счета (ТЗ §10.1): у их ролей на
-    ``bpp.invoices`` нет права создавать."""
-    return actor.can("bpp.invoices", "view") and not actor.can("bpp.invoices", "create")
+    ``bpp.invoices`` нет права создавать. Суперпользователь — тоже."""
+    return actor.is_superuser or (actor.can("bpp.invoices", "view")
+                                  and not actor.can("bpp.invoices", "create"))
 
 
 def can_view(actor: Actor, inv: Invoice) -> bool:
@@ -439,6 +441,7 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
             status=409)
     matches.delete()
     audit.record(inv, "deleted", actor_id=actor.user_id, changes={"number": inv.number})
+    core_files.owner_deleted(inv, actor_id=actor.user_id)
     pk = inv.pk  # ``delete()`` обнуляет pk экземпляра
     inv.delete()
     kpi.sync_for_document("invoice", pk)  # удалённый новый счёт аннулирует KPI (A5.2)
@@ -599,6 +602,7 @@ def submit(actor: Actor, invoice_id, *, expected_version: int | None,
     require_status(inv, EDITABLE, "отправить")
     check_version(inv, expected_version)
     _check_required(inv)
+    core_files.require_files(inv, action=f"отправить счёт {inv.number}")  # ТЗ §21
     counterparties.assert_usable(inv.counterparty_id)       # BR-030, E-CTR-01
     if (inv.basis == InvoiceBasis.NO_CONTRACT and not counterparty_confirmed
             and counterparties.needs_confirmation(inv.counterparty_id)):

@@ -35,6 +35,9 @@ from apps.bpp.tests import stage2 as s
 # Счёт — модель B (B3.2); проводим его настоящими сервисами через фабрики
 # его тестов, а не собираем руками только нужные метрике поля.
 from apps.bpp.tests import test_invoices as invoice_flow
+# Счёт отправляется только с файлом (ТЗ §21) — помощники ``invoice_flow``
+# прикладывают его, поэтому хранилище в памяти, как в самом ``test_invoices``.
+from apps.bpp.tests.test_files import memory_storage  # noqa: F401  (фикстура)
 from apps.companies.models import Company, CompanyModule
 from apps.signoff.models import ApprovalProcessStage
 from htqweb.fallback import FallbackNotAllowed

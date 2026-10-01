@@ -15,9 +15,8 @@ import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePermissions } from '@/hooks/usePermissions';
 
-import { moneyColumn } from '../budgets/money';
 import { BppRegistry } from '../core/BppRegistry';
-import { currentHoldersColumn, statusColumn } from '../core/registryColumns';
+import { currentHoldersColumn, moneyColumn, statusColumn } from '../core/registryColumns';
 import type { RegistryColumn, RegistryFilter } from '../core/registryTypes';
 import { STATUS_DICTIONARIES } from '../core/statusDictionaries';
 import { formatDate } from '../format';
@@ -53,7 +52,7 @@ export function RequestsPage() {
     { key: 'project_code', title: t('bpp.requests.project', 'Проект') },
     { key: 'article_name', title: t('bpp.requests.article', 'Статья') },
     moneyColumn<RequestRow>('total_amount', t('bpp.requests.amount', 'Сумма'),
-      (row) => row.total_amount, { currency: (row) => row.currency_code, total: 'total_amount' }),
+      { currency: 'currency_code', totalKey: 'total_amount' }),
     statusColumn<RequestRow>(t, 'request'),
     currentHoldersColumn<RequestRow>(t),
     {

@@ -237,7 +237,11 @@ def update_draft(actor: Actor, budget_id, *, expected_version: int | None, curre
 
 
 @transaction.atomic
-def approve(actor: Actor, budget_id, *, expected_version: int | None) -> Budget:
+def approve(actor: Actor, budget_id, *, expected_version: int | None,
+            notify_parties: bool = True) -> Budget:
+    """``notify_parties=False`` — без уведомления СН и ПМ: перенос из
+    ``contracts`` (B6.1) утверждает бюджеты всех проектов разом, и это не
+    новость для людей, работавших с ними и раньше."""
     budget = _lock(budget_id)
     _require(actor, "bpp.budgets.approve", "edit", "на утверждение", budget)
     check_version(budget, expected_version)
@@ -257,7 +261,8 @@ def approve(actor: Actor, budget_id, *, expected_version: int | None) -> Budget:
     _touch(budget, actor.user_id, "status", "active_version")
     audit.record(budget, "approved", actor_id=actor.user_id,
                  changes={"version_no": 1, "total": str(total)})
-    notify.budget_approved(budget, actor_id=actor.user_id)
+    if notify_parties:
+        notify.budget_approved(budget, actor_id=actor.user_id)
     return budget
 
 

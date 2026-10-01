@@ -220,6 +220,13 @@ def _item_reference(item) -> Decimal:
     return _invoices_reference(item)
 
 
+def committed_for_item(item) -> Decimal:
+    """«Задействовано» одной позицией по CALC-002 — для сверки переноса из
+    ``contracts`` (B6.1): вклад перенесённого документа считается по его
+    позициям."""
+    return _item_reference(item)
+
+
 def committed_reference(project_id, article_id) -> Decimal:
     total = ZERO
     for item in _items(project_id, [article_id]).select_related("request"):

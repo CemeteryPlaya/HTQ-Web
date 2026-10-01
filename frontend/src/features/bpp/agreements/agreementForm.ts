@@ -15,6 +15,7 @@ import { formatMoney, parseMoneyInput } from '../format';
 import { parseQtyInput } from '../requests/requestForm';
 
 import type { AgreementCard, AgreementPatch, AgreementType, CounterpartyBrief } from './api';
+import type { HistoryFieldOptions } from '../core/HistoryTab';
 
 export const NAME_MIN = 3;
 
@@ -142,3 +143,19 @@ export function overPlan(form: AgreementFormState, card: AgreementCard): string 
   const over = subMoney(amount, plan);
   return lessThan(over, 0) ? '0.00' : over;
 }
+
+/** Подписи и денежные поля «Истории изменений» договора (ключи `changes`
+ * журнала: снимок правки `services/agreements/agreements.py::_snapshot` и
+ * факты событий — отправка, расторжение, допсоглашение). */
+export const AGREEMENT_HISTORY_FIELDS: HistoryFieldOptions = {
+  fieldLabels: {
+    counterparty_id: 'Контрагент', counterparty_confirmed: 'Контрагент подтверждён',
+    name: 'Наименование', ext_number: 'Номер договора', ext_date: 'Дата договора',
+    agreement_type: 'Тип договора', is_open: 'Открытый договор', amount: 'Сумма',
+    with_vat: 'С НДС', vat_rate: 'Ставка НДС, %', vat_source: 'Источник ставки НДС',
+    valid_to: 'Срок действия по', items: 'Позиции', number: 'Номер',
+    over_plan: 'Сверх плана', available_before: 'Свободно в статье до отправки',
+    supplement: 'Допсоглашение', status: 'Статус',
+  },
+  moneyFields: ['amount', 'over_plan', 'available_before'],
+};

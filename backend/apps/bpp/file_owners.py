@@ -143,7 +143,28 @@ def _request_can_modify(owner_id, token) -> None:
         raise files.FilesLocked(
             f"Документы заявки {req.number} добавляются и удаляются только в статусах "
             f"«Черновик» и «На доработке». Чтобы заменить документ отправленной "
-            f"заявки, загрузите его новую версию в карточке заявки.")
+            f"заявки, загрузите его новую версию («Новая версия» у документа).")
+
+
+#: Финальные статусы заявки — в них документы не меняются даже новой версией.
+_REQUEST_FINAL = (RequestStatus.REJECTED, RequestStatus.CANCELLED, RequestStatus.CLOSED)
+
+
+def _request_can_version(owner_id, token, file_type) -> bool:
+    """ТЗ §21: «удаление — в Черновике / На доработке; далее только новая
+    версия» — новую версию приложенного документа автор загружает и после
+    отправки, пока заявка не в финальном статусе (``apps.files`` спрашивает
+    это вместо ``can_modify`` на пути новой версии)."""
+    req = _request(owner_id)
+    if req is None or req.author_id != token.user_id:
+        raise files.FilesForbidden(
+            "Новую версию документа заявки загружает её автор. Если это ошибка, "
+            "обратитесь к администратору.")
+    if req.status in _REQUEST_FINAL:
+        raise files.FilesLocked(
+            f"Заявка {req.number} — «{req.get_status_display()}»: её документы больше "
+            f"не меняются.")
+    return True
 
 
 def _request_was_sent(owner_id) -> bool:
@@ -212,6 +233,7 @@ def register() -> None:
         can_view=_request_can_view, can_modify=_request_can_modify,
         was_sent=_request_was_sent, lock=_request_lock,
         on_event=history_on_event(PurchaseRequest),
+        can_version=_request_can_version,
     )
     files.register_owner(
         REPORT_OWNER, label="Авансовый отчёт", service="bpp_accountable", tenant=True,

@@ -15,6 +15,7 @@ import { fromCents, lessThan, subMoney, sumMoney, toCents } from '../budgets/cen
 import type {
   InitiatorRole, PurchaseRequestCard, PurchaseType, RequestInput,
 } from './api';
+import type { HistoryFieldOptions } from '../core/HistoryTab';
 
 export const MAX_ITEMS = 200;
 /** Роль инициатора коротко — колонка «Роль» реестра L-02. */
@@ -187,3 +188,15 @@ export function parsePastedItems(text: string, uoms: Uom[], needDate: string): E
       price,
     }));
 }
+
+/** Подписи и денежные поля «Истории изменений» заявки (снимок правки
+ * `services/requests/requests.py::_snapshot`, подписи — как в `FIELD_LABELS`
+ * сервиса). */
+export const REQUEST_HISTORY_FIELDS: HistoryFieldOptions = {
+  fieldLabels: {
+    project_id: 'Проект', article_id: 'Статья бюджета', purchase_type: 'Вид закупки',
+    need_date: 'Потребность к дате', justification: 'Обоснование потребности',
+    items: 'Позиции', total_amount: 'Сумма', number: 'Номер', status: 'Статус',
+  },
+  moneyFields: ['total_amount'],
+};

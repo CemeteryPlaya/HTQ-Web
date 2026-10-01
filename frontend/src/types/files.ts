@@ -38,6 +38,14 @@ export interface FileDocument {
   current: FileVersion;
   /** От новой версии к старой; `versions[0]` — действующая. */
   versions: FileVersion[];
+  /**
+   * Можно ли загрузить новую версию этого документа — у владельца бывает
+   * своё правило (документ заявки меняется версией и после отправки, когда
+   * добавлять и удалять уже нельзя). Нет поля — как `can_modify` папки.
+   */
+  can_version?: boolean;
+  /** Можно ли удалить документ (объект и тип файла). Нет поля — как `can_modify`. */
+  can_delete?: boolean;
 }
 
 export type FileCardinality = 'multi' | 'single';

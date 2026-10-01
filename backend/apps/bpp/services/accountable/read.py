@@ -32,7 +32,9 @@ def _names(ids) -> dict[int, str]:
 
 
 def _visible(actor: Actor, filters: dict):
-    rows = AccountableFundsRequest.objects.filter(is_migrated=False)
+    # Перенесённые из «Договоров» — в реестре как обычные, с пометкой
+    # (D-B61-8): их переносили, чтобы работать дальше.
+    rows = AccountableFundsRequest.objects.all()
     if not service.sees_all(actor):
         awaiting = [str(sid) for sid in signoff.list_awaiting_subject_ids(actor.user_id, SUBJECT)]
         rows = rows.filter(Q(accountable_user_id=actor.user_id) | Q(pk__in=awaiting))
@@ -67,6 +69,7 @@ def _rows(chunk: list[AccountableFundsRequest]) -> list[dict]:
         reported = r.reported or ZERO
         out.append({
             "id": str(r.id), "number": r.number, "status": r.status,
+            "is_migrated": r.is_migrated,
             "created_at": r.created_at, "accountable_user_id": r.accountable_user_id,
             "accountable_user_name": names.get(r.accountable_user_id),
             "project_id": str(r.project_id),

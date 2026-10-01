@@ -37,6 +37,7 @@ from apps.bpp.services.actor import Actor
 from apps.bpp.services.alternatives import kpi, lifecycle
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.core import audit
+from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.counterparties import lookup as counterparties
@@ -79,8 +80,9 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД, ТД, ОД, ГД, БУХ и АДМ видят все договоры (ТЗ §9.1): у их ролей на
-    ``bpp.agreements`` нет права создавать."""
-    return actor.can("bpp.agreements", "view") and not actor.can("bpp.agreements", "create")
+    ``bpp.agreements`` нет права создавать. Суперпользователь — тоже."""
+    return actor.is_superuser or (actor.can("bpp.agreements", "view")
+                                  and not actor.can("bpp.agreements", "create"))
 
 
 def _sees_by_scope(actor: Actor, agr: Agreement) -> bool:
@@ -380,6 +382,7 @@ def delete_draft(actor: Actor, agreement_id, *, expected_version: int | None) ->
     _require_status(agr, (AgreementStatus.DRAFT,), "удалить")
     check_version(agr, expected_version)
     audit.record(agr, "deleted", actor_id=actor.user_id, changes={"number": agr.number})
+    core_files.owner_deleted(agr, actor_id=actor.user_id)
     pk = agr.pk  # ``delete()`` обнуляет pk экземпляра
     agr.delete()
     kpi.sync_for_document("agreement", pk)  # удалённый новый договор аннулирует KPI (A5.2)
@@ -496,6 +499,7 @@ def submit(actor: Actor, agreement_id, *, expected_version: int | None,
     _require_status(agr, EDITABLE, "отправить")
     check_version(agr, expected_version)
     _check_required(agr)
+    core_files.require_files(agr, action=f"отправить договор {agr.number}")  # ТЗ §21
     counterparties.assert_usable(agr.counterparty_id)       # BR-030, E-CTR-01
     if counterparties.needs_confirmation(agr.counterparty_id) and not counterparty_confirmed:
         raise DomainError(

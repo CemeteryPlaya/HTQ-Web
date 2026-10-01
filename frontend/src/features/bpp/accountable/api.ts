@@ -9,6 +9,7 @@ import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 
 import type { CurrentHolders } from '../core/registryTypes';
+import type { HistoryFieldOptions } from '../core/HistoryTab';
 
 export type Money = string;
 
@@ -39,6 +40,8 @@ export interface AdvanceReportRow {
 }
 
 export interface AccountableCard {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: AccountableStatus;
@@ -63,6 +66,8 @@ export interface AccountableCard {
 }
 
 export interface AccountableRow {
+  /** Перенесён из «Договоров» (B6.1) — пометка в реестре и карточке. */
+  is_migrated?: boolean;
   id: string;
   number: string;
   status: AccountableStatus;
@@ -118,4 +123,13 @@ export const bppAccountableApi = {
       .then((r) => r.data),
   reportFileLink: (reportId: string) =>
     api.get<{ url: string }>(path(`reports/${reportId}/file-link`)).then((r) => r.data.url),
+};
+
+/** Подписи и денежные поля «Истории изменений» заявки на подотчёт. */
+export const ACCOUNTABLE_HISTORY_FIELDS: HistoryFieldOptions = {
+  fieldLabels: {
+    amount: 'Сумма', goal: 'Цель', article_id: 'Статья бюджета', number: 'Номер',
+    report: 'Авансовый отчёт',
+  },
+  moneyFields: ['amount'],
 };
