@@ -200,6 +200,9 @@ def _nearest(nodes: dict[str, frozenset[str]], path: str) -> frozenset[str]:
     Пустой набор у найденного предка — это ЗАПРЕТ, а не «ищи выше»: им
     перекрывают разрешение, выданное на модуль целиком.
     """
+    if path in registry.explicit_only():
+        # «Все документы»: только своя строка, предки ничего не дают.
+        return nodes.get(path, frozenset())
     for candidate in registry.self_and_ancestors(path):
         if candidate in nodes:
             return nodes[candidate]

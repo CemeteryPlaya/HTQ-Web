@@ -70,6 +70,11 @@ export interface AccessFunctionNode {
    * признакам. Фронт их не выводит заново — иначе два ответа на один вопрос.
    */
   presets: DepthPreset[];
+  /**
+   * Узел «все документы»: глубину у предка не наследует, действует только
+   * собственная строка роли (сервер: `EXPLICIT_ONLY`). Нет строки — запрет.
+   */
+  explicit_only?: boolean;
   children: AccessFunctionNode[];
 }
 

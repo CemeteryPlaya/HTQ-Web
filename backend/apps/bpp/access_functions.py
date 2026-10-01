@@ -13,6 +13,12 @@
 _OP = ("edit",)      # операция: право её выполнить
 _SEE = ("view",)     # только видимость
 
+#: Узлы «все документы»: глубина НЕ наследуется от родителя (иначе роль с
+#: view+create на документе, кастомная или «модульная», видела бы чужие).
+EXPLICIT_ONLY = frozenset({
+    "bpp.requests.all", "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all",
+})
+
 FUNCTIONS = (
     ("bpp.budgets", "Бюджеты"),
     ("bpp.budgets.approve", "Утверждение, корректировка и закрытие бюджета", _OP),
@@ -24,7 +30,9 @@ FUNCTIONS = (
     ("bpp.plan.reassign", "Переназначение исполнителя позиций плана", _OP),
     ("bpp.agreements", "Договоры"),
     ("bpp.agreements.terminate", "Исполнение и расторжение договора", _OP),
+    ("bpp.agreements.all", "Все договоры, а не только свои", _SEE),
     ("bpp.invoices", "Счета"),
+    ("bpp.invoices.all", "Все счета, а не только свои", _SEE),
     ("bpp.invoices.decision", "Решение финансового директора по счёту", _OP),
     ("bpp.invoices.payment", "Оплата: документы, отметки, очередь бухгалтерии", _OP),
     ("bpp.invoices.closing_docs", "Закрывающие документы", _OP),
@@ -36,6 +44,7 @@ FUNCTIONS = (
     ("bpp.alternatives.select", "Выбор альтернативы", _OP),
     ("bpp.kpi", "KPI снабжения", ("view", "edit")),
     ("bpp.accountable", "Подотчётные средства"),
+    ("bpp.accountable.all", "Все заявки на подотчёт, а не только свои", _SEE),
     ("bpp.accountable.payment", "Выдача и проведение подотчёта", _OP),
     ("bpp.articles", "Доступ к группам статей", _SEE),
     ("bpp.articles.supply", "Группа статей «Снабжение»", _SEE),

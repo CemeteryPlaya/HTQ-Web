@@ -78,7 +78,7 @@ def test_source_is_registered_by_the_app_itself():
     assert fn is bpp_digest.closing_docs_items
     assert tenant is True
     assert section == bpp_digest.SECTION
-    assert landing_url == "/bpp/invoices"
+    assert landing_url == "/bpp/invoices?tab=awaiting_docs"
 
 
 @pytest.mark.django_db
@@ -116,7 +116,7 @@ def test_several_invoices_lead_to_the_invoice_registry(settings, company_schema)
     assert digest.send() == 1
     note = Notification.objects.get(recipient_id=s.SN, event="digest.daily")
     assert note.title == "Ждут вашего внимания: 2"
-    assert note.url == "/bpp/invoices"
+    assert note.url == "/bpp/invoices?tab=awaiting_docs"
     lines = note.text.splitlines()
     start = lines.index(HEADING)
     # Порядок — по дате запроса документов (старший первым), как отдаёт B.

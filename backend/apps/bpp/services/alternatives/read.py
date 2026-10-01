@@ -110,10 +110,10 @@ def _is_superuser(actor: Actor) -> bool:
 
 
 def sees_all(actor: Actor) -> bool:
-    """ФД, ТД, ОД, ГД: ``bpp.alternatives`` view без права создавать счета
-    (у СН и ПМ оно есть) — то же различие, что ``invoices.sees_all``."""
+    """ФД, ТД, ОД, ГД: ``bpp.alternatives`` view и узел ``bpp.invoices.all``
+    (access/0018, D-S6-5) — тот же круг, что ``invoices.sees_all``."""
     return _is_superuser(actor) or (actor.can(NODE, "view")
-                                    and not actor.can("bpp.invoices", "create"))
+                                    and actor.can("bpp.invoices.all", "view"))
 
 
 def _proposes(actor: Actor) -> bool:

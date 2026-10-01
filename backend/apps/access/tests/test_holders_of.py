@@ -67,9 +67,10 @@ def _position_holder(slug: str, user_id: int, role: Role, *, weight: int,
 
 @pytest.mark.django_db
 def test_found_through_position_and_personal_assignment(company_schema):
-    """Строка только на ``bpp.requests`` — узел ``bpp.requests.all`` её
-    наследует, как у ``flags_for``. Не участник компании и участник без
-    роли в список не попадают."""
+    """Строка только на ``bpp.requests`` не даёт ``bpp.requests.all``: узел
+    «все документы» не наследуется (``EXPLICIT_ONLY``, как у ``flags_for``);
+    явная строка на нём — даёт. Не участник компании и участник без роли в
+    список не попадают."""
     slug = company_schema["slug"]
     role = _role("t-holders-view", {"bpp.requests": ("view",)})
     _position_holder(slug, 601, role, weight=1)
@@ -80,8 +81,14 @@ def test_found_through_position_and_personal_assignment(company_schema):
     _account(603)
     _member(slug, 604)               # членство есть, роли нет
 
-    assert interface.holders_of(NODE, "view", slug) == [601, 602]
+    assert interface.holders_of(NODE, "view", slug) == []
     assert interface.holders_of("bpp.requests", "view", slug) == [601, 602]
+    assert interface.holders_of("bpp.requests", "edit", slug) == []
+
+    explicit = _role("t-holders-explicit", {NODE: ("view",)})
+    _personal(slug, 605, explicit)
+    _member(slug, 605)
+    assert interface.holders_of(NODE, "view", slug) == [605]
     assert interface.holders_of(NODE, "edit", slug) == []
 
 
