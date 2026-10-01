@@ -693,7 +693,7 @@ class ProjectLinkCandidate(BaseModel):
 
 
 class ProjectUpdate(OrderedDates):
-    name: str | None = Field(None, min_length=1, max_length=200)
+    name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=5000)
     status: ProjectStatus | None = None
     color: str | None = Field(None, max_length=20)

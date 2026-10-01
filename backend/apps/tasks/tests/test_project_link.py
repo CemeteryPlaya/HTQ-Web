@@ -1,8 +1,9 @@
 """Доска задач повторяет «Проект» БЗО (D-02: «Проект» главный).
 
-Правка «Проекта» приезжает на связанную доску в той же транзакции; правку,
-которую доска принять не может, «Проект» не получает вовсе (409
-``E-PRJ-04``). Миграция ``0023`` связывает доски, заведённые до связи.
+Правка «Проекта» приезжает на связанную доску в той же транзакции и
+проходит всегда (решение 01.10): занятое другой доской название доска
+получает с кодом проекта, сроки проверяет сам «Проект». Миграция ``0023``
+связывает доски, заведённые до связи, и «Проекты» при этом не меняет.
 """
 
 from __future__ import annotations
@@ -55,23 +56,48 @@ def test_project_edit_reaches_the_board(linked):
 
 
 @pytest.mark.django_db
-def test_edit_the_board_cannot_take_is_refused_whole(linked):
-    """Имя занято другой доской — «Проект» не переименован вовсе, а не
-    переименован без доски: данные не расходятся."""
+def test_taken_name_reaches_the_board_with_the_project_code(linked):
+    """Имя занято другой доской — «Проект» всё равно переименован, а доска
+    получает имя с кодом проекта; освободилось — доска берёт имя как есть."""
     slug, platform, board = linked
-    Board.objects.create(name="Занято")
+    other = Board.objects.create(name="Занято")
     resp = _patch(slug, platform.pk, {"name": "Занято", "manager_user_id": 12})
-    assert resp.status_code == 409 and resp.json()["code"] == "E-PRJ-04"
-    assert "Занято" in resp.json()["detail"]
-    reversed_dates = _patch(slug, platform.pk, {"date_start": "2026-05-01",
-                                                "date_end": "2026-04-01"})
-    assert reversed_dates.status_code == 409
+    assert resp.status_code == 200, resp.content
     with use_company(slug):
         platform.refresh_from_db()
         board.refresh_from_db()
-    assert (platform.name, platform.manager_user_id, platform.date_start) == (
-        "Объект 15", 11, None)
-    assert (board.name, board.owner_id) == ("Объект 15", 11)
+    assert (platform.name, platform.manager_user_id) == ("Занято", 12)
+    assert (board.name, board.owner_id) == ("Занято (П-1)", 12)
+
+    other.name = "Другое"
+    other.save()
+    assert _patch(slug, platform.pk, {"status": "active"}).status_code == 200
+    with use_company(slug):
+        board.refresh_from_db()
+    assert board.name == "Занято"
+
+
+@pytest.mark.django_db
+def test_long_name_fits_the_board(linked):
+    slug, platform, board = linked
+    long_name = "Ж" * 255
+    Board.objects.create(name=long_name)
+    assert _patch(slug, platform.pk, {"name": long_name}).status_code == 200
+    with use_company(slug):
+        board.refresh_from_db()
+    assert len(board.name) == 255 and board.name.endswith(" (П-1)")
+
+
+@pytest.mark.django_db
+def test_reversed_dates_are_refused_by_the_project_itself(linked):
+    slug, platform, board = linked
+    resp = _patch(slug, platform.pk, {"date_start": "2026-05-01", "date_end": "2026-04-01"})
+    assert resp.status_code == 422 and resp.json()["code"] == "E-VAL-01"
+    assert resp.json()["fields"][0]["field"] == "date_end"
+    with use_company(slug):
+        platform.refresh_from_db()
+        board.refresh_from_db()
+    assert (platform.date_start, board.start_date) == (None, None)
 
 
 @pytest.mark.django_db
@@ -115,10 +141,21 @@ def test_migration_links_every_board(at_0022):
     OldPlatform = at_0022.get_model("project", "Project")
     plain = OldBoard.objects.create(name="Без связи", status="completed", owner_id=5,
                                     start_date=dt.date(2026, 1, 1))
-    # Связанная командой: «Проект» с умолчаниями — пустое берётся с доски.
+    # Связанная командой: «Проект» главный — он не меняется, доска
+    # приводится к нему.
     made = OldPlatform.objects.create(code="TP-X", name="Связанная", country_code="KZ")
     tied = OldBoard.objects.create(name="Связанная", status="archived", owner_id=6,
                                    end_date=dt.date(2026, 12, 31), project_ref=str(made.pk))
+    # Название «Проекта» длиннее прежних 200 символов доски.
+    long_name = "Д" * 230
+    wide = OldPlatform.objects.create(code="ПР-9", name=long_name, country_code="KZ")
+    narrow = OldBoard.objects.create(name="Короткое", project_ref=str(wide.pk))
+    # «Короткое» освободится раньше, чем до этой доски дойдёт очередь.
+    named = OldPlatform.objects.create(code="ПР-8", name="Короткое", country_code="KZ")
+    freed = OldBoard.objects.create(name="Своё", project_ref=str(named.pk))
+    # «Связанная» уже у доски «Проекта» TP-X — эта получает название с кодом.
+    dup = OldPlatform.objects.create(code="ПР-7", name="Связанная", country_code="KZ")
+    twin = OldBoard.objects.create(name="Иное", project_ref=str(dup.pk))
     # Код TP-<id> занят «Проектом», заведённым человеком.
     squatter = OldBoard.objects.create(name="С конфликтом")
     OldPlatform.objects.create(code=f"TP-{squatter.pk}", name="Чужой", country_code="KZ",
@@ -136,9 +173,15 @@ def test_migration_links_every_board(at_0022):
     assert Member.objects.filter(project=first, user_id=5).exists()
 
     kept = NewPlatform.objects.get(pk=made.pk)
-    assert (kept.status, kept.manager_user_id, kept.date_end) == (
-        "archived", 6, dt.date(2026, 12, 31))
-    assert NewBoard.objects.get(pk=tied.pk).project_ref == str(made.pk)
+    assert (kept.status, kept.manager_user_id, kept.date_end) == ("active", None, None)
+    board = NewBoard.objects.get(pk=tied.pk)
+    assert (board.project_ref, board.status, board.owner_id, board.end_date) == (
+        str(made.pk), "active", None, None)
+
+    assert NewBoard.objects.get(pk=narrow.pk).name == long_name
+    assert NewBoard.objects.get(pk=freed.pk).name == "Короткое"
+    assert NewBoard.objects.get(pk=twin.pk).name == "Связанная (ПР-7)"
+    assert NewPlatform.objects.get(pk=dup.pk).name == "Связанная"
 
     third = NewPlatform.objects.get(pk=NewBoard.objects.get(pk=squatter.pk).project_ref)
     assert third.code == f"TP-{squatter.pk}-2" and third.name == "С конфликтом"

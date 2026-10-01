@@ -44,6 +44,18 @@ def test_duplicate_code_is_422(company_context):
 
 
 @pytest.mark.django_db
+def test_reversed_dates_are_refused(company_context):
+    """Сроки «Проекта» проверяет он сам: доска задач их повторяет и не
+    спорит с ними (D-02, решение 01.10)."""
+    slug = company_context["slug"]
+    assign(slug, 7, "project.projects", "full")
+    response = _create(slug, date_start="2026-05-01", date_end="2026-04-01")
+    assert response.status_code == 422 and response.json()["code"] == "E-VAL-01"
+    assert response.json()["fields"] == [{"field": "date_end", "message": "Раньше даты начала"}]
+    assert _create(slug, date_start="2026-04-01", date_end="2026-04-01").status_code == 201
+
+
+@pytest.mark.django_db
 def test_members(company_context):
     slug = company_context["slug"]
     assign(slug, 7, "project.projects", "full")

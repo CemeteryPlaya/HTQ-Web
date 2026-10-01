@@ -623,7 +623,8 @@ class Project(models.Model):
     not model state and live in the response builder here instead.
     """
 
-    name = models.CharField(max_length=200, unique=True)
+    # 255 — как у «Проекта» БЗО: связанная доска повторяет его название (D-02).
+    name = models.CharField(max_length=255, unique=True)
     description = models.TextField(default="", blank=True, db_default="")
     status = models.CharField(
         max_length=20, choices=ProjectStatus.choices,

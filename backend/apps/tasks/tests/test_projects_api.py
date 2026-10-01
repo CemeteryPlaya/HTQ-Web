@@ -4,6 +4,7 @@ Mirrors ``services/task/app/api/v1/projects.py`` and the metric aggregation
 the ``ProjectRepository`` attached to each row.
 """
 
+import datetime as dt
 from unittest.mock import patch
 
 import pytest
@@ -96,15 +97,25 @@ def test_one_board_per_project_and_none_for_the_archive():
 
 
 @pytest.mark.django_db
-def test_board_name_must_be_unique():
-    """Имя доски уникально; занятое имя «Проекта» — 409 с причиной, а не 500
-    от базы, как было, пока доска называлась сама."""
+def test_taken_name_gets_the_project_code():
+    """Имя доски уникально, «Проекта» — нет. «Проект» главный (01.10): доска
+    к нему заводится и с занятым названием — с кодом проекта, а не 409."""
     Project.objects.create(name="Dup")
-    platform = _platform(name="Dup")
+    platform = _platform(code="П-7", name="Dup")
     resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(platform.pk)},
                      **auth(admin_token()))
-    assert resp.status_code == 409
-    assert "Dup" in resp.json()["detail"]
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["name"] == "Dup (П-7)"
+
+
+@pytest.mark.django_db
+def test_board_is_not_made_for_a_project_with_reversed_dates():
+    """Старый «Проект» с перевёрнутыми сроками (до проверки в самом
+    «Проекте») доски не получает: её нельзя было бы править."""
+    platform = _platform(date_start=dt.date(2026, 5, 1), date_end=dt.date(2026, 4, 1))
+    resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(platform.pk)},
+                     **auth(admin_token()))
+    assert resp.status_code == 409 and "«Проекты»" in resp.json()["detail"]
 
 
 @pytest.mark.django_db
