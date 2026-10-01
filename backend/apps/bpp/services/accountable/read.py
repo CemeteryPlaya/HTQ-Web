@@ -31,6 +31,12 @@ def _names(ids) -> dict[int, str]:
     return {row["id"]: row["full_name"] for row in users.get_users_brief(ids)} if ids else {}
 
 
+def visible(actor: Actor, filters: dict | None = None):
+    """Выборка реестра с фильтрами реестра — по ней считает «Обзор» модуля,
+    чтобы его число совпадало с ``total`` реестра."""
+    return _visible(actor, filters or {})
+
+
 def _visible(actor: Actor, filters: dict):
     # Перенесённые из «Договоров» — в реестре как обычные, с пометкой
     # (D-B61-8): их переносили, чтобы работать дальше.

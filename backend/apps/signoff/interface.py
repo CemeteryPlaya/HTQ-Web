@@ -87,6 +87,7 @@ __all__ = [
     "pending_for_user",
     "PreapprovalMismatch",
     "cancel_process",
+    "count_no_executor",
     "rework_process",
     "get_process",
     "get_process_for",
@@ -217,6 +218,18 @@ def rework_process(*, process_id: int, actor_id: int | None = None,
     return serialize_process(
         engine.reopen(process_id=process_id, actor_id=actor_id,
                       comment=comment), enrich=enrich)
+
+
+def count_no_executor(subject_type_prefix: str) -> int:
+    """Сколько идущих согласований типов ``<prefix>…`` стоят на этапе «Нет
+    исполнителя» (ленивое разрешение не нашло держателя должности, ТЗ §16.1
+    п.5) — для «Обзора» администратора модуля."""
+    require_service("signoff")
+
+    return (ApprovalProcess.objects
+            .filter(state=ProcessState.PENDING, subject_type__startswith=subject_type_prefix,
+                    stages__state=StageState.NO_EXECUTOR)
+            .distinct().count())
 
 
 def lock_process_for(subject_type: str, subject_id: int | str) -> dict | None:

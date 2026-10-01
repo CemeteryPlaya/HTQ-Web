@@ -97,6 +97,19 @@ def _filtered(rows, filters: dict):
     return rows
 
 
+def visible(actor: Actor, filters: dict | None = None):
+    """Открытые позиции плана L-04, которые видит актор, — по ним считает
+    «Обзор» модуля: все — у ФД (``bpp.plan.all``), иначе свои по ВСЕМ его
+    ролям инициатора (реестр показывает одну роль за раз, переключателем;
+    у «Обзора» несколько ролей — объединение). Ролей нет — пусто, а не 403:
+    право на вход проверяет вызывающий."""
+    rows = _base()
+    if not sees_all(actor):
+        rows = rows.filter(executor_id=actor.user_id,
+                           request__initiator_role__in=actor.initiator_roles())
+    return _filtered(rows, filters or {})
+
+
 def _visible(actor: Actor, *, role: str | None, filters: dict, sort: str):
     """Выборка плана L-04 — одна на страницу и выгрузку."""
     if not actor.can("bpp.plan", "view") and not sees_all(actor):

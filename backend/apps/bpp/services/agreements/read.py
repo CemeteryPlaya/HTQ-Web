@@ -124,6 +124,12 @@ def card(actor: Actor, agr: Agreement, *, vat_warning: str | None = None) -> dic
     }
 
 
+def visible(actor: Actor, filters: dict | None = None):
+    """Выборка реестра с фильтрами реестра — по ней считает «Обзор» модуля,
+    чтобы его число совпадало с ``total`` реестра."""
+    return _visible(actor, filters or {})
+
+
 def _visible(actor: Actor, filters: dict):
     """Выборка реестра L-05 — одна на страницу и выгрузку."""
     # Перенесённые из «Договоров» — в реестре как обычные, с пометкой

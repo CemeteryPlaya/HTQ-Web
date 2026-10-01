@@ -149,6 +149,20 @@ def test_current_holders_mark_a_stage_without_an_executor():
     assert row["users"] == [] and row["no_executor"] is True and row["stage"] == "ФД"
 
 
+def test_count_no_executor_counts_waiting_processes_of_its_prefix():
+    """Блок администрирования «Обзора» БЗО: идущие процессы, стоящие на этапе
+    «Нет исполнителя», — только своих типов."""
+    vacant = make_user("vacant")
+    Employee.objects.filter(user_id=vacant.pk).update(is_deleted=True)
+    route = make_route([(1, "ФД", Quorum.ANY, [vacant.pk])])
+    route.lazy_resolution = True
+    route.save()
+    _start(), _start()
+
+    assert interface.count_no_executor(SUBJECT) == 2
+    assert interface.count_no_executor("bpp.") == 0
+
+
 # ── очередь пользователя ────────────────────────────────────────────────
 
 def test_pending_for_user_shows_only_active_stages():

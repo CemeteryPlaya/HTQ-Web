@@ -137,6 +137,24 @@ def card(actor: Actor, budget: Budget) -> dict:
     }
 
 
+def visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
+    """Выборка реестра L-01 — по ней считает «Обзор» модуля."""
+    return _visible(actor, status=status, project_id=project_id)
+
+
+def money_totals(actor: Actor) -> dict[str, dict]:
+    """Лимит, «Задействовано» и «Доступно» по утверждённым бюджетам, видимым
+    актору, — только его строки (как в реестре L-01: СН и ПМ — свои группы
+    статей). По валютам: ``{код: {limit_amount, committed, available}}``."""
+    out: dict[str, dict] = {}
+    for row in _registry_rows(actor, list(_visible(actor, status=BudgetStatus.APPROVED))):
+        entry = out.setdefault(row["currency_code"], {
+            "limit_amount": ZERO, "committed": ZERO, "available": ZERO})
+        for key in entry:
+            entry[key] += row[key] or ZERO
+    return out
+
+
 def _visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
     """Выборка реестра L-01 — одна на страницу и выгрузку."""
     rows = Budget.objects.all().order_by("-created_at")

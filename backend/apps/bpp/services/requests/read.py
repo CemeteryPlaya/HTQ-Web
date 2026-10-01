@@ -104,6 +104,12 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
     }
 
 
+def visible(actor: Actor, filters: dict | None = None):
+    """Выборка реестра с фильтрами реестра — по ней считает «Обзор» модуля,
+    чтобы его число совпадало с ``total`` реестра."""
+    return _visible(actor, filters or {})
+
+
 def _visible(actor: Actor, filters: dict):
     """Выборка реестра L-02 — одна на страницу и выгрузку (ТЗ §19: экспорт —
     ровно то, что пользователь видит с этими фильтрами)."""
