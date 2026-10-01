@@ -33,6 +33,8 @@ vi.mock('@/features/bpp/accountable/AccountableFormPage', () => ({
   default: () => <div>Форма подотчёта</div>,
 }));
 
+vi.mock('@/features/bpp/overview/OverviewPage', () => ({ default: () => <div>Обзор раздела</div> }));
+
 vi.mock('@/api/signoff', () => ({
   signoffApi: { inbox: vi.fn(() => Promise.resolve({ data: [] })) },
 }));
@@ -136,10 +138,11 @@ describe('BppLayout — меню по правам', () => {
 });
 
 describe('BppLayout — подмодули пакета', () => {
-  it('«Мои согласования» — в меню при bpp:read', async () => {
+  it('при bpp:read корень раздела ведёт на «Обзор»; «Мои согласования» — тоже в меню', async () => {
     permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));
     renderSection('/bpp');
-    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/bpp/approvals'));
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/bpp/overview'));
+    expect(await screen.findByText('Обзор раздела')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Мои согласования' }).length).toBeGreaterThan(0);
   });
 
