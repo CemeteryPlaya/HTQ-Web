@@ -33,7 +33,7 @@
 2. **Схемы до текущей версии:**
    - `manage.py migrate_shared`;
    - `manage.py migrate_companies` — нужны `bpp` до `0014_migration_link` и `files/0004`.
-3. **Роли и маршруты модуля** (зона A, A6.3): `bpp_assign_roles --company <slug>`, `bpp_configure_routes --company <slug>`. Сама команда переноса маршрутов и ролей не требует: документы переезжают без запуска согласования.
+3. **Роли и маршруты модуля** (зона A, A6.3): `bpp_assign_roles --company <slug>`, `bpp_configure_routes --company <slug>`. Сама команда переноса маршрутов и ролей не требует: документы переезжают без запуска согласования. Узлы «все документы» (`bpp.requests.all`, `bpp.invoices.all`, `bpp.agreements.all`, `bpp.accountable.all`) глубину у предка не наследуют (`access/0017`, `0018`): кастомным ролям и `platform-admin`, которые должны видеть все заявки, счета, договоры или подотчёт, выдать нужный узел явной строкой в редакторе ролей.
 4. **Черновики карт:**
 
    ```bash

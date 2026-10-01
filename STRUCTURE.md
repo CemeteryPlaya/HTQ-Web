@@ -44,7 +44,8 @@ HTQWeb1/
 ├── sfu/                  # Mediasoup SFU (Node.js, медиа-роутинг конференций)
 ├── webtransport/         # QUIC signalling proxy (Python aioquic) для SFU
 ├── docs/                 # Архитектура, аудиты, ngrok/tunnel-инструкции; deploy/subdomains-runbook.md —
-│                         #   чеклист перевода компаний на поддомены (DNS, сертификат, порядок окна выкатки)
+│                         #   чеклист перевода компаний на поддомены (DNS, сертификат, порядок окна выкатки);
+│                         #   deploy/bpp-rollout-runbook.md — ранбук выкатки модуля БЗО на пилота (шаги, откат, протоколы прогонов)
 ├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic)
 ├── tools/                # Локальные бинари туннелей (gitignored)
 ├── docker-compose.yml       # Прод-стек (полный)
