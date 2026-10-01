@@ -24,6 +24,7 @@ from apps.users import interface as users
 from htqweb.errors import DomainError
 
 from apps.bpp.services.invoices import invoices as invoice_service
+from apps.bpp.services.selection import checks as selection_checks
 
 from . import agreements as service
 from . import positions
@@ -118,6 +119,7 @@ def card(actor: Actor, agr: Agreement, *, vat_warning: str | None = None) -> dic
             "qty_available": left[str(i.request_item_id)]["qty_left"],
         } for i in items],
         "current_holders": holders,
+        "alternative": selection_checks.alternative_links("agreement", agr),   # B5.1
         "allowed_actions": service.allowed_actions(actor, agr),
     }
 

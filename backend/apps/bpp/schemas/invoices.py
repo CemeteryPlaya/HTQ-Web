@@ -90,3 +90,10 @@ class VersionOnly(BaseModel):
 class WithComment(BaseModel):
     version: int | None = None
     comment: str = Field(default="", max_length=1000)
+
+
+class SelectAlternative(BaseModel):
+    """SelectAlternativeOffer (ТЗ §26): АП, комментарий, версия исходного счёта."""
+    offer_id: UUID
+    version: int | None = None
+    comment: str = Field(default="", max_length=1000)

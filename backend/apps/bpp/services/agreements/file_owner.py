@@ -7,6 +7,8 @@
   отправки** (``agreements.submit`` → ``core_files.require_files``, 422
   ``E-FIL-04``).
 - ``agreement_annex`` — приложения, до 30.
+- ``alternative_offer`` — КП выбранной альтернативы, до 5: переезжает в новый
+  договор при выборе (B5.1, D-B51-7) загрузкой из кода.
 - Видит файлы тот, кто видит договор (``agreements.can_view``: автор, его
   проекты и группы статей, директора и БУХ, согласующие).
 - Менять через панель может автор, пока договор правится («Черновик», «На
@@ -26,11 +28,13 @@ from apps.signoff import interface as signoff
 
 from . import agreements as service
 
-__all__ = ["ANNEX_TYPE", "FILE_TYPE", "OWNER", "register"]
+__all__ = ["ANNEX_TYPE", "FILE_TYPE", "KP_TYPE", "OWNER", "register"]
 
 OWNER = "bpp.agreement"
 FILE_TYPE = "agreement"
 ANNEX_TYPE = "agreement_annex"
+#: КП альтернативы, по которой создан договор (B5.1).
+KP_TYPE = "alternative_offer"
 
 
 def _agreement(owner_id) -> Agreement | None:
@@ -75,7 +79,8 @@ def register() -> None:
         OWNER, label="Договор", service="bpp_agreements", tenant=True,
         folder="agreement", model=Agreement,
         file_types=(files.FileTypeSpec(FILE_TYPE, cardinality=files.SINGLE, required=True),
-                    files.FileTypeSpec(ANNEX_TYPE, max_documents=30)),
+                    files.FileTypeSpec(ANNEX_TYPE, max_documents=30),
+                    files.FileTypeSpec(KP_TYPE, max_documents=5)),
         can_view=_can_view, can_modify=_can_modify, was_sent=_was_sent, lock=_lock,
         on_event=history_on_event(Agreement),
     )

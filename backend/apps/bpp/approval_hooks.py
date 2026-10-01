@@ -39,6 +39,7 @@ from apps.bpp.services.budget import budgets as budget_service
 from apps.bpp.services.core import audit
 from apps.bpp.services.money import fmt
 from apps.bpp.services.requests import requests as request_service
+from apps.bpp.services.selection import voting
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
@@ -251,6 +252,10 @@ def register() -> None:
         fact_fields=_agreement_fact_fields,
         scope_of=agreement_service.scope_of,
         scopes=_agreement_scopes,
+        # Голос ФД и ГД за исходный договор или альтернативу (B5.1, D-25, D-26).
+        options=voting.options,
+        check_option=voting.check_option,
+        on_option=voting.on_option,
         route_editors=_route_editors,
     )
     signoff.register_subject(

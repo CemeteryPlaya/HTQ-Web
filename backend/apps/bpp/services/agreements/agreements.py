@@ -43,10 +43,13 @@ from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.counterparties import lookup as counterparties
 from apps.bpp.services.money import fmt, money
 from apps.bpp.services.plan import service as plan
+from apps.bpp.services.selection import checks as selection_checks
+from apps.bpp.services.selection import voting
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
+from htqweb.fallback import fallback
 
 from . import positions
 
@@ -175,7 +178,7 @@ def effective_amount(agr: Agreement) -> Decimal | None:
     return money(agr.amount + extra)
 
 
-def _recalc_vat(agr: Agreement) -> str | None:
+def recalc_vat(agr: Agreement) -> str | None:
     """НДС по D-14: ставка страны контрагента на дату договора из справочника;
     нет ставки — 16% с предупреждением; ручная ставка не перетирается.
     Возвращает предупреждение для формы (или ``None``)."""
@@ -234,26 +237,39 @@ def create_from_plan(actor: Actor, item_ids: list[str], *, role: str | None = No
     selection = plan.validate_selection(actor, item_ids, target="contract", role=role)
     rows = _plan_item_rows(row["id"] for row in selection["items"])
     left = positions.remaining(rows)
-    amounts = {str(row.pk): min(left[str(row.pk)]["amount_left"], row.amount) for row in rows}
-    project = projects.project_brief([selection["project_id"]]).get(selection["project_id"]) or {}
-    kind = selection["purchase_type"] or ""
+    agr = new_agreement(
+        actor, rows=rows, project_id=selection["project_id"],
+        article_id=selection["article_id"], kind=selection["purchase_type"] or "",
+        quantities={str(row.pk): left[str(row.pk)]["qty_left"] for row in rows},
+        amounts={str(row.pk): min(left[str(row.pk)]["amount_left"], row.amount)
+                 for row in rows})
+    audit.record(agr, "created", actor_id=actor.user_id,
+                 changes={"items": [row.sys_number for row in rows]})
+    return agr
+
+
+def new_agreement(actor: Actor, *, rows: list[PurchaseRequestItem], project_id, article_id,
+                  kind: str, quantities: dict[str, Decimal], amounts: dict[str, Decimal]
+                  ) -> Agreement:
+    """Черновик договора из позиций заявки: автор — ``actor``, проект и статья
+    — заданные, валюта и роль инициатора — из заявки первой позиции, сумма —
+    Σ сумм позиций. Права и выбор позиций проверяет вызывающий: план закупок
+    (``create_from_plan``) или выбор альтернативы (B5.1, новый договор по АП)."""
+    project = projects.project_brief([str(project_id)]).get(str(project_id)) or {}
     kind_label = {"goods": "ТМЦ", "works": "работы и услуги"}.get(kind, "закупку")
     agr = Agreement.objects.create(
         number=next_number("ДГ"), author_id=actor.user_id,
         initiator_role=rows[0].request.initiator_role,
-        project_id=selection["project_id"], article_id=selection["article_id"],
+        project_id=project_id, article_id=article_id,
         agreement_type=kind, ext_date=timezone.localdate(),
         name=f"Договор на {kind_label} по проекту {project.get('code', '')}".strip(),
         amount=money(sum(amounts.values(), Decimal("0"))),
         currency_code=rows[0].request.currency_code,
         created_by=actor.user_id, updated_by=actor.user_id)
     for row in rows:
-        AgreementItem.objects.create(agreement=agr, request_item=row,
-                                     qty=left[str(row.pk)]["qty_left"],
+        AgreementItem.objects.create(agreement=agr, request_item=row, qty=quantities[str(row.pk)],
                                      amount=amounts[str(row.pk)], created_by=actor.user_id,
                                      updated_by=actor.user_id)
-    audit.record(agr, "created", actor_id=actor.user_id,
-                 changes={"items": [row.sys_number for row in rows]})
     return agr
 
 
@@ -362,7 +378,7 @@ def update_draft(actor: Actor, agreement_id, *, expected_version: int | None,
             agr.vat_source = ""
         else:
             agr.vat_rate, agr.vat_source = Decimal(str(data["vat_rate"])), VatSource.MANUAL
-    warning = _recalc_vat(agr)
+    warning = recalc_vat(agr)
     agr.save()
     if "items" in data:
         _apply_items(agr, data["items"], actor.user_id)
@@ -507,7 +523,7 @@ def submit(actor: Actor, agreement_id, *, expected_version: int | None,
             f"Контрагент {counterparties.display_name(agr.counterparty)} ещё не проверен. "
             f"Подтвердите, что реквизиты сверены с документами, и отправьте снова.",
             fields=[{"field": "counterparty_confirmed", "message": "Нужно подтверждение"}])
-    _recalc_vat(agr)
+    recalc_vat(agr)
     if agr.with_vat and agr.vat_rate is None:
         raise DomainError(
             "E-VAT-01", "Не задана ставка НДС. Укажите ставку или обратитесь к "
@@ -517,11 +533,13 @@ def submit(actor: Actor, agreement_id, *, expected_version: int | None,
     _check_remaining(agr)
     _check_sum(agr)
     figures = _check_budget(agr)
+    # Новый договор по АП: сумма в пределах 5 % от неё (ТЗ §12.4 п.5, B5.1).
+    selection_checks.check_within_tolerance("agreement", agr,
+                                            selection_checks.document_kzt(agr))
     agr.counterparty_confirmed = agr.counterparty_confirmed or counterparty_confirmed
     agr.save()
     try:
-        signoff.start_process(subject_type=SUBJECT, subject_id=str(agr.pk),
-                              initiator_id=actor.user_id)
+        _start_process(agr, actor.user_id)
     except signoff.SignoffError as exc:
         raise _signoff_error(exc) from exc
     except IntegrityError as exc:
@@ -537,6 +555,23 @@ def submit(actor: Actor, agreement_id, *, expected_version: int | None,
         changes["counterparty_confirmed"] = counterparties.display_name(agr.counterparty)
     audit.record(agr, "submitted", actor_id=actor.user_id, changes=changes)
     return agr
+
+
+def _start_process(agr: Agreement, initiator_id: int) -> None:
+    """Согласование договора. Новый договор по АП, выбранной голосованием, —
+    с предсогласованным этапом решившего (D-26, ``voting.preapproved_for``).
+    Его должности в маршруте уже нет (маршрут поменяли после выбора) — без
+    предсогласования: договор согласуют все этапы, а не отказ в отправке."""
+    preapproved = voting.preapproved_for(agr)
+    try:
+        signoff.start_process(subject_type=SUBJECT, subject_id=str(agr.pk),
+                              initiator_id=initiator_id, preapproved=preapproved)
+    except signoff.PreapprovalMismatch as exc:
+        fallback("bpp.agreements.preapproval_dropped", None, expected=True, exc=exc,
+                 reason="должности решившего нет в маршруте — согласуют все этапы",
+                 agreement=str(agr.pk))
+        signoff.start_process(subject_type=SUBJECT, subject_id=str(agr.pk),
+                              initiator_id=initiator_id)
 
 
 @transaction.atomic
@@ -642,7 +677,7 @@ def create_supplement(actor: Actor, parent_id) -> Agreement:
         name=f"Дополнительное соглашение к договору {parent.ext_number or parent.number}",
         ext_date=timezone.localdate(), parent_agreement=parent,
         created_by=actor.user_id, updated_by=actor.user_id)
-    _recalc_vat(agr)
+    recalc_vat(agr)
     agr.save()
     audit.record(agr, "created", actor_id=actor.user_id,
                  changes={"supplement_to": parent.number})
@@ -668,7 +703,15 @@ def on_started(agreement_id) -> None:
 def on_approved(agreement_id) -> None:
     """«Действует» (BR-035). Допсоглашение: родитель остаётся действующим
     документом, суммы складываются (``effective_amount``), срок действия
-    продлевается. Удачный документ контрагента (метка «Проверенный»)."""
+    продлевается. Удачный документ контрагента (метка «Проверенный»).
+
+    Первым делом — решающий голос (B5.1, B-6): за альтернативу — договор
+    «Заменён альтернативой» и новый документ по АП, «Действует» не ставится."""
+    # Поздний импорт: выбор собирает новый договор этим же модулем.
+    from apps.bpp.services.selection import agreement as selection
+
+    if selection.apply_final_choice(agreement_id):
+        return
     agr = Agreement.objects.select_related("parent_agreement").get(pk=agreement_id)
     Agreement.objects.filter(pk=agreement_id).update(status=AgreementStatus.ACTIVE,
                                                     rework_comment="")
