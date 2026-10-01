@@ -164,6 +164,10 @@ def test_reading_and_writing_routes_need_admin(client):
                           {"subject_type": SUBJECT, "name": "Ещё один"},
                           **auth(token()))
     assert forbidden.status_code == 403
+    # Без прав на маршруты — 403 и на несуществующий id, до поиска строки:
+    # ответ не выдаёт, есть ли такой маршрут.
+    assert client.get(f"{BASE}/routes/999999", **auth(token())).status_code == 403
+    assert client.get(f"{BASE}/stages/999999", **auth(token())).status_code == 403
 
 
 def test_subject_names_who_edits_its_routes(client, monkeypatch):
@@ -190,6 +194,7 @@ def test_subject_names_who_edits_its_routes(client, monkeypatch):
         == 403
 
     assert client.get(f"{BASE}/routes/{own.pk}", **as_editor).status_code == 200
+    assert client.get(f"{BASE}/routes/999999", **as_editor).status_code == 404
     assert patch_json(client, f"{BASE}/routes/{own.pk}", {"name": "Новое имя"},
                       **as_editor).status_code == 200
     stage = own.stages.get()
