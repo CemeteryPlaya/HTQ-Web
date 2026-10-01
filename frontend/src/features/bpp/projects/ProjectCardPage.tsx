@@ -23,6 +23,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/hooks/usePermissions';
 import { errorStatus, reportApiError } from '@/lib/apiError';
 
+import { formatDate } from '../format';
+
 import { PROJECTS_BASE, projectApi, projectKeys, type Project } from './api';
 import { projectKindLabel } from './labels';
 import { ProjectFormDialog } from './ProjectFormDialog';
@@ -126,6 +128,8 @@ export function ProjectCardPage() {
       <dl className="grid gap-4 rounded-2xl border bg-card p-4 sm:grid-cols-2 sm:p-6">
         <Detail label={t('bpp.projects.manager', 'Руководитель проекта')} value={nameOf(data.manager_user_id)} />
         <Detail label={t('bpp.projects.customer', 'Заказчик')} value={data.customer_name} />
+        <Detail label={t('bpp.projects.dateStart', 'Начало')} value={data.date_start ? formatDate(data.date_start) : ''} />
+        <Detail label={t('bpp.projects.dateEnd', 'Окончание')} value={data.date_end ? formatDate(data.date_end) : ''} />
       </dl>
 
       <section className="space-y-3">

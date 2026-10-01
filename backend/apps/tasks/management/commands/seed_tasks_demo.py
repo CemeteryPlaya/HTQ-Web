@@ -48,6 +48,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.hr import interface as hr_interface
+from apps.project import interface as project_interface
 from apps.tasks.models import (
     BlockStatus,
     Contractor,
@@ -82,6 +83,7 @@ from apps.tasks.models import (
     WorkVolumeUnit,
 )
 from apps.tasks.services import daily_report_service
+from apps.tasks.services.project_link import STATUS_TO_PROJECT
 from apps.tasks.services import staff_report_service
 from apps.tasks.services.reference_service import generate_unique_slug
 from apps.tasks.services.sequence_service import next_task_key
@@ -791,8 +793,40 @@ class Command(BaseCommand):
                               "end_date": spec["end"]},
                 )
             out[project.name] = project
+        self._link_projects(out)
         self.stdout.write(f"  проектов: {len(out)}")
         return out
+
+    def _link_projects(self, boards: dict[str, Project]) -> None:
+        """Доски — к «Проектам» БЗО (D-02: «Проект» главный): связанная доска
+        берёт название, статус, сроки и владельца из «Проекта», поэтому
+        «Проект» приводится к описанию демо-доски через интерфейс — правка
+        приезжает на доску подпиской, как из раздела «Проекты». Доске без
+        связи «Проект» ищется по коду ``DEMO-T<n>`` и заводится, если его
+        нет. ``--purge`` «Проекты» не сносит: на них могли завести документы
+        модуля БЗО, а повторный сид находит их по коду."""
+        for index, spec in enumerate(PROJECTS, start=1):
+            board = boards[spec["name"]]
+            fields = {"name": board.name, "status": STATUS_TO_PROJECT[board.status],
+                      "date_start": board.start_date, "date_end": board.end_date,
+                      "manager_user_id": board.owner_id}
+            if board.project_ref:
+                project_interface.update_project(board.project_ref, actor_id=None, **fields)
+                continue
+            code = f"DEMO-T{index:02d}"
+            ref = project_interface.project_ids_by_code([code]).get(code)
+            if ref and Project.objects.filter(project_ref=ref).exists():
+                self.stdout.write(self.style.WARNING(
+                    f"  «Проект» {code} уже связан с другой доской — "
+                    f"«{board.name}» осталась без связи."))
+                continue
+            if ref:
+                project_interface.update_project(ref, actor_id=None, **fields)
+            else:
+                ref = project_interface.create_project(
+                    code=code, country_code="KZ", actor_id=None, **fields)
+            board.project_ref = ref
+            board.save(update_fields=["project_ref"])
 
     def _seed_roadmaps(self, projects, blocks,
                        owner_ids) -> dict[tuple[str, str, str], Roadmap]:

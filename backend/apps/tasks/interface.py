@@ -131,19 +131,36 @@ def find_project_by_name(name: str) -> dict | None:
 
 
 def projects_without_ref() -> list[dict]:
-    """Проекты доски без ссылки на «Проект» БЗО — для ``project_link_tasks``.
+    """Доски без ссылки на «Проект» БЗО — для ``project_link_tasks``.
 
-    Ровно ``id`` и ``name``: своего кода у доски нет, код «Проекта» команда
-    выводит из ``id``.
+    Поля доски — в словаре «Проекта» (``name``, ``status`` — ``active`` /
+    ``closed`` / ``archived``, ``date_start``, ``date_end``,
+    ``manager_user_id`` — владелец доски): команда заводит «Проект» из них,
+    и доска после связи повторяет его без правок. Своего кода у доски нет —
+    код «Проекта» команда выводит из ``id``.
     """
     require_service("tasks")
     from .models import Project
+    from .services.project_link import STATUS_TO_PROJECT
 
-    return list(Project.objects.filter(project_ref="").order_by("id").values("id", "name"))
+    return [{"id": row["id"], "name": row["name"], "status": STATUS_TO_PROJECT[row["status"]],
+             "date_start": row["start_date"], "date_end": row["end_date"],
+             "manager_user_id": row["owner_id"]}
+            for row in Project.objects.filter(project_ref="").order_by("id")
+            .values("id", "name", "status", "start_date", "end_date", "owner_id")]
+
+
+def linked_project_refs() -> set[str]:
+    """Ключи «Проектов», у которых уже есть доска задач (одна на проект)."""
+    require_service("tasks")
+    from .models import Project
+
+    return set(Project.objects.exclude(project_ref="").values_list("project_ref", flat=True))
 
 
 def set_project_ref(project_id: int, project_ref: str) -> None:
-    """Записать ссылку доски на «Проект» БЗО (строка UUID, не FK)."""
+    """Записать ссылку доски на «Проект» БЗО (строка UUID, не FK). Поля доски
+    вызывающий уже перенёс в «Проект» (``projects_without_ref``)."""
     require_service("tasks")
     from .models import Project
 

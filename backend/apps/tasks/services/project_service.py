@@ -22,6 +22,7 @@ from django.http import Http404
 from .. import schemas
 from ..models import TERMINAL_STATUSES, Project, ProjectSite, Task
 from . import hydration
+from . import project_link
 from . import site_service
 
 
@@ -60,16 +61,18 @@ def get_project(project_id: int, *, employee_scope: bool,
     return project
 
 
-def create_project(payload: dict, *, creator_id: int | None) -> Project:
-    if payload.get("owner_id") is None:
-        payload["owner_id"] = creator_id
-    return Project.objects.create(**payload)
+def create_project(payload: dict) -> Project:
+    """Доска — только к «Проекту» БЗО; владелец — его руководитель
+    (``project_link.create_linked``). Прежнее «владелец — создатель» ушло
+    вместе с правом доски на собственное название и сроки."""
+    return project_link.create_linked(payload)
 
 
 def update_project(project_id: int, changes: dict) -> Project:
     project = Project.objects.filter(pk=project_id).first()
     if project is None:
         raise Http404("Project not found")
+    changes = project_link.strip_mirrored(project, changes)
     for field, value in changes.items():
         setattr(project, field, value)
     # По СЛИТОЙ паре, а не по присланным полям: в PATCH может приехать одна
@@ -107,6 +110,7 @@ def build_responses(projects: list[Project]) -> list[schemas.ProjectResponse]:
     """One hydration pass and one metrics query for the whole batch."""
     metrics = _metrics([p.id for p in projects])
     users = hydration.user_briefs([p.owner_id for p in projects])
+    platform = hydration.project_briefs([p.project_ref for p in projects])
     departments = hydration.department_briefs(
         [p.department_id for p in projects])
     # Объекты — модель этого же аппа, поэтому один prefetch, а не батч через
@@ -142,6 +146,9 @@ def build_responses(projects: list[Project]) -> list[schemas.ProjectResponse]:
                       for link in site_links.get(project.id, [])],
             "site_ids": [link.site_id for link in site_links.get(project.id, [])],
             "use_production_calendar": project.use_production_calendar,
+            "project_ref": project.project_ref,
+            "project_code": (platform.get(project.project_ref) or {}).get("code"),
+            "linked": bool(project.project_ref),
             "task_count": task_count,
             "done_count": done_count,
             "progress": (round(done_count / task_count * 100, 1)
