@@ -160,6 +160,10 @@ MIDDLEWARE = [
     # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
     "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
+    # Заморозка «Договоров» после переноса в БЗО (A6.2): запись под
+    # /api/contracts/ замороженной компании — 403. После обоих верхних:
+    # нужен search_path компании, а выключенный модуль отвечает своим 503.
+    "apps.contracts.middleware.ContractsFreezeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
     # — gunicorn/uvicorn сами статику не отдают. Должен идти СРАЗУ после Security.

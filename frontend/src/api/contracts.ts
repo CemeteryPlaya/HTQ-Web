@@ -18,6 +18,7 @@ import type {
   BudgetFullCreatePayload,
   BudgetLineFlat,
   ContractsEnums,
+  ContractsFreeze,
   Counterparty,
   CounterpartyFullCreatePayload,
   Country,
@@ -90,6 +91,10 @@ export type InvoiceListParams = AgreementListParams;
 export const contractsApi = {
   /** Personal contracts actions; approval decisions remain in signoff. */
   myTasks: () => api.get<ContractsWorkItem[]>(path('tasks/mine')),
+
+  /** Заморожен ли раздел у компании (A6.2): после переноса в «Закупки и
+   *  оплаты» запись отвечает 403 `contracts_frozen`, чтение остаётся. */
+  getFreeze: () => api.get<ContractsFreeze>(path('freeze')),
 
   // ─── Справочники ───────────────────────────────────────────────────────
   getEnums: () => api.get<ContractsEnums>(path('enums')),

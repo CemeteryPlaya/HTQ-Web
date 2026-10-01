@@ -14,13 +14,15 @@ import { SubmitForApproval } from '@/components/signoff/SubmitForApproval';
 import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { Button } from '@/components/ui/button'; import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'; import { Input } from '@/components/ui/input'; import { Label } from '@/components/ui/label';
 import { usePermissions } from '@/hooks/usePermissions'; import { useHRLevel } from '@/hooks/useHRLevel';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 const PERMISSION = 'contracts.contract_payment.record_payment';
 
 // Формулировки те же, что в ContractPaymentDetailView.
 const statusLabel: Record<string, string> = { draft: 'Черновик', on_review: 'На согласовании', awaiting_accounting: 'Ожидает бухгалтерию', closed: 'Закрыта' };
 export default function ContractPaymentDetail() {
   const { id } = useParams<{ id: string }>(); const paymentId = Number(id); const queryClient = useQueryClient(); const [postingNumber, setPostingNumber] = useState(''); const [file, setFile] = useState<File | null>(null); const fileInput = useRef<HTMLInputElement>(null);
-  const permissions = usePermissions(); const { hasPerm } = useHRLevel(); const canRecord = permissions.atLeast('contracts', 'admin') || hasPerm(PERMISSION);
+  const { frozen } = useContractsFreeze(); // A6.2: архив — без правки
+  const permissions = usePermissions(); const { hasPerm } = useHRLevel(); const canRecord = !frozen && (permissions.atLeast('contracts', 'admin') || hasPerm(PERMISSION));
   const { data: payment, isLoading, isError } = useQuery({ queryKey: ['contracts', 'contract-payment', paymentId], queryFn: () => contractsApi.getContractPayment(paymentId).then(r => r.data), enabled: Number.isFinite(paymentId) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['contracts'] });
   const record = useMutation({ mutationFn: () => contractsApi.recordContractPayment(paymentId, postingNumber.trim(), file!).then(r => r.data), onSuccess: () => { refresh(); toast.success('Платёж проведён'); }, onError: e => reportApiError(e, 'Не удалось оформить платёж') });

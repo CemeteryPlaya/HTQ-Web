@@ -17,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { useHRLevel } from '@/hooks/useHRLevel';
 
 const PERMISSION = 'contracts.contract_payment.record_payment';
@@ -25,7 +26,8 @@ export default function GoodsInvoiceDetail() {
   const { id } = useParams<{ id: string }>(); const invoiceId = Number(id); const queryClient = useQueryClient();
   const [postingNumber, setPostingNumber] = useState(''); const [file, setFile] = useState<File | null>(null); const fileInput = useRef<HTMLInputElement>(null);
   const permissions = usePermissions(); const { hasPerm } = useHRLevel();
-  const canRecord = permissions.atLeast('contracts', 'admin') || hasPerm(PERMISSION);
+  const { frozen } = useContractsFreeze(); // A6.2: архив — без правки
+  const canRecord = !frozen && (permissions.atLeast('contracts', 'admin') || hasPerm(PERMISSION));
   const { data: invoice, isLoading, isError } = useQuery({ queryKey: ['contracts', 'goods-invoice', invoiceId], queryFn: () => contractsApi.getGoodsInvoice(invoiceId).then(r => r.data), enabled: Number.isFinite(invoiceId) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['contracts'] });
   const record = useMutation({ mutationFn: () => contractsApi.recordGoodsInvoice(invoiceId, postingNumber.trim(), file!).then(r => r.data), onSuccess: () => { refresh(); toast.success('Платёж проведён'); }, onError: e => reportApiError(e, 'Не удалось оформить платёж') });

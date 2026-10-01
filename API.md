@@ -536,6 +536,9 @@ business logic).
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    | Колокольчик — фасад над центром уведомлений (`apps.notifications`): лента компании запроса плюс общие; `id` и `target_id` — строки, `url` — ссылка писателя |
 | `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
+| `/api/tasks/v1/contractors/`, `contractors/{id}/` | GET, POST, PATCH, DELETE | Партнёры (подрядные организации). Связь с контрагентом модуля «Закупки и оплаты» (A6.1): ввод `bpp_counterparty_id` (UUID строкой; `null`/`""` — снять), в ответе `bpp_counterparty_id` и `bpp_counterparty {id, name, reg_number, status}` (`null` при заполненном ключе — модуль выключен). Новая связь — только с «Активен» (иначе 409), неизвестный ключ — 404, контрагент у другого партнёра или расходится БИН/ИИН — 409, выключенный модуль на записи связи — 503. Смена контрагента снимает договоры привлечений (номер в `contract_no` остаётся). Прежних `counterparty_id`/`counterparty` («Договоры») в API нет |
+| `/api/tasks/v1/contractors/counterparty-search`   | GET    | `?q=&limit=` (по умолчанию 20, до 100) — выбор контрагента в карточке партнёра: только «Активен», по наименованию или БИН/ИИН; строки `{id, name, short_name, reg_number, country_code, status, contact_person, phone, email, legal_address}`. Гейт — как у правки партнёра (`tasks:admin`, `admin=True`): ролей модуля закупок не требует; модуль выключен — 503 |
+| `/api/tasks/v1/contractor-engagements/`, `{id}/`  | GET, POST, PATCH, DELETE | Привлечения партнёра. `agreement_id` — договор «Договоров»: принимается, только если контрагент договора перенесён (B6.1) в контрагента модуля, с которым связан партнёр (иначе 409); номер ложится в `contract_no` |
 | `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
@@ -1053,6 +1056,39 @@ would mean approvers signed off on a document that is no longer in the card.
 Every path is registered in **both** the slashed and bare spelling
 (`APPEND_SLASH = False`). No frontend consumes this yet.
 
+**Заморозка после переноса в БЗО (A6.2, D-S6-4).** Признак — строка
+`contracts.FreezeState` в схеме компании; ставит и снимает её только
+`manage.py contracts_freeze --company <slug> [--comment …] [--actor <user_id>] [--undo]`
+— шаг ранбука после проверок `bpp_migrate_contracts` (морозит человек, когда ФД
+сверил сальдо). Повтор идемпотентен (дата первой заморозки не сдвигается),
+`--undo` возвращает запись. У замороженной компании:
+
+- любой метод, кроме `GET`/`HEAD`/`OPTIONS`, под `/api/contracts/` — **403**
+  `{"detail": "Раздел перенесён в «Закупки и оплаты». Данные доступны только для чтения.", "code": "contracts_frozen"}`
+  — до аутентификации и вьюхи, всем, включая суперпользователя
+  (`apps/contracts/middleware.py`, после `CompanyContextMiddleware` и
+  `ServiceGateMiddleware`; без компании запроса признак не спрашивается);
+- django-admin раздела — только чтение;
+- чтение (списки, карточки, файлы) работает как раньше; `ServiceStatus`
+  домена не трогается — архив обязан читаться;
+- соседние компании пишут как раньше.
+
+`GET /api/contracts/v1/freeze` → `{frozen, frozen_at, comment}` (права — как у
+остального чтения раздела: любой JWT; вне контекста компании — `frozen: false`).
+Карточки `GET agreements/{id}`, `invoices/{id}`, `counterparties/{id}` несут
+`migrated_to: [{target_type, target_id, number}]` — куда запись переехала в
+модуль (`bpp.interface.migrated_targets`, только документ того же рода:
+`bpp.agreement` / `bpp.invoice` / `bpp.counterparty`; техническая заявка
+переноса не показывается); в списках — `[]`, при выключенном `bpp` — `[]`.
+Согласования (`/api/signoff/`, мимо префикса раздела): в замороженной компании
+запуск согласования документа `contracts.*` и возврат закрытого документа на
+доработку — тоже 403 `contracts_frozen` (колбэки предметов, `approval_hooks._guard`).
+`contracts_freeze` не морозит раздел, пока есть идущие согласования его документов
+(ошибка со списком); `--revoke-pending` отзывает их (документы — в черновик) и
+замораживает одной транзакцией. Пока в схеме компании нет таблицы заморозки
+(код выкачен, `migrate_companies` не прогнан) раздел считается незамороженным
+(`fallback contracts.freeze.table_missing`, expected). Фоновых задач у `contracts` нет.
+
 **Purchase requests → documents.** `Agreement` and `Invoice` carry an optional
 `request_id` — the approved request of the form builder («Запросы») they
 fulfil, a plain integer (no cross-app FK). It is accepted on create and PATCH
@@ -1067,6 +1103,7 @@ is disabled. `?request_id=` filters `GET /agreements` and `GET /invoices`.
 
 | Endpoint                                          | Method | Notes                          |
 |---------------------------------------------------|--------|--------------------------------|
+| `/api/contracts/v1/freeze`                       | GET    | `{frozen, frozen_at, comment}` — раздел заморожен после переноса в БЗО (A6.2); запись тогда — 403 `contracts_frozen` |
 | `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
 | `/api/contracts/v1/countries`                    | GET, POST | Reference                   |
 | `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
@@ -1668,6 +1705,13 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 Для соседних аппок (`bpp.interface`): `find_by_number(number)` — счёт по
 `СЧ-ГГГГ-NNNNNN` для сверки выписки (A4.2); `closing_docs_pending_for_user
 (user_id)` — счета автора в «Ждёт закрывающих» для ежедневной сводки (A3.2).
+Для партнёров `tasks` (A6.1): `counterparty_brief(ids)` — `{id: {id, name,
+short_name, reg_number, country_code, status, contact_person, phone, email,
+legal_address}}` батчем (неизвестные и невозможные ключи пропускаются) и
+`search_counterparties(query, *, limit=20)` — те же карточки, только
+«Активен», по наименованию или номеру; `migrated_targets(source_type, ids)`
+— куда перенесены записи `contracts` (B6.1; у контрагентов `source_type =
+"contracts.counterparty"`, цель `bpp.counterparty`).
 
 **Контрагенты** — ядро модуля, без своего рубильника (ТЗ §18, L-08, D-20,
 задача A2.3). Без согласования; уникальна пара (страна, рег. номер), номер

@@ -55,6 +55,8 @@ import {
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
+import { MigratedTo } from './FrozenNotice';
 import type { InvoiceStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
@@ -84,6 +86,8 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
   const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
   const isAdmin = permissions.atLeast('contracts', 'admin');
+  // Раздел заморожен после переноса в БЗО (A6.2) — правки нет ни у кого.
+  const { frozen } = useContractsFreeze();
 
   const [nextStatus, setNextStatus] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
@@ -155,14 +159,16 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
     ? enums?.invoice_transitions?.[invoice.status] ?? []
     : [];
   const canUpload =
-    invoice !== undefined
+    !frozen
+    && invoice !== undefined
     && (isAdmin || (invoice.created_by === myId && invoice.status === 'draft'));
   // Правка — по тем же правам, что бэкенд (`InvoiceDetailView.patch`): автор
   // своего черновика либо администратор. Плюс ось согласования: пока счёт
   // заперт (`pending`/`approved`/`rejected`), править нельзя даже
   // администратору — `assert_editable` ответит 409, кнопку гасим заранее.
   const canEdit =
-    invoice !== undefined
+    !frozen
+    && invoice !== undefined
     && (isAdmin || (invoice.created_by === myId && invoice.status === 'draft'))
     && isEditableState(invoice.approval_state);
 
@@ -175,6 +181,7 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
 
   return (
     <div className="space-y-6">
+      <MigratedTo targets={invoice.migrated_to} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
@@ -408,7 +415,7 @@ const InvoiceDetailView = ({ id: invoiceId, embedded = false }: Props) => {
         </CardContent>
       </Card>
 
-      {isAdmin && (
+      {isAdmin && !frozen && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Смена статуса</CardTitle>

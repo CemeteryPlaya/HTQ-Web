@@ -11,7 +11,7 @@ import { Suspense } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { protectedRoutes } from '@/app/routing/routeDefinitions';
 import { isRoutableUrl } from '@/components/signoff/routable';
@@ -60,6 +60,12 @@ function permissionsWith(levels: Record<string, AccessLevel>): Permissions {
 
 const permissions = vi.fn(() => permissionsWith({ bpp: 'read' }));
 vi.mock('@/hooks/usePermissions', () => ({ usePermissions: () => permissions() }));
+
+// «Договоры» заморожены после переноса (A6.2) — архив в меню раздела.
+const NOT_FROZEN = { frozen: false, frozenAt: null as string | null, comment: '', isLoading: false };
+const contractsFreeze = vi.fn(() => NOT_FROZEN);
+vi.mock('@/hooks/useContractsFreeze', () => ({ useContractsFreeze: () => contractsFreeze() }));
+afterEach(() => { contractsFreeze.mockReturnValue(NOT_FROZEN); });
 
 function WhereAmI() {
   return <div data-testid="where">{useLocation().pathname}</div>;
@@ -127,6 +133,22 @@ describe('BppLayout — меню по правам', () => {
     const [side] = screen.getAllByRole('navigation', { name: 'Меню раздела' });
     const labels = Array.from(side.querySelectorAll('a')).map((a) => a.textContent);
     expect(labels).toEqual(['Бюджеты', 'План закупок']);
+  });
+
+  it('«Договоры» заморожены — последним пунктом «Архив договоров» → /contracts (A6.2)', () => {
+    permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));
+    contractsFreeze.mockReturnValue({ ...NOT_FROZEN, frozen: true, frozenAt: '2026-10-01T10:00:00Z' });
+    renderSection('/bpp/plan', FAKE);
+    const [side] = screen.getAllByRole('navigation', { name: 'Меню раздела' });
+    const links = Array.from(side.querySelectorAll('a'));
+    expect(links.map((a) => a.textContent)).toEqual(['План закупок', 'Архив договоров']);
+    expect(links[1]).toHaveAttribute('href', '/contracts');
+  });
+
+  it('не заморожены — архива в меню нет', () => {
+    permissions.mockReturnValue(permissionsWith({ bpp: 'read' }));
+    renderSection('/bpp/plan', FAKE);
+    expect(screen.queryAllByRole('link', { name: 'Архив договоров' })).toHaveLength(0);
   });
 
   it('неизвестный путь раздела — «нет такой страницы»', () => {

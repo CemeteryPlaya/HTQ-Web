@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { splitForHeader, visibleNavItems, type NavItem } from '@/app/navigation/navItems';
 import { CompanySwitcher } from '@/components/companies/CompanySwitcher';
 import { ArchivedCompanyBanner } from '@/components/companies/ArchivedCompanyBanner';
@@ -52,6 +53,8 @@ export const Header = () => {
     staleTime: 5 * 60 * 1000,
   });
   const permissions = usePermissions();
+  // «Договоры» после переноса в БЗО — архив в меню «Закупок и оплат» (A6.2).
+  const { frozen: contractsFrozen } = useContractsFreeze();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -127,6 +130,7 @@ export const Header = () => {
     hasMessenger: permissions.atLeast('messenger', 'read'),
     hasMail: permissions.atLeast('mail', 'read'),
     hasBpp: permissions.atLeast('bpp', 'read'),
+    contractsFrozen,
   });
 
   // Вкладок стало больше, чем помещается в один ряд: держим в ряду первые

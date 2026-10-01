@@ -23,6 +23,10 @@ urlpatterns = [
     path("tasks/mine", views.WorkQueueView.as_view()),
     path("tasks/mine/", views.WorkQueueView.as_view()),
 
+    # ── Заморозка раздела после переноса в БЗО (A6.2) ──
+    path("freeze", views.FreezeView.as_view()),
+    path("freeze/", views.FreezeView.as_view()),
+
     # ── Справочник choice-полей ──
     path("enums", views.EnumsView.as_view()),
     path("enums/", views.EnumsView.as_view()),

@@ -17,11 +17,12 @@
 import { Suspense, useMemo, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { ChevronRight, ShieldOff } from 'lucide-react';
+import { Archive, ChevronRight, ShieldOff } from 'lucide-react';
 
 import { BackToProfile } from '@/components/BackToProfile';
 import { Footer } from '@/components/Footer';
 import { Header } from '@/components/Header';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
@@ -80,6 +81,9 @@ export function BppLayout({ modules = bppModules }: Props) {
   const { t } = useTranslation();
   const location = useLocation();
   const permissions = usePermissions();
+  // «Договоры» заморожены после переноса (A6.2) — их архив живёт здесь,
+  // последним пунктом меню, а не в шапке приложения.
+  const { frozen: contractsFrozen } = useContractsFreeze();
 
   const menu = useMemo(
     () => modules
@@ -115,6 +119,20 @@ export function BppLayout({ modules = bppModules }: Props) {
     );
   };
 
+  /** «Архив договоров» — старый раздел `/contracts`, только чтение (A6.2). */
+  const renderArchiveLink = (variant: 'side' | 'strip') => (
+    <Link
+      key="contracts-archive"
+      to="/contracts"
+      className={variant === 'side'
+        ? 'mt-2 flex items-center gap-2.5 rounded-lg border-t px-3 py-2 pt-3 text-sm font-medium text-muted-foreground transition-all duration-150 hover:bg-accent/80 hover:text-foreground'
+        : 'flex min-h-[44px] items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-muted-foreground transition-all hover:bg-muted hover:text-foreground'}
+    >
+      <Archive className="h-4 w-4 shrink-0" />
+      <span className="flex-1 truncate">{t('contracts.nav.archive', 'Архив договоров')}</span>
+    </Link>
+  );
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
@@ -133,6 +151,7 @@ export function BppLayout({ modules = bppModules }: Props) {
               className="mb-6 flex items-center gap-1.5 overflow-x-auto rounded-2xl border bg-card/80 p-2 shadow-2xs lg:hidden scrollbar-none"
             >
               {menu.map((item) => renderLink(item, 'strip'))}
+              {contractsFrozen && renderArchiveLink('strip')}
             </nav>
           )}
 
@@ -144,6 +163,7 @@ export function BppLayout({ modules = bppModules }: Props) {
                   className="sticky top-20 flex flex-col gap-0.5 rounded-2xl border bg-card p-3.5 shadow-2xs"
                 >
                   {menu.map((item) => renderLink(item, 'side'))}
+                  {contractsFrozen && renderArchiveLink('side')}
                 </nav>
               </aside>
             )}

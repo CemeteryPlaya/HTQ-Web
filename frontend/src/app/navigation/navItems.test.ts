@@ -56,6 +56,24 @@ describe('navItems', () => {
     expect(bottomNavItems({ ...PLAIN, hasBpp: true }).map((i) => i.id)).not.toContain('bpp');
   });
 
+  it('«Договоры» заморожены и есть bpp:read — пункт уходит из шапки в «Закупки и оплаты» (A6.2)', () => {
+    const ids = visibleNavItems({ ...PLAIN, hasBpp: true, contractsFrozen: true }).map((i) => i.id);
+    expect(ids).not.toContain('contracts');
+    expect(ids).toContain('bpp');
+  });
+
+  it('«Договоры» заморожены без bpp:read — в шапке остаётся «Архив договоров»', () => {
+    const item = visibleNavItems({ ...PLAIN, contractsFrozen: true }).find((i) => i.id === 'contracts');
+    expect(item?.href).toBe('/contracts');
+    expect(item?.labelFallback).toBe('Архив договоров');
+    expect(item?.labelKey).toBe('contracts.nav.archive');
+  });
+
+  it('не заморожены — «Договоры» как раньше', () => {
+    const item = visibleNavItems({ ...PLAIN, hasBpp: true }).find((i) => i.id === 'contracts');
+    expect(item?.labelFallback).toBe('Договоры');
+  });
+
   it('без доступа к мессенджеру и почте их пунктов нет (иначе клик — 403)', () => {
     const ids = visibleNavItems(NO_COMMS).map((i) => i.id);
     expect(ids).not.toContain('messenger');
