@@ -115,6 +115,33 @@ describe('HistoryTab', () => {
     expect(screen.getByRole('listitem')).toHaveTextContent('amount: — → 1 000,00');
   });
 
+  it('действия записи KPI подписаны; коды значений — по valueLabels', async () => {
+    get.mockResolvedValue({
+      data: [
+        entry({ id: '1', action: 'confirmed', changes: { status: ['preliminary', 'confirmed'] } }),
+        entry({ id: '2', action: 'recalculated' }),
+        entry({ id: '3', action: 'annulled' }),
+        entry({ id: '4', action: 'annulled_system', actor_id: null, changes: { status: ['confirmed', 'odd'] } }),
+      ],
+    });
+
+    renderWithProviders(
+      <HistoryTab
+        objectType="bpp.kpirecord"
+        objectId="1"
+        fieldLabels={{ status: 'Статус' }}
+        valueLabels={{ status: { preliminary: 'Предварительный', confirmed: 'Подтверждён' } }}
+      />,
+    );
+
+    expect(await screen.findByText('Пересчитан')).toBeInTheDocument();
+    expect(screen.getByText('Аннулирован')).toBeInTheDocument();
+    expect(screen.getByText('Аннулирован системой')).toBeInTheDocument();
+    const items = screen.getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Статус: Подтверждён → odd');
+    expect(items[1]).toHaveTextContent('Статус: Предварительный → Подтверждён');
+  });
+
   it('пустой журнал — «Изменений пока нет»', async () => {
     get.mockResolvedValue({ data: [] });
     renderWithProviders(<HistoryTab objectType="bpp.purchaserequest" objectId="1" />);

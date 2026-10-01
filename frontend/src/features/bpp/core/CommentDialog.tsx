@@ -1,6 +1,7 @@
 /**
- * Диалог с комментарием — общий для «Подтвердить», «Отменить сопоставление»
- * и «Исключить» (BR-060: комментарий не короче 10 символов).
+ * Диалог с комментарием — общий для действий модуля, требующих причины
+ * (BR-060: комментарий не короче 10 символов): «Подтвердить», «Отменить
+ * сопоставление» и «Исключить» сверки выписки, «Аннулировать» запись KPI.
  *
  * Пока комментарий короче, кнопка закрыта и рядом счётчик «7 из 10». Отказ
  * сервера остаётся в диалоге: по полю (`fields` конверта D-28, например
@@ -21,9 +22,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { errorDetail, reportApiError } from '@/lib/apiError';
 
 import { errorFields } from '../counterparties/errors';
-import { useIdempotentAction } from '../core/useIdempotentAction';
 
-import { COMMENT_MIN } from './api';
+import { useIdempotentAction } from './useIdempotentAction';
+
+/** Минимальная длина комментария (BR-060). */
+const COMMENT_MIN = 10;
 
 interface Props {
   title: string;
@@ -74,18 +77,18 @@ export function CommentDialog({
         </DialogHeader>
         {children}
         <div className="space-y-1.5">
-          <Label htmlFor="recon-comment">{t('bpp.bank.commentLabel', 'Комментарий')}</Label>
+          <Label htmlFor="bpp-comment">{t('bpp.common.commentLabel', 'Комментарий')}</Label>
           <Textarea
-            id="recon-comment"
+            id="bpp-comment"
             value={comment}
             onChange={(event) => { setComment(event.target.value); setFieldError(null); }}
             rows={3}
             maxLength={1000}
             aria-invalid={Boolean(fieldError)}
-            aria-describedby="recon-comment-hint"
+            aria-describedby="bpp-comment-hint"
           />
-          <p id="recon-comment-hint" className="text-xs text-muted-foreground">
-            {t('bpp.bank.commentHint', 'Не короче {{min}} символов: {{count}} из {{min}}', {
+          <p id="bpp-comment-hint" className="text-xs text-muted-foreground">
+            {t('bpp.common.commentHint', 'Не короче {{min}} символов: {{count}} из {{min}}', {
               min: COMMENT_MIN, count: Math.min(length, COMMENT_MIN),
             })}
           </p>
@@ -93,7 +96,7 @@ export function CommentDialog({
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={action.pending} onClick={() => onClose(false)}>
-            {t('bpp.bank.dialogCancel', 'Отмена')}
+            {t('bpp.common.dialogCancel', 'Отмена')}
           </Button>
           <Button
             type="button"

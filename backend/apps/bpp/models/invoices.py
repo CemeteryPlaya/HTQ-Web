@@ -115,6 +115,9 @@ class Invoice(signoff.Approvable, VersionedModel):
     # Непроверенного контрагента автор подтвердил при отправке (D-20).
     counterparty_confirmed = models.BooleanField(default=False, db_default=False)
     is_migrated = models.BooleanField(default=False, db_default=False)
+    # Лимит альтернативных предложений (A5.1, ТЗ §12.1, D-S5-2): 3 по
+    # умолчанию, как у договора; поднимает СН — автор счёта, не выше 10.
+    alt_limit = models.PositiveSmallIntegerField(default=3, db_default=3)
 
     class Meta:
         constraints = [

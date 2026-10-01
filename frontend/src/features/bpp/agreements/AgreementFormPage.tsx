@@ -41,6 +41,7 @@ import { StatusBadge } from '../core/StatusBadge';
 import { useCounterpartyConfirmation } from '../counterparties/useCounterpartyConfirmation';
 import { formatDate, formatMoney, parseMoneyInput } from '../format';
 import { INVOICES_BASE, invoiceApi } from '../invoices/api';
+import { AlternativesBlock } from '../alternatives/AlternativesBlock';
 import { shownQty } from '../plan/planSelection';
 
 import {
@@ -474,6 +475,10 @@ export function AgreementFormPage() {
                 <p className="text-sm text-destructive">{errors.items ?? errors.items_total}</p>
               )}
             </section>
+          )}
+
+          {!card.is_open && card.parent === null && (
+            <AlternativesBlock sourceType="agreement" sourceId={card.id} />
           )}
 
           {card.supplements.length > 0 && (

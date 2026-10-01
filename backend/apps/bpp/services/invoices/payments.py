@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from apps.bpp.models import Invoice, InvoiceBasis, InvoiceStatus, PaymentMark
 from apps.bpp.services.actor import Actor
+from apps.bpp.services.alternatives import kpi
 from apps.bpp.services.core import audit
 from apps.bpp.services.core import files as core_files
 from apps.bpp.services.counterparties import lookup as counterparties
@@ -97,6 +98,7 @@ def mark_paid(actor: Actor, invoice_id, *, pay_date: date, amount, pp_number: st
     if (inv.status == InvoiceStatus.PAID and inv.basis == InvoiceBasis.NO_CONTRACT
             and inv.counterparty_id):
         counterparties.record_success(inv.counterparty_id)
+    kpi.sync_for_document("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
     return inv
 
 
@@ -126,6 +128,7 @@ def unmark(actor: Actor, invoice_id, mark_id, *, comment: str) -> Invoice:
     service.touch(inv, actor.user_id, "status")
     audit.record(inv, "payment_unmarked", actor_id=actor.user_id, comment=comment,
                  changes={"amount": str(mark.amount), "pay_date": mark.pay_date.isoformat()})
+    kpi.sync_for_document("invoice", inv.pk)  # снятая отметка подтверждённый KPI не откатывает
     return inv
 
 

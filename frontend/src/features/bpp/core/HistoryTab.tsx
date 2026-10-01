@@ -14,6 +14,7 @@
  * Поля журнала — имена полей модели (`total_amount`); подписи и список
  * денежных полей даёт экран документа (`fieldLabels`, `moneyFields`): он
  * знает свою модель, вкладка — нет. Без подписи поле показывается именем.
+ * Коды значений (статус `confirmed`) экран подписывает так же — `valueLabels`.
  */
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -71,6 +72,11 @@ const ACTIONS: Record<string, [string, string]> = {
   file_replaced: ['bpp.history.action.file_replaced', 'Загружена новая версия файла'],
   file_deleted: ['bpp.history.action.file_deleted', 'Удалён файл'],
   file_downloaded: ['bpp.history.action.file_downloaded', 'Скачан файл'],
+  // Запись KPI снабжения (`services/alternatives/kpi.py`, A5.2).
+  confirmed: ['bpp.history.action.confirmed', 'Подтверждён'],
+  recalculated: ['bpp.history.action.recalculated', 'Пересчитан'],
+  annulled: ['bpp.history.action.annulled', 'Аннулирован'],
+  annulled_system: ['bpp.history.action.annulled_system', 'Аннулирован системой'],
 };
 
 export interface HistoryFieldOptions {
@@ -78,6 +84,8 @@ export interface HistoryFieldOptions {
   fieldLabels?: Record<string, string>;
   /** Поля-суммы — показываются как `1 250 000,00`. */
   moneyFields?: readonly string[];
+  /** Подписи кодов по полю: `{status: {confirmed: 'Подтверждён'}}`; неизвестный код — как пришёл. */
+  valueLabels?: Record<string, Record<string, string>>;
 }
 
 interface Props extends HistoryFieldOptions {
@@ -86,7 +94,9 @@ interface Props extends HistoryFieldOptions {
   objectId: string;
 }
 
-export function HistoryTab({ objectType, objectId, fieldLabels, moneyFields }: Props) {
+export function HistoryTab({
+  objectType, objectId, fieldLabels, moneyFields, valueLabels,
+}: Props) {
   const { t } = useTranslation();
   const { data = [], isLoading, error } = useQuery({
     queryKey: ['bpp', 'history', objectType, objectId],
@@ -124,6 +134,8 @@ export function HistoryTab({ objectType, objectId, fieldLabels, moneyFields }: P
     if (entry.actor_id === null) return t('bpp.history.system', 'Система');
     return t('bpp.history.user', 'Пользователь №{{id}}', { id: entry.actor_id });
   };
+  const valueOf = (field: string, value: string | undefined) =>
+    (value === undefined ? undefined : valueLabels?.[field]?.[value] ?? value);
   const actionOf = (action: string) => {
     const known = ACTIONS[action];
     return known ? t(known[0], known[1]) : action;
@@ -146,7 +158,9 @@ export function HistoryTab({ objectType, objectId, fieldLabels, moneyFields }: P
         </TableHeader>
         <TableBody>
           {entries.map((entry) => {
-            const rows = changeRows(entry.changes, { moneyFields });
+            const rows = changeRows(entry.changes, { moneyFields }).map((row) => ({
+              ...row, before: valueOf(row.field, row.before), after: valueOf(row.field, row.after),
+            }));
             return (
               <TableRow key={entry.id}>
                 <TableCell className="whitespace-nowrap tabular-nums">

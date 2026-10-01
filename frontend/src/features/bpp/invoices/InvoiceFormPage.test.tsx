@@ -28,6 +28,9 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: () => ({ can: () => true, atLeast: () => true }),
 }));
+vi.mock('@/hooks/useActiveProfile', () => ({
+  useActiveProfile: () => ({ activeProfile: { id: '1' } }),
+}));
 vi.mock('../core/HistoryTab', () => ({ HistoryTab: () => <div>История</div> }));
 vi.mock('../core/ApprovalTab', () => ({ ApprovalTab: () => <div>Согласование</div> }));
 vi.mock('@/components/files/FilesPanel', () => ({ FilesPanel: () => <div>Файлы</div> }));
@@ -71,6 +74,27 @@ function serve(invoice: InvoiceCard) {
     return Promise.resolve({ data: [] });
   });
 }
+
+
+const COMPARISON = {
+  source: {
+    kind: 'source', source_type: 'SRC', id: ID, number: 'ДОК-1', status: 'x', status_label: 'x',
+    url: '/x', counterparty: null, currency_code: 'KZT', amount: '1.00', amount_kzt: '1.00',
+    with_vat: false, vat_rate: null, vat_amount: null, delivery_date: null, payment_terms: null,
+    author: { id: 1, name: 'А' },
+  },
+  offers: [], positions: [], limit: 3, submitted_count: 0, window_open: true,
+  can_propose: true, propose_blocked_reason: null, my_offer_id: null,
+};
+
+/** Сравнение альтернатив отвечает поверх того, что уже отдаёт `serve`. */
+function withComparison(type: 'invoice' | 'agreement') {
+  const base = get.getMockImplementation()!;
+  get.mockImplementation((url: string) => (url.includes('/comparison')
+    ? Promise.resolve({ data: { ...COMPARISON, source: { ...COMPARISON.source, source_type: type } } })
+    : base(url)));
+}
+const comparisonAsked = () => get.mock.calls.some(([url]) => String(url).includes('/comparison'));
 
 function renderForm() {
   return render(
@@ -193,5 +217,28 @@ describe('InvoiceFormPage', () => {
     const [url, body] = post.mock.calls[0];
     expect(url).toContain(`invoices/${ID}/payments`);
     expect(body).toEqual({ pay_date: localToday(), amount: '600.00', pp_number: '77', rate: null });
+  });
+
+  it('счёт без договора — под позициями блок «Альтернативы»; по договору — блока нет', { timeout: 15000 }, async () => {
+    serve(card());
+    withComparison('invoice');
+    renderForm();
+    expect(await screen.findByRole('button', { name: 'Предложить альтернативу' }, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByTestId('alternatives-block')).toBeInTheDocument();
+  });
+
+  it('счёт по договору — сравнение альтернатив не запрашивается', { timeout: 15000 }, async () => {
+    serve(card({
+      basis: 'contract',
+      agreement: {
+        id: 'ag', number: 'ДГ-1', ext_number: '1', ext_date: null, is_open: false,
+        status: 'active', effective_amount: '1.00', remaining: '1.00',
+      },
+    }));
+    withComparison('invoice');
+    renderForm();
+    await screen.findByText('СЧ-2026-000001', {}, { timeout: 4000 });
+    expect(comparisonAsked()).toBe(false);
+    expect(screen.queryByTestId('alternatives-block')).toBeNull();
   });
 });
