@@ -24,6 +24,9 @@ export interface Project {
   manager_user_id: number | null;
   customer_name: string;
   customer_counterparty_id: string | null;
+  /** Сроки проекта — их повторяет доска задач проекта (D-02). */
+  date_start?: string | null;
+  date_end?: string | null;
 }
 
 export interface ProjectCreate {
@@ -47,6 +50,8 @@ export interface ProjectPatch {
   customer_name?: string;
   /** Пустая строка снимает выбор. */
   customer_counterparty_id?: string;
+  date_start?: string | null;
+  date_end?: string | null;
 }
 
 const path = (suffix = '') => apiPath('project', suffix ? `projects/${suffix}` : 'projects');

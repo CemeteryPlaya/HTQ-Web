@@ -46,6 +46,7 @@ from typing import Iterable
 
 from apps.core.services import ServiceDisabled
 from apps.hr import interface as hr_interface
+from apps.project import interface as project_interface
 from apps.users import interface as users_interface
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,16 @@ def department_briefs(department_ids: Iterable[int | None]) -> dict[int, dict]:
     rows = _safe(lambda: hr_interface.get_departments_brief(ids),
                  "hr.get_departments_brief", [])
     return {row["id"]: row for row in rows if row.get("id") is not None}
+
+
+def project_briefs(refs: Iterable[str]) -> dict[str, dict]:
+    """Map ``project_ref -> паспорт «Проекта»`` для связанных досок (код в
+    ответе доски). Пустые ссылки не спрашиваются."""
+    keys = sorted({ref for ref in refs if ref})
+    if not keys:
+        return {}
+    return _safe(lambda: project_interface.project_brief(keys),
+                 "project.project_brief", {})
 
 
 def user_name(briefs: dict[int, dict], user_id: int | None) -> str | None:
