@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import ProgrammingError
 from django.utils import timezone
+from psycopg import errors as pg_errors
 
 from apps.companies import interface as companies
 from apps.contracts.services import freeze
@@ -50,6 +52,16 @@ class Command(BaseCommand):
         if not companies.schema_exists(company):
             raise CommandError(f"У компании «{company}» нет схемы — сначала migrate_companies.")
 
+        try:
+            self._run(company, undo, comment, actor, revoke_pending)
+        except ProgrammingError as exc:
+            if not isinstance(exc.__cause__, pg_errors.UndefinedTable):
+                raise
+            raise CommandError(
+                f"У «{company}» нет таблицы заморозки (contracts_freezestate): "
+                "сначала migrate_companies, затем повторите команду.") from exc
+
+    def _run(self, company, undo, comment, actor, revoke_pending):
         with use_company(company):
             if undo:
                 changed = freeze.unfreeze(actor_id=actor, comment=comment)

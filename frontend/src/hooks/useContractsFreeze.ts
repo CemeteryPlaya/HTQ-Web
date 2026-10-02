@@ -35,7 +35,14 @@ export function useContractsFreeze(active = true): ContractsFreezeState {
     && companyFromHost(window.location.host) !== null;
   const { data, isLoading } = useQuery({
     queryKey: CONTRACTS_FREEZE_KEY,
-    queryFn: () => contractsApi.getFreeze().then((r) => r.data),
+    // Модуль «Договоры» выключен (503 service_disabled) — это «не заморожен», а не
+    // ошибка: ответ-значение react-query держит свежим (staleTime), ошибку —
+    // перезапрашивал бы на каждом переходе (M-2 итогового ревью).
+    queryFn: () => contractsApi.getFreeze().then((r) => r.data).catch((err: unknown) => {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 503) return { frozen: false, frozen_at: null, comment: '' };
+      throw err;
+    }),
     enabled,
     // Морозят раз в жизни компании — дёргать ручку на каждой странице незачем.
     staleTime: 10 * 60 * 1000,

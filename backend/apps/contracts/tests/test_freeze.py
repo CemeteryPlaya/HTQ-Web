@@ -317,6 +317,30 @@ def test_missing_table_means_not_frozen_and_keeps_the_transaction(two_company_sc
     assert resp.status_code == 201, resp.content
 
 
+@pytest.mark.django_db(transaction=True)
+def test_command_without_freeze_table_says_run_migrate_companies(two_company_schemas,
+                                                                monkeypatch):
+    """M-4 итогового ревью: до migrate_companies команда отвечает понятным
+    CommandError, а не трассировкой ProgrammingError.
+
+    Таблицу не переименовываем: в тестовой БД такая же лежит в ``public``, и
+    ``search_path`` нашёл бы её там. Запрос настоящий — к несуществующей
+    таблице, Postgres отвечает ``UndefinedTable``, как на схеме без миграции."""
+    from django.core.management.base import CommandError
+    from django.db import connection
+
+    def missing_table(*args, **kwargs):
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1 FROM contracts_freezestate_no_such_table")
+
+    monkeypatch.setattr(freeze, "freeze", missing_table)
+    monkeypatch.setattr(freeze, "unfreeze", missing_table)
+    alpha = two_company_schemas[0]
+    for kwargs in ({}, {"undo": True}):
+        with pytest.raises(CommandError, match="migrate_companies"):
+            call_command("contracts_freeze", company=alpha, **kwargs)
+
+
 # ── «Перенесён в …» ────────────────────────────────────────────────────
 
 @pytest.mark.django_db(transaction=True)
