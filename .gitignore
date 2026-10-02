@@ -25,6 +25,8 @@ ENV/
 backend/staticfiles/
 
 # ─── Environment / Secrets ───────────────────────────────────────────────────
+# Файлы секретов интеграций (secrets/onec.env — доступы к 1С, D-S7-5): каталог игнорируется целиком
+secrets/
 # Keep .env.example (template), ignore actual .env files with real secrets
 .env
 .env.production

@@ -1,4 +1,6 @@
 .venv/
+secrets/
+**/secrets/
 **/__pycache__/
 *.pyc
 *.pyo

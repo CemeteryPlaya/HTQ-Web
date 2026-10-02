@@ -2,6 +2,10 @@
 .git
 .gitignore
 
+# ── Секреты интеграций (доступы к 1С): в образ не попадают, в контейнер идут через env_file ──
+secrets/
+**/secrets/
+
 # ── Python ──
 .venv
 venv
