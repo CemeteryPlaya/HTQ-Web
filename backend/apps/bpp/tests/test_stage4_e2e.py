@@ -38,6 +38,7 @@ from apps.bpp.tests import stage2 as s
 from apps.bpp.tests import test_invoices as invoice_flow
 from apps.bpp.tests.bank import common
 from apps.bpp.tests.test_files import memory_storage  # noqa: F401  (фикстура: хранилище в памяти)
+from apps.refdata import interface as refdata
 
 pytestmark = pytest.mark.django_db
 
@@ -96,12 +97,10 @@ class _FutureClock:
         return getattr(timezone, name)
 
 
-def _after_working_days(day, days):
-    while days > 0:
-        day += timedelta(days=1)
-        if day.weekday() < 5:
-            days -= 1
-    return day
+def _after_bank_days(day, days):
+    """Та же мера, что у фильтра ``bank_wait_days`` (D-S7-7), а не копия Пн–Пт —
+    иначе тест плавает в окне праздников РК."""
+    return refdata.add_bank_days(day, days)
 
 
 def test_pay_reconcile_cancel_and_reload(company_context, monkeypatch,
@@ -154,7 +153,7 @@ def test_pay_reconcile_cancel_and_reload(company_context, monkeypatch,
     assert (rows["full"]["count"], rows["bank_unconfirmed"]["count"]) == (0, 0)  # сегодня
 
     # Через 4 рабочих дня банк всё ещё молчит — показатель загорается.
-    later = _after_working_days(timezone.localdate(), 4)
+    later = _after_bank_days(timezone.localdate(), 4)
     with monkeypatch.context() as patch:
         patch.setattr(invoices_read, "timezone", _FutureClock(later))
         rows = _indicators(slug)

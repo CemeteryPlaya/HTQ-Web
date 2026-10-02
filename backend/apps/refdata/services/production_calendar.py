@@ -201,3 +201,62 @@ def add_working_days(start: date, count: int, *, max_count: int = 3650) -> date 
                 return day
         day += timedelta(days=1)
     return None
+
+
+# ── банковские дни (A7.2, D-S7-7) ───────────────────────────────────────
+
+_NON_BANK_OVERRIDES = frozenset({"holiday", "weekend"})
+
+
+def is_bank_day(day: date) -> bool:
+    """Банк работает: Пн–Пт и не праздник РК, КРОМЕ дня переноса праздника,
+    выпавшего на субботу (в него банк работает; перенос с воскресенья — нет).
+    Рабочая суббота и выходные небанковские; ручное «праздник»/«выходной»
+    закрывает день и для банка, а ручное «рабочий» банк не открывает."""
+    return _bank_day(day, _stored_types(day, day))
+
+
+def add_bank_days(start: date, count: int, *, max_count: int = 3650) -> date:
+    """Дата через ``count`` банковских дней ПОСЛЕ ``start`` (сам ``start`` не
+    считается; ``count <= 0`` — ``start``)."""
+    if count <= 0:
+        return start
+    count = min(count, max_count)
+    stored = _stored_types(start, start + timedelta(days=count * _SCAN_FACTOR + _SCAN_SLACK_DAYS))
+    day = start
+    while count > 0:
+        day += timedelta(days=1)
+        if _bank_day(day, stored):
+            count -= 1
+    return day
+
+
+def bank_days_before(day: date, count: int, *, max_count: int = 3650) -> date:
+    """День, отстоящий от ``day`` на ``count`` банковских дней назад (сам ``day``
+    не считается). Отметка раньше него ждёт банк дольше ``count`` дней.
+    ``count`` ограничен ``max_count`` (иначе обход ушёл бы за ``date.min``)."""
+    if count <= 0:
+        return day
+    count = min(count, max_count)
+    stored = _stored_types(day - timedelta(days=count * _SCAN_FACTOR + _SCAN_SLACK_DAYS), day)
+    while count > 0:
+        day -= timedelta(days=1)
+        if _bank_day(day, stored):
+            count -= 1
+    return day
+
+
+def _stored_types(start: date, end: date) -> dict[date, str]:
+    return dict(ProductionDay.objects.filter(date__gte=start, date__lte=end)
+                .values_list("date", "day_type"))
+
+
+def _bank_day(day: date, stored: dict[date, str]) -> bool:
+    if stored.get(day) in _NON_BANK_OVERRIDES:
+        return False
+    if day.weekday() >= 5:
+        return False
+    if not kz_holidays.is_holiday(day):
+        return True
+    source = kz_holidays.transfer_source(day)
+    return source is not None and source.weekday() == 5

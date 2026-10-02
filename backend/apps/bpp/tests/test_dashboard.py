@@ -41,7 +41,7 @@ from apps.bpp.models import (
 from apps.bpp.services.bank import recon
 from apps.bpp.services.budget import committed as committed_calc
 from apps.bpp.services.dashboard import payments as dashboard
-from apps.bpp.services.invoices.read import working_days_before
+from apps.bpp.services.invoices.read import bank_days_before
 from apps.bpp.tests import stage2 as s
 from apps.bpp.tests import test_invoices as invoice_flow
 from apps.bpp.tests.bank import common
@@ -124,7 +124,7 @@ def _get(slug, user_id, code, url=URL, **params):
 def _world(slug) -> dict:
     """Счета во всех состояниях, которые различают показатели."""
     today = timezone.localdate()
-    stale_day = working_days_before(today, dashboard.BANK_WAIT_WORKING_DAYS + 1)
+    stale_day = bank_days_before(today, dashboard.BANK_WAIT_WORKING_DAYS + 1)
     w = {
         "fd": _inv(InvoiceStatus.UNDER_REVIEW, 100),
         "to_pay": _inv(InvoiceStatus.TO_PAY, 200),
@@ -246,8 +246,8 @@ def test_underpaid_and_overpaid_sums(company_context):
 def test_bank_unconfirmed_counts_three_working_days(company_context):
     slug = company_context["slug"]
     today = timezone.localdate()
-    edge = working_days_before(today, 3)
-    older = working_days_before(today, 4)
+    edge = bank_days_before(today, 3)
+    older = bank_days_before(today, 4)
     on_edge = _inv(InvoiceStatus.PAID, 100)
     _mark(on_edge, edge)
     stale = _inv(InvoiceStatus.PAID, 200)
@@ -271,13 +271,13 @@ def test_bank_unconfirmed_counts_three_working_days(company_context):
     assert "bank_wait_days=3" in row["link"]
 
 
-def test_working_days_before_skips_weekends():
+def test_bank_days_before_skips_weekends():
     from datetime import date
 
     monday = date(2026, 9, 28)
-    assert working_days_before(monday, 1) == date(2026, 9, 25)
-    assert working_days_before(monday, 3) == date(2026, 9, 23)
-    assert working_days_before(date(2026, 9, 30), 3) == date(2026, 9, 25)
+    assert bank_days_before(monday, 1) == date(2026, 9, 25)
+    assert bank_days_before(monday, 3) == date(2026, 9, 23)
+    assert bank_days_before(date(2026, 9, 30), 3) == date(2026, 9, 25)
 
 
 # ── графики ─────────────────────────────────────────────────────────────
@@ -620,3 +620,42 @@ def test_unmatched_counterparty_filter_compares_bin_normalised(company_context):
     row = _by_key(dashboard.dashboard(
         fd, dashboard.Filters(counterparty_id=str(foreign.pk))))["unmatched"]
     assert (row["count"], row["amount"]) == (1, D("80.00"))
+
+
+# ── банковские дни (A7.2, D-S7-7) ───────────────────────────────────────
+
+class _PinnedClock:
+    def __init__(self, today):
+        self._today = today
+
+    def localdate(self, *args, **kwargs):
+        return self._today
+
+    def __getattr__(self, name):
+        return getattr(timezone, name)
+
+
+def test_bank_unconfirmed_skips_nonbank_days_and_matches_registry(company_context, monkeypatch):
+    """Сегодня 30.03.2026: три банковских дня назад — 24.03 (перенос с субботы:
+    банк работал), 25.03 (перенос с воскресенья) и 23.03 (праздник) не считаются.
+    Отметка 24.03 — на границе, 23.03 — просрочена. Дашборд и ``total`` реестра
+    по ссылке совпадают."""
+    from datetime import date
+
+    from apps.bpp.services.invoices import read as invoices_read
+
+    monkeypatch.setattr(invoices_read, "timezone", _PinnedClock(date(2026, 3, 30)))
+    slug = company_context["slug"]
+    stale = _inv(InvoiceStatus.PAID, 100)
+    _mark(stale, date(2026, 3, 23))
+    edge = _inv(InvoiceStatus.PAID, 200)
+    _mark(edge, date(2026, 3, 24))
+    assert invoices_read.bank_days_before(date(2026, 3, 30), 3) == date(2026, 3, 24)
+
+    response = _get(slug, s.FD, "bpp-fd")
+    assert response.status_code == 200, response.content
+    row = _by_key(response.json())["bank_unconfirmed"]
+    assert row["count"] == 1 and D(str(row["amount"])) == D("100.00")
+    link = urlsplit(row["link"])
+    registry = Client().get(f"{BASE}/invoices?{link.query}", **s.auth(slug, s.FD))
+    assert registry.json()["total"] == row["count"]

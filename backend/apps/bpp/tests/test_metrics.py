@@ -133,6 +133,18 @@ def test_stale_threshold_counts_working_days(today, sent, stale):
     assert (since < metrics._stale_before(now)) is stale
 
 
+@pytest.mark.parametrize(("sent", "stale"), [
+    # Вт 31.03.2026: пять дней Пн–Пт назад — Вт 24.03 (праздники РК согласования
+    # не останавливают, D-S7-7: 23.03 — Пн, считается как обычный будний день).
+    (date(2026, 3, 24), False),
+    (date(2026, 3, 23), True),
+])
+def test_stale_threshold_ignores_holidays_unlike_bank_days(sent, stale):
+    now = timezone.make_aware(datetime.combine(date(2026, 3, 31), time(12)))
+    since = timezone.make_aware(datetime.combine(sent, time(9)))
+    assert (since < metrics._stale_before(now)) is stale
+
+
 # ── ночная сверка «Задействовано» (D-S3-4) ───────────────────────────────
 
 def test_no_check_result_exports_neither_check_metric(company_context):

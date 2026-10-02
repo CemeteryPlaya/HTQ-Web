@@ -14,9 +14,10 @@ from .services import editing, lookup
 from .services import production_calendar as calendar
 from .services.lookup import RefdataMissing  # noqa: F401 — часть контракта
 
-__all__ = ["RefdataMissing", "active_articles", "add_working_days", "article_brief",
-           "article_groups", "can_edit", "contract_threshold", "country_brief", "day_type",
-           "days_between", "exchange_rate", "is_working_day", "mrp", "production_days",
+__all__ = ["RefdataMissing", "active_articles", "add_bank_days", "add_working_days",
+           "article_brief", "article_groups", "bank_days_before", "can_edit",
+           "contract_threshold", "country_brief", "day_type", "days_between",
+           "exchange_rate", "is_bank_day", "is_working_day", "mrp", "production_days",
            "uom_brief", "uom_id", "vat_rate", "working_days_between"]
 
 
@@ -108,6 +109,25 @@ def add_working_days(start: date, count: int, *, max_count: int = 3650) -> date 
     """Дата через ``count`` рабочих дней от ``start`` (сам ``start`` входит)."""
     require_service("refdata")
     return calendar.add_working_days(start, count, max_count=max_count)
+
+
+def is_bank_day(day: date) -> bool:
+    """Банковский день (A7.2, D-S7-7): Пн–Пт без праздников РК, но с днём
+    переноса праздника, выпавшего на субботу; перенос с воскресенья — нет."""
+    require_service("refdata")
+    return calendar.is_bank_day(day)
+
+
+def add_bank_days(start: date, count: int) -> date:
+    """Дата через ``count`` банковских дней после ``start`` (срок оплаты)."""
+    require_service("refdata")
+    return calendar.add_bank_days(start, count)
+
+
+def bank_days_before(day: date, count: int) -> date:
+    """Дата ``count`` банковских дней назад от ``day`` («банк не подтвердил»)."""
+    require_service("refdata")
+    return calendar.bank_days_before(day, count)
 
 
 def production_days(date_from: date, date_to: date) -> list[dict]:
