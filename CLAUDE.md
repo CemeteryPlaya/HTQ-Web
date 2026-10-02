@@ -96,7 +96,8 @@ npm test               # vitest run
 npx vitest run <file> -t "<name>"   # single test
 npm run test:e2e       # playwright
 ```
-Playwright: the chromium binary isn't installed; launch with `{ channel: 'msedge' }` (Edge ships on the Windows host).
+Playwright: два проекта в `playwright.config.ts` — `chromium` (бинарник из `ms-playwright`, `npx playwright install chromium`) и `msedge` (`channel: 'msedge'`, если Edge установлен). На этой машине Edge нет (проверено 02.10) — гоняйте `--project=chromium`.
+**Сценарии приёмки модуля БЗО** (SC-001…SC-006, ТЗ §28.2; `frontend/tests/e2e/30_…35_bpp_*.spec.ts`, помощники — `bpp_fixtures.ts`): стенд `docker compose -f docker-compose.test-local.yml up -d --build`, затем `./scripts/bpp-e2e-seed.sh` (пилот — холдинг `hi-tech-group` на `http://group.localhost:3000`, учётки сотрудников `demo12345`) и `cd frontend && npx playwright test tests/e2e/3*_bpp_* --project=msedge` (где Edge не установлен — `--project=chromium`: бинарники лежат в `ms-playwright`). Каждый сценарий заводит свой проект и переживает повтор.
 
 **Backend tests** (`cd backend`): pytest-django against **real Postgres** (no SQLite), on a dedicated host port because neither existing route works (`:5432` is a native Windows Postgres install, `:6432`/PgBouncer is transaction-pooled and can't `CREATE DATABASE`). Bring the port up once, then run the suite:
 ```bash
