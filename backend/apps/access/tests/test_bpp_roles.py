@@ -75,6 +75,14 @@ def test_who_sees_all_requests_and_who_reassigns_plan_items():
 
 
 @pytest.mark.django_db
+def test_only_fd_sees_all_plan_items():
+    """I-2 итогового ревью: ``bpp.plan.all`` — explicit-only, строка только у ФД."""
+    assert [c for c in ROLES if "view" in _flags(c, "bpp.plan.all")] == ["bpp-fd"]
+    for code in ROLES:
+        assert _flags(code, "bpp.plan.all") <= {"view"}, code
+
+
+@pytest.mark.django_db
 def test_who_sees_all_invoices_agreements_and_accountable():
     """D-S6-5 (access/0018): круг ролей прежней формулы «просмотр без
     создания», но узлом — СН, совмещающий ФД, не теряет чужие счета."""
@@ -90,7 +98,8 @@ def test_who_sees_all_invoices_agreements_and_accountable():
 
 
 ALL_NODES = (("bpp.invoices.all", "bpp.invoices"), ("bpp.agreements.all", "bpp.agreements"),
-             ("bpp.accountable.all", "bpp.accountable"), ("bpp.requests.all", "bpp.requests"))
+             ("bpp.accountable.all", "bpp.accountable"), ("bpp.requests.all", "bpp.requests"),
+             ("bpp.plan.all", "bpp.plan"))
 
 
 def _user_with(code: str, rows: dict[str, set[str]], user_id: int):
