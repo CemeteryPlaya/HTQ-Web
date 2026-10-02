@@ -1744,6 +1744,56 @@ groups:
           severity: warning
           team: platform
 
+      # ── Всплеск блокировок входа (D-S7-3) ────────────────────────────────
+      # Источник — Counter htqweb_auth_lockout_total (htqweb/ratelimit.py). Пока
+      # AUTH_LOCKOUT_THRESHOLD=0 (выкатка выключенной) серий нет и правило молчит
+      # (noDataState: OK). Блокировка — следствие 5 неудач по одному логину;
+      # много блокировок за короткое время — это подбор по многим логинам либо
+      # массовая ошибка (смена пароля, поломанная форма входа).
+      - uid: htqweb-auth-lockout-burst
+        title: "Всплеск блокировок входа"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(increase(htqweb_auth_lockout_total{reason="locked"}[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [10], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "15"
+          threshold: "10"
+          summary: "Больше 10 блокировок входа за 10 минут"
+          description: |
+            Блокировка наступает после 5 неудач по одному логину, поэтому
+            десять блокировок — это подбор по многим логинам или массовая
+            ошибка (смена пароля, поломанная форма входа). Разбор: Explore →
+            Loki → {service="backend-web"} |= "auth_login_locked" — IP и префикс
+            хеша логина, самого логина в логе нет. Снять блокировку —
+            manage.py auth_unlock <логин>.
+        labels:
+          severity: warning
+          team: platform
+
       # ── Перебор публичных ссылок оргструктуры ────────────────────────────
       - uid: htqweb-share-link-probing
         title: "Перебор публичных ссылок оргструктуры"

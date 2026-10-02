@@ -373,3 +373,6 @@ def change_password(user: User, *, new_password: str, current_password: str | No
     # auto_now fields are NOT auto-added to a partial update_fields save —
     # updated_at must be listed explicitly (R6 Fix 2).
     user.save(update_fields=["password", "must_change_password", "updated_at"])
+    from apps.users.services import auth_service
+
+    auth_service.reset_lockout(user)

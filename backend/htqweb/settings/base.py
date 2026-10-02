@@ -286,6 +286,12 @@ JWT_SECRET = env("JWT_SECRET", "change-me")
 JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "htqweb-auth"
 JWT_ACCESS_TTL_MIN = int(env("JWT_ACCESS_TTL_MIN", "60"))
+
+# Блокировка входа (D-S7-3, htqweb/ratelimit.py): столько неудач по одному
+# логину за AUTH_LOCKOUT_SECONDS закрывают вход на те же секунды. 0 — выключено;
+# в compose по умолчанию 0, включают после окна выкатки (ранбук).
+AUTH_LOCKOUT_THRESHOLD = int(env("AUTH_LOCKOUT_THRESHOLD", "0") or 0)
+AUTH_LOCKOUT_SECONDS = int(env("AUTH_LOCKOUT_SECONDS", "900") or 900)
 JWT_REFRESH_TTL_DAYS = int(env("JWT_REFRESH_TTL_DAYS", "7"))
 
 LANGUAGE_CODE = "ru"

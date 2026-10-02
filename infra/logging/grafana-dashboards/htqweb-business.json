@@ -766,6 +766,56 @@
         }
       ],
       "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Блокировки входа",
+      "description": "htqweb_auth_lockout_total: locked — логин закрыт после серии неудач (D-S7-3), rejected — попытки, отклонённые под действующей блокировкой. Пока AUTH_LOCKOUT_THRESHOLD=0 (выкатка выключенной), серий нет. Всплеск locked — подбор или массовая ошибка (смена пароля у многих); разбор — Loki, auth_login_locked (IP и префикс хеша, без логина); снять — manage.py auth_unlock.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 38,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (increase(htqweb_auth_lockout_total[15m]))",
+          "refId": "A",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "id": 15
     }
   ],
   "description": "Считаются Celery-beat раз в 60 с и кладутся в кэш (apps/core/metrics.py). Пустые панели = сборщик не отработал, а не «ноль»."
