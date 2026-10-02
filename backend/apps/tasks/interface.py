@@ -143,7 +143,7 @@ def projects_without_ref() -> list[dict]:
     from .models import Project
     from .services.project_link import STATUS_TO_PROJECT
 
-    return [{"id": row["id"], "name": row["name"], "status": STATUS_TO_PROJECT[row["status"]],
+    return [{"id": row["id"], "name": row["name"], "status": STATUS_TO_PROJECT.get(row["status"], "active"),
              "date_start": row["start_date"], "date_end": row["end_date"],
              "manager_user_id": row["owner_id"]}
             for row in Project.objects.filter(project_ref="").order_by("id")

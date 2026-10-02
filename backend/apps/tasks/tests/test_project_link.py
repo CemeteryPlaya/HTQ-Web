@@ -143,3 +143,16 @@ def test_migration_links_every_board(at_0023):
     third = NewPlatform.objects.get(pk=NewBoard.objects.get(pk=squatter.pk).project_ref)
     assert third.code == f"TP-{squatter.pk}-2" and third.name == "С конфликтом"
     assert NewPlatform.objects.get(code=f"TP-{squatter.pk}").name == "Чужой"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_migration_survives_a_nonstandard_board_status(at_0023):
+    """M-1 итогового ревью: ограничения на статус в БД нет — неизвестное
+    значение не роняет миграцию компании, доска и «Проект» становятся действующими."""
+    OldBoard = at_0023.get_model("tasks", "Project")
+    odd = OldBoard.objects.create(name="Нестандартный статус", status="on_hold")
+
+    apps = _migrate(AFTER)
+    board = apps.get_model("tasks", "Project").objects.get(pk=odd.pk)
+    platform = apps.get_model("project", "Project").objects.get(pk=board.project_ref)
+    assert platform.status == "active" and board.status == "active"

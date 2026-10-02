@@ -25,6 +25,8 @@ from django.db import migrations
 
 _STATUS_TO_PROJECT = {"active": "active", "completed": "closed", "archived": "archived"}
 _STATUS_FROM_PROJECT = {plat: board for board, plat in _STATUS_TO_PROJECT.items()}
+# Нестандартный статус (в БД ограничения нет) не должен ронять миграцию компании:
+# такая доска/«Проект» считается действующим.
 _NAME_MAX = 200
 
 
@@ -69,7 +71,7 @@ def link_boards(apps, schema_editor):
             if plat is None:
                 plat = Plat(code=code, country_code="KZ")
             plat.name = board.name
-            plat.status = _STATUS_TO_PROJECT[board.status]
+            plat.status = _STATUS_TO_PROJECT.get(board.status, "active")
             plat.date_start = board.start_date
             plat.date_end = board.end_date
             plat.manager_user_id = board.owner_id
@@ -81,7 +83,7 @@ def link_boards(apps, schema_editor):
             if plat.manager_user_id is None:
                 plat.manager_user_id = board.owner_id
             if plat.status == "active" and board.status != "active":
-                plat.status = _STATUS_TO_PROJECT[board.status]
+                plat.status = _STATUS_TO_PROJECT.get(board.status, "active")
             if not name_is_free(plat.name, board):
                 plat.name = board.name
         plat.save()
@@ -89,7 +91,7 @@ def link_boards(apps, schema_editor):
             Member.objects.get_or_create(project=plat, user_id=plat.manager_user_id)
         board.project_ref = str(plat.pk)
         board.name = plat.name
-        board.status = _STATUS_FROM_PROJECT[plat.status]
+        board.status = _STATUS_FROM_PROJECT.get(plat.status, "active")
         board.start_date = plat.date_start
         board.end_date = plat.date_end
         board.owner_id = plat.manager_user_id
