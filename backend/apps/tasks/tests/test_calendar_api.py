@@ -17,7 +17,7 @@ from django.utils import timezone
 from apps.notifications.models import Notification
 from apps.tasks.models import (
     CalendarEvent, CalendarEventParticipant, EventException,
-    ProductionDay, Task,
+    Task,
 )
 from apps.users.models import User, UserStatus
 
@@ -26,7 +26,6 @@ from .helpers import BASE, admin_token, auth, patch_json, post_json, token
 USER = 7
 OTHER = 42
 CAL = f"{BASE}/calendar"
-PROD = f"{BASE}/production-calendar"
 
 
 def _mk_event(**over) -> CalendarEvent:
@@ -353,89 +352,3 @@ def test_participant_picker_hides_inactive_users():
 
     rows = Client().get(f"{CAL}/users-options/?query=Сидоров", **auth()).json()
     assert [row["username"] for row in rows] == ["aktiv"]
-
-
-# ── production calendar ─────────────────────────────────────────────────
-
-@pytest.mark.django_db
-def test_production_calendar_generates_the_kz_baseline():
-    resp = Client().get(f"{PROD}/?date__gte=2026-01-01&date__lte=2026-01-08",
-                        **auth())
-    assert resp.status_code == 200
-    by_date = {row["date"]: row for row in resp.json()}
-    assert by_date["2026-01-01"]["day_type"] == "holiday"
-    assert by_date["2026-01-01"]["note"] == "Новый год"
-    assert by_date["2026-01-07"]["day_type"] == "holiday"
-    # 3 Jan 2026 is a Saturday
-    assert by_date["2026-01-03"]["day_type"] == "weekend"
-    assert by_date["2026-01-05"]["day_type"] == "working"
-
-
-@pytest.mark.django_db
-def test_production_calendar_has_holidays_beyond_2026():
-    """Регрессия: праздники были захардкожены одним словарём на 2026 год, и
-    начиная с 2027-го календарь приезжал голой сеткой пн-пт/сб-вс."""
-    resp = Client().get(f"{PROD}/?date__gte=2027-03-20&date__lte=2027-03-25",
-                        **auth())
-    by_date = {row["date"]: row for row in resp.json()}
-    assert by_date["2027-03-22"]["day_type"] == "holiday"
-    assert by_date["2027-03-22"]["note"] == "Наурыз мейрамы"
-    # 21 марта 2027 — воскресенье, значит перенос на первый свободный будний.
-    assert by_date["2027-03-24"]["day_type"] == "holiday"
-    assert by_date["2027-03-24"]["note"] == "Наурыз мейрамы (перенос)"
-
-
-@pytest.mark.django_db
-def test_working_day_counter_only_advances_on_working_days():
-    resp = Client().get(f"{PROD}/?date__gte=2026-01-01&date__lte=2026-01-09",
-                        **auth())
-    counters = {row["date"]: row["working_days_since_epoch"]
-                for row in resp.json()}
-    # 1, 2 holiday; 3, 4 weekend; 5 is the first working day of 2026
-    assert counters["2026-01-02"] == 0
-    assert counters["2026-01-05"] == 1
-    assert counters["2026-01-06"] == 2
-
-
-@pytest.mark.django_db
-def test_production_day_override_is_stored_and_recounted():
-    resp = patch_json(Client(), f"{PROD}/2026-01-05/",
-                      {"day_type": "holiday", "note": "Локальный выходной"},
-                      **auth())
-    assert resp.status_code == 200
-    assert resp.json()["day_type"] == "holiday"
-    assert ProductionDay.objects.filter(date=dt.date(2026, 1, 5)).exists()
-
-    # The whole year's stored counters are re-stamped, because the deadline
-    # arithmetic reads them.
-    listing = Client().get(f"{PROD}/?date__gte=2026-01-01&date__lte=2026-01-09",
-                           **auth()).json()
-    counters = {row["date"]: row["working_days_since_epoch"]
-                for row in listing}
-    assert counters["2026-01-05"] == 0    # no longer a working day
-    assert counters["2026-01-06"] == 1
-
-
-@pytest.mark.django_db
-def test_override_restores_the_holiday_note_when_none_is_given():
-    resp = patch_json(Client(), f"{PROD}/2026-01-01/",
-                      {"day_type": "working"}, **auth())
-    assert resp.json()["note"] == "Новый год"
-
-
-@pytest.mark.django_db
-def test_production_calendar_rejects_a_bad_range_and_date():
-    assert Client().get(f"{PROD}/?date__gte=2026-05-01&date__lte=2026-04-01",
-                        **auth()).status_code == 400
-    assert patch_json(Client(), f"{PROD}/not-a-date/", {"day_type": "working"},
-                      **auth()).status_code == 422
-
-
-@pytest.mark.django_db
-def test_stored_override_survives_a_second_edit():
-    client = Client()
-    patch_json(client, f"{PROD}/2026-01-05/", {"day_type": "holiday"}, **auth())
-    resp = patch_json(client, f"{PROD}/2026-01-05/", {"day_type": "short"},
-                      **auth())
-    assert resp.json()["day_type"] == "short"
-    assert ProductionDay.objects.filter(date=dt.date(2026, 1, 5)).count() == 1

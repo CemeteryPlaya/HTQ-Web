@@ -5,7 +5,9 @@ import { CalendarEvent, ProductionDay, CalendarTimeline } from '@/types/calendar
 const TASKS = `${API_ENDPOINTS.tasks}/`;
 const CALENDAR = `${TASKS}calendar/`;
 const TIMELINE = `${CALENDAR}timeline/`;
-const PRODUCTION_CALENDAR = `${TASKS}production-calendar/`;
+// Производственный календарь — общий справочник группы (refdata, A7.1); старые
+// пути tasks/v1/production-calendar nginx переписывает на этот.
+const PRODUCTION_CALENDAR = `${API_ENDPOINTS.refdata}/production-calendar/`;
 
 function toTaskCalendarPayload(data: Partial<CalendarEvent>) {
   const eventType = data.event_type;
@@ -126,7 +128,7 @@ export const fetchProductionCalendar = async (start?: string, end?: string): Pro
   const params = new URLSearchParams();
   if (start) params.append('date__gte', start);
   if (end) params.append('date__lte', end);
-  // Production calendar lives in task-service; keep an empty fallback for older backends.
+  // Пустой запасной ответ — чтобы виджет календаря не падал при сбое справочника.
   try {
     const res = await api.get<any>(`${PRODUCTION_CALENDAR}?${params.toString()}`);
     const payload = res.data?.results ?? res.data;

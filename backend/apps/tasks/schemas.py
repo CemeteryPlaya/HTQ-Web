@@ -1721,20 +1721,6 @@ class RsvpUpdate(BaseModel):
     status: RsvpStatus
 
 
-class ProductionDayUpdate(BaseModel):
-    day_type: DayType
-    note: str | None = None
-
-
-class ProductionDayResponse(BaseModel):
-    date: date
-    day_type: DayType
-    working_days_since_epoch: int
-    note: str | None = None
-
-    model_config = {"from_attributes": True}
-
-
 # ── сводка по группе (блок H) — GET /holding/projects ───────────────────────
 
 class HoldingCompanyRow(BaseModel):

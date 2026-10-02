@@ -2189,15 +2189,14 @@ def equipment_usage(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Calendar — /calendar/ and /production-calendar/
+# Calendar — /calendar/ (производственный календарь переехал в refdata)
 # ─────────────────────────────────────────────────────────────────────────
 
 def _bounded_range(request, start_key: str, end_key: str):
-    """Shared window parsing for the timeline and the production calendar.
+    """Окно дат для ленты календаря (timeline).
 
-    Both default to "this month plus 31 days" and both reject an inverted or
-    over-long range with the original's 400 (not 422 — these are range
-    *semantics*, which FastAPI could not express as a type either).
+    По умолчанию «этот месяц плюс 31 день»; перевёрнутое или слишком длинное окно — 400 (не 422: это семантика диапазона,
+    а не тип параметра).
     """
     start = _date_param(request, start_key)
     end = _date_param(request, end_key)
@@ -2333,29 +2332,6 @@ def calendar_user_options(request):
         for row in list_users_brief(search=query or None, limit=limit)
         if row.get("is_active", True)
     ]
-
-
-@api_view(methods=("GET",), module="tasks", level="read")
-def production_calendar(request):
-    try:
-        start, end = _bounded_range(request, "date__gte", "date__lte")
-    except _ParamError as exc:
-        return exc.response
-    return [schemas.ProductionDayResponse.model_validate(row)
-            for row in calendar_service.list_production_days(start, end)]
-
-
-@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate, module="tasks", level="write")
-def production_day_detail(request, target_date: str,
-                          data: schemas.ProductionDayUpdate):
-    try:
-        parsed = date.fromisoformat(target_date)
-    except ValueError:
-        return _param_error("target_date",
-                            "Input should be a valid date in YYYY-MM-DD format")
-    return schemas.ProductionDayResponse.model_validate(
-        calendar_service.update_production_day(parsed, day_type=data.day_type,
-                                               note=data.note))
 
 
 # ── /holding/projects — сводка по группе (блок H) ────────────────────────────

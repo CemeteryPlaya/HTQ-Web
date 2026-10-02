@@ -449,7 +449,13 @@ def _seed_all_roles() -> None:
 
 
 def _role_rows(role) -> dict[str, frozenset[str]]:
-    return {row.node: row.flags for row in RolePermission.objects.filter(role=role)}
+    """Строки роли без узлов ``EXPLICIT_ONLY`` (refdata.production_calendar,
+    access/0022): это явные строки каждой системной роли, не кадровый пресет."""
+    from apps.access import registry
+
+    skip = registry.explicit_only()
+    return {row.node: row.flags for row in RolePermission.objects.filter(role=role)
+            if row.node not in skip}
 
 
 def test_probe_f1_list_without_level_gets_a_custom_role(company_schema, capsys):
