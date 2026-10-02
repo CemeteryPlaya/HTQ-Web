@@ -5,7 +5,7 @@ import { ForcePasswordChange } from "./ForcePasswordChange";
 import { Loader2 } from "lucide-react";
 import { useActiveProfile } from "@/hooks/useActiveProfile";
 import { usePermissions } from "@/hooks/usePermissions";
-import type { RouteRequirement } from "@/app/routing/types";
+import { meetsRequirement, type RouteRequirement } from "@/app/routing/types";
 import { useTranslation } from 'react-i18next';
 import { companyFromHost } from "@/lib/auth/companySwitch";
 import { canRestoreSession, restoreSessionOnce } from "@/lib/auth/sessionRestore";
@@ -152,7 +152,7 @@ const RequireAuth = ({ children, requires, page }: RequireAuthProps) => {
                 </div>
             );
         }
-        if (!permissions.atLeast(requires.module, requires.level)) {
+        if (!meetsRequirement(permissions, requires)) {
             // Отправляем в безопасное место, а не по кругу на /login: профиль —
             // универсальная посадочная страница «вы вошли».
             return <Navigate to="/myprofile" replace state={{ from: location, accessDenied: true }} />;

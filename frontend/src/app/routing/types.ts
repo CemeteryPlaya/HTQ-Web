@@ -1,6 +1,6 @@
 import type { ComponentType, LazyExoticComponent } from 'react';
 
-import type { AccessLevel } from '@/lib/auth/permissions';
+import type { AccessLevel, DepthFlag } from '@/lib/auth/permissions';
 
 export type LazyPage = LazyExoticComponent<ComponentType>;
 
@@ -14,6 +14,20 @@ export type LazyPage = LazyExoticComponent<ComponentType>;
 export interface RouteRequirement {
   module: string;
   level: AccessLevel;
+  /** Или признак на узле — пускает и без уровня модуля. Доски задач
+   * (`/manage/projects`) открыты держателям «Доски задач проекта»
+   * (`project.board`), у которых нет кадровых прав (решение 01.10). */
+  orNode?: { node: string; flag: DepthFlag };
+}
+
+/** Пускает ли гейт маршрута: уровень модуля или признак на узле. */
+export function meetsRequirement(
+  permissions: { atLeast: (module: string, level: AccessLevel) => boolean;
+    can: (node: string, flag: DepthFlag) => boolean },
+  requires: RouteRequirement,
+): boolean {
+  if (permissions.atLeast(requires.module, requires.level)) return true;
+  return Boolean(requires.orNode && permissions.can(requires.orNode.node, requires.orNode.flag));
 }
 
 export interface RouteConfig {

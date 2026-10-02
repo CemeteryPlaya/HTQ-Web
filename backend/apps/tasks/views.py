@@ -34,6 +34,7 @@ from apps.companies import interface as companies
 
 from . import schemas
 from .services import block_service
+from .services import board_scope
 from .services import calendar_service
 from .services import contractor_service
 from .services import daily_report_service
@@ -1581,7 +1582,9 @@ def project_sites(request, project_id: int):
 def _list_projects(request):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_responses(project_service.list_projects(
-        employee_scope=employee_scope, department_id=department_id))
+        employee_scope=employee_scope, department_id=department_id,
+        refs=board_scope.refs_for_request(request),
+        project_ref=request.GET.get("project_ref", "").strip() or None))
 
 
 @api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
@@ -1615,7 +1618,7 @@ def _get_project(request, project_id: int):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_response(project_service.get_project(
         project_id, employee_scope=employee_scope,
-        department_id=department_id))
+        department_id=department_id, refs=board_scope.refs_for_request(request)))
 
 
 def _project_for_write(request, project_id: int):
@@ -1695,7 +1698,8 @@ def _list_roadmaps(request):
                 roadmap_service.list_roadmaps(
                     employee_scope=employee_scope, department_id=department_id,
                     project_id=project_id, site_id=site_id, block_id=block_id,
-                    status=_str_param(request, "status")))]
+                    status=_str_param(request, "status"),
+                    refs=board_scope.refs_for_request(request)))]
 
 
 @api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True, module="tasks", level="admin")
@@ -1819,9 +1823,12 @@ def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
     employee_scope, department_id = project_service.scope_for(request.token)
     # 404s first if the project is out of scope, so this cannot be used to
-    # enumerate tasks of a project the caller may not see.
+    # enumerate tasks of a project the caller may not see. Доска своего
+    # «Проекта» (``board_scope``) — в зоне видимости; задачи внутри — ниже,
+    # по своим правилам.
     project_service.get_project(project_id, employee_scope=employee_scope,
-                                department_id=department_id)
+                                department_id=department_id,
+                                refs=board_scope.refs_for_request(request))
     # Seeing the project is NOT seeing every task in it: narrowing by
     # department alone still handed over tasks the caller has no part in.
     # Same visibility triple as the flat list endpoint.

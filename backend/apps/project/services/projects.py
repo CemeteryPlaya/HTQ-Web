@@ -7,6 +7,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from apps.project.models import Project, ProjectMember, ProjectStatus
+from htqweb import date_rules
 
 
 class ProjectError(Exception):
@@ -14,9 +15,21 @@ class ProjectError(Exception):
 
 
 class ProjectChangeRejected(ProjectError):
-    """Подписчик отказал в правке «Проекта» (текст — для человека): например,
-    у доски задач проекта конфликт названия. Правка откатывается целиком —
-    данные связанных сущностей не расходятся с «Проектом»."""
+    """Подписчик отказал в правке «Проекта» (текст — для человека). Правка
+    откатывается целиком — данные связанных сущностей не расходятся с
+    «Проектом». Доска задач правку принимает всегда (D-02, решение 01.10:
+    «Проект» главный — подстраивается доска); механизм — для соседа, которому
+    подстроиться нечем."""
+
+
+class ProjectDatesError(ProjectError):
+    """Дата окончания раньше даты начала. Сроки «Проекта» проверяет он сам:
+    доска задач их повторяет и не спорит с ними (D-02)."""
+
+
+def _check_dates(date_start, date_end) -> None:
+    if date_rules.out_of_order(date_start, date_end):
+        raise ProjectDatesError("Дата окончания проекта раньше даты начала.")
 
 
 #: Подписчики на правку «Проекта» — соседи, чьи данные повторяют его поля
@@ -48,6 +61,7 @@ def _ensure_member(project: Project, user_id: int | None, actor_id: int | None) 
 @transaction.atomic
 def create(*, code: str, name: str, country_code: str, actor_id: int,
            manager_user_id: int | None = None, **fields) -> Project:
+    _check_dates(fields.get("date_start"), fields.get("date_end"))
     try:
         with transaction.atomic():
             project = Project.objects.create(code=code, name=name, country_code=country_code,
@@ -61,6 +75,8 @@ def create(*, code: str, name: str, country_code: str, actor_id: int,
 
 @transaction.atomic
 def update(project: Project, *, actor_id: int, **fields) -> Project:
+    _check_dates(fields.get("date_start", project.date_start),
+                 fields.get("date_end", project.date_end))
     for key, value in fields.items():
         setattr(project, key, value)
     project.save()

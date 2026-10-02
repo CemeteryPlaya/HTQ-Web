@@ -9,8 +9,8 @@ OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.agreements.terminate", "bpp.invoices.decision", "bpp.invoices.payment",
               "bpp.counterparties.block", "bpp.alternatives.select",
               "bpp.accountable.payment", "bpp.invoices.closing_docs",
-              "project.all", "bpp.requests.all", "bpp.plan.reassign",
-              "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all")
+              "project.all", "bpp.requests.all", "bpp.plan.reassign", "bpp.routes",
+              "project.board", "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -75,16 +75,43 @@ def test_who_sees_all_requests_and_who_reassigns_plan_items():
 
 
 @pytest.mark.django_db
-def test_only_fd_sees_all_plan_items():
-    """I-2 итогового ревью: ``bpp.plan.all`` — explicit-only, строка только у ФД."""
-    assert [c for c in ROLES if "view" in _flags(c, "bpp.plan.all")] == ["bpp-fd"]
+def test_routes_are_edited_by_fd_and_adm():
+    """В-09 (access/0018): маршруты согласования модуля правят ФД и АДМ."""
+    assert [c for c in ROLES if "edit" in _flags(c, "bpp.routes")] == ["bpp-fd", "bpp-adm"]
+    for code in ROLES:
+        assert _flags(code, "bpp.routes") <= {"edit"}, code
+
+
+@pytest.mark.django_db
+def test_gd_sees_every_section():
+    """Решение 01.10 «ГД видит всё» (access/0019): план закупок целиком,
+    подотчёт, выписки, настройки и закрывающие документы — только просмотр."""
+    for node in ("bpp.plan", "bpp.plan.all", "bpp.accountable", "bpp.bank", "bpp.settings",
+                 "bpp.invoices.closing_docs"):
+        assert _flags("bpp-gd", node) == {"view"}, node
+
+
+@pytest.mark.django_db
+def test_board_link_is_for_td_od_pm_and_adm():
+    """«Доска задач проекта» (access/0020): ссылка с «Проекта» и вход в доски
+    задач — у ТД, ОД, ПМ и АДМ; у остальных явная пустая строка."""
+    assert [c for c in ROLES if "view" in _flags(c, "project.board")] == [
+        "bpp-td", "bpp-od", "bpp-pm", "bpp-adm"]
+    for code in ROLES:
+        assert _flags(code, "project.board") <= {"view"}, code
+
+
+def test_only_fd_and_gd_see_all_plan_items():
+    """I-2 итогового ревью: ``bpp.plan.all`` — explicit-only, строка у ФД и
+    (решение 01.10 «ГД видит всё», access/0019) у ГД."""
+    assert [c for c in ROLES if "view" in _flags(c, "bpp.plan.all")] == ["bpp-fd", "bpp-gd"]
     for code in ROLES:
         assert _flags(code, "bpp.plan.all") <= {"view"}, code
 
 
 @pytest.mark.django_db
 def test_who_sees_all_invoices_agreements_and_accountable():
-    """D-S6-5 (access/0018): круг ролей прежней формулы «просмотр без
+    """D-S6-5 (access/0021): круг ролей прежней формулы «просмотр без
     создания», но узлом — СН, совмещающий ФД, не теряет чужие счета."""
     assert [c for c in ROLES if "view" in _flags(c, "bpp.invoices.all")] == [
         "bpp-fd", "bpp-td", "bpp-od", "bpp-gd", "bpp-buh"]

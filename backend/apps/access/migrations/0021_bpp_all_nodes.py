@@ -46,6 +46,6 @@ def unseed(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
-    dependencies = [("access", "0017_bpp_requests_all_plan_reassign")]
+    dependencies = [("access", "0020_project_board_node")]
 
     operations = [migrations.RunPython(seed, unseed)]

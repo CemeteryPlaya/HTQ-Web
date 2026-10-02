@@ -116,6 +116,33 @@ def test_draft_budget_first_then_the_same_sums_as_the_old_import(company_context
     assert _counts() == counts
 
 
+def _sheet(path, title) -> list[dict]:
+    import openpyxl
+
+    rows = list(openpyxl.load_workbook(path, read_only=True)[title].iter_rows(values_only=True))
+    return [dict(zip(rows[0], row)) for row in rows[1:]]
+
+
+def test_report_names_book_contracts_and_articles_readably(company_context, tmp_path):
+    """Репетиция на стенде 30.09: у двух договоров книги один номер «1» — в
+    отчёте они различаются LARK; расхождение лимита — по коду статьи, а не id."""
+    slug = company_context["slug"]
+    path, projects_csv, articles_csv = _setup(tmp_path)
+    report = tmp_path / "first.xlsx"
+    _import(slug, path, projects_csv, articles_csv, "--report", str(report))
+    waiting = {row["old_id"] for row in _sheet(report, "Не перенесено")
+               if row["kind"] == "договор"}
+    assert {"1 (LARK L-1)", "1 (LARK L-2)"} <= waiting
+
+    _approve_all(slug)
+    aralsk = Budget.objects.get(project_id=projects.project_ids_by_code(["ARL"])["ARL"])
+    aralsk.versions.get(version_no=1).lines.filter(
+        article_id=s.metal().id).update(limit_amount=Decimal("1.00"))
+    report = tmp_path / "second.xlsx"
+    _import(slug, path, projects_csv, articles_csv, "--report", str(report))
+    assert [row["key"] for row in _sheet(report, "Расхождения с книгой")] == ["ARL / T-METAL"]
+
+
 def test_book_after_the_contracts_migration_adds_nothing(company_context, tmp_path):
     """Книга уже в «Договорах» (старый импорт) и перенесена B6.1 — импорт той
     же книги в модуль узнаёт всё по LARK и отпечаткам строк."""

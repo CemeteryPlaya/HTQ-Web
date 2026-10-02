@@ -8,6 +8,9 @@
 должностям), флаги маршрутов БЗО — самосогласование, комментарий ≥ 10,
 ленивое разрешение исполнителей (D-21).
 
+Маршруты документов модуля, кроме администратора платформы, правят ФД и
+АДМ (В-09): узел ``bpp.routes`` — колбэк ``route_editors`` у каждого типа.
+
 Здесь же — проверки доступа к «Истории изменений» (``audit.
 register_history_access``): журнал документа читает тот, кто видит сам
 документ.
@@ -15,6 +18,7 @@ register_history_access``): журнал документа читает тот,
 
 from __future__ import annotations
 
+from apps.bpp.file_owners import actor_from_token
 from apps.bpp.models import (
     AccountableFundsRequest,
     AdvanceReport,
@@ -35,6 +39,7 @@ from apps.bpp.services.budget import budgets as budget_service
 from apps.bpp.services.core import audit
 from apps.bpp.services.money import fmt
 from apps.bpp.services.requests import requests as request_service
+from apps.bpp.services.selection import voting
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
@@ -189,6 +194,11 @@ def _valid_uuid_guard(check):
     return guarded
 
 
+def _route_editors(token) -> bool:
+    """Правит маршруты документов модуля (В-09: ФД и АДМ, access/0018)."""
+    return actor_from_token(token).can("bpp.routes", "edit")
+
+
 def register() -> None:
     signoff.register_subject(
         PurchaseRequest.SIGNOFF_SUBJECT_TYPE,
@@ -202,6 +212,7 @@ def register() -> None:
         describe=_describe_request,
         facts=_request_facts,
         fact_fields=_request_fact_fields,
+        route_editors=_route_editors,
     )
     signoff.register_subject(
         AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE,
@@ -215,6 +226,7 @@ def register() -> None:
         describe=_describe_accountable,
         facts=_accountable_facts,
         fact_fields=lambda: _AMOUNT_FIELDS,
+        route_editors=_route_editors,
     )
     signoff.register_subject(
         AdvanceReport.SIGNOFF_SUBJECT_TYPE,
@@ -224,6 +236,7 @@ def register() -> None:
         describe=_describe_report,
         facts=_report_facts,
         fact_fields=lambda: _AMOUNT_FIELDS,
+        route_editors=_route_editors,
     )
     signoff.register_subject(
         Agreement.SIGNOFF_SUBJECT_TYPE,
@@ -239,6 +252,11 @@ def register() -> None:
         fact_fields=_agreement_fact_fields,
         scope_of=agreement_service.scope_of,
         scopes=_agreement_scopes,
+        # Голос ФД и ГД за исходный договор или альтернативу (B5.1, D-25, D-26).
+        options=voting.options,
+        check_option=voting.check_option,
+        on_option=voting.on_option,
+        route_editors=_route_editors,
     )
     signoff.register_subject(
         Invoice.SIGNOFF_SUBJECT_TYPE,
@@ -254,6 +272,7 @@ def register() -> None:
         fact_fields=_invoice_fact_fields,
         requirement_fields=_invoice_requirements,
         check_requirement=invoice_service.check_requirement,
+        route_editors=_route_editors,
     )
     audit.register_history_access(
         Invoice._meta.label_lower,

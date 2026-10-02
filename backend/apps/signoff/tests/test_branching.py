@@ -190,7 +190,7 @@ def test_inactive_approver_in_an_unrelated_branch_does_not_block(approvers):
     process = engine.start(subject_type=SUBJECT, subject_id=make_doc(zone=1).pk)
     assert stage_names(process) == ["Зона 1"]
 
-    with pytest.raises(engine.RouteUnusable, match="не осталось ни одного активного"):
+    with pytest.raises(engine.RouteUnusable, match="нет активного сотрудника"):
         engine.start(subject_type=SUBJECT, subject_id=make_doc(zone=2).pk)
 
 

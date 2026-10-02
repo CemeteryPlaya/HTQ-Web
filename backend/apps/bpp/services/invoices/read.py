@@ -33,6 +33,7 @@ from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.agreements import positions
 from apps.bpp.services.bank import recon as bank_recon
 from apps.bpp.services.counterparties import lookup as counterparties
+from apps.bpp.services.selection import checks as selection_checks
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
@@ -171,6 +172,7 @@ def card(actor: Actor, inv: Invoice, *, vat_warning: str | None = None) -> dict:
             "amount_available": left[str(line.request_item_id)]["amount_left"],
         } for line in lines],
         "current_holders": holders,
+        "alternative": selection_checks.alternative_links("invoice", inv),   # B5.1
         "allowed_actions": service.allowed_actions(actor, inv),
     }
 

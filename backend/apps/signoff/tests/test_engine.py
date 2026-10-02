@@ -25,6 +25,7 @@ from apps.signoff.tests.helpers import (
     make_doc,
     make_route,
     make_user,
+    share_position,
     simple_route,
     stage_states,
     task_for,
@@ -270,10 +271,25 @@ def test_quorum_all_needs_every_approver():
     assert process.state == ProcessState.APPROVED
 
 
+def test_lock_process_for_takes_the_latest_process_of_the_subject():
+    """Замок процесса по объекту — первым шагом выбора альтернативы (B5.1):
+    последний процесс объекта, у объекта без процесса — ``None``."""
+    from apps.signoff import interface
+
+    a = make_user("a")
+    doc = make_doc()
+    assert interface.lock_process_for(ProbeDoc.SIGNOFF_SUBJECT_TYPE, doc.pk) is None
+    simple_route(a.pk)
+    process = engine.start(subject_type=ProbeDoc.SIGNOFF_SUBJECT_TYPE, subject_id=doc.pk)
+    assert interface.lock_process_for(ProbeDoc.SIGNOFF_SUBJECT_TYPE, doc.pk) == {
+        "id": process.pk, "state": ProcessState.PENDING}
+
+
 def test_quorum_any_closes_the_stage_on_the_first_approval():
     a, b = make_user("a"), make_user("b")
+    share_position(a, b)                 # два держателя одной должности этапа
     doc = make_doc()
-    simple_route(a.pk, b.pk, quorum=Quorum.ANY)
+    simple_route(a.pk, quorum=Quorum.ANY)
     process = engine.start(subject_type=ProbeDoc.SIGNOFF_SUBJECT_TYPE,
                            subject_id=doc.pk)
 

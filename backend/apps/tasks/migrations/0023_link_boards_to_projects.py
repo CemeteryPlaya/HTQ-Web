@@ -2,32 +2,32 @@
 
 С этой миграции доска заводится только к «Проекту», а её название, статус,
 сроки и владелец — копия его полей (``services/project_link.py``). Уже
-существующие доски связываются здесь, по правилам ``project_link_tasks``:
+существующие доски связываются здесь (решения Руслана 29.09 и 01.10):
 
+* название доски расширяется до 255 символов — как у «Проекта»;
+* уже связанная доска (командой ``project_link_tasks``) приводится к своему
+  «Проекту»; сам «Проект» не меняется — он главный;
 * доска без ссылки получает «Проект» с кодом ``TP-<id доски>``, заведённый
   из её же полей (страна — KZ, руководитель — владелец доски). Код занят
   «Проектом», заведённым человеком, или уже отдан другой доске — берётся
   ``TP-<id>-2``, ``-3``…; «Проект», заведённый командой (``created_by``
-  пуст) и ещё ничей, переиспользуется;
-* уже связанная доска (командой ``project_link_tasks``) сводится с
-  «Проектом»: у «Проекта» главнее непустое, пустое заполняется с доски;
-  статус «Проекта», оставшийся «активен» по умолчанию, берётся с доски.
-  Название — «Проекта», если его не носит другая доска и оно вмещается в
-  доску, иначе «Проект» получает название доски.
+  пуст) и ещё ничей, переиспользуется — и доска приводится к нему.
 
-Обратного шага нет: связь не мешает старому коду, а «Проекты» могли уже
-обрасти документами модуля.
+Названия досок уникальны, «Проектов» — нет: название, которое уже носит
+другая доска, доска получает с кодом проекта, «ЖК Нурлы Жол (П-015)» — как
+``project_link.board_name``.
+
+Обратного шага у связывания нет: связь не мешает старому коду, а «Проекты»
+могли уже обрасти документами модуля.
 """
 
 import uuid
 
-from django.db import migrations
+from django.db import migrations, models
 
 _STATUS_TO_PROJECT = {"active": "active", "completed": "closed", "archived": "archived"}
 _STATUS_FROM_PROJECT = {plat: board for board, plat in _STATUS_TO_PROJECT.items()}
-# Нестандартный статус (в БД ограничения нет) не должен ронять миграцию компании:
-# такая доска/«Проект» считается действующим.
-_NAME_MAX = 200
+_NAME_MAX = 255
 
 
 def _as_uuid(value):
@@ -57,9 +57,18 @@ def link_boards(apps, schema_editor):
             n += 1
             code = f"{base}-{n}"
 
-    def name_is_free(name, board):
-        return (len(name) <= _NAME_MAX
-                and not Board.objects.filter(name=name).exclude(pk=board.pk).exists())
+    def board_name(plat, board):
+        others = Board.objects.exclude(pk=board.pk)
+        name = plat.name[:_NAME_MAX]
+        if not others.filter(name=name).exists():
+            return name
+        n = 1
+        while True:
+            suffix = f" ({plat.code})" if n == 1 else f" ({plat.code}-{n})"
+            candidate = plat.name[:_NAME_MAX - len(suffix)].rstrip() + suffix
+            if not others.filter(name=candidate).exists():
+                return candidate
+            n += 1
 
     for board in Board.objects.order_by("pk"):
         key = _as_uuid(board.project_ref) if board.project_ref else None
@@ -69,28 +78,14 @@ def link_boards(apps, schema_editor):
         if plat is None:
             code, plat = free_code(board)
             if plat is None:
-                plat = Plat(code=code, country_code="KZ")
-            plat.name = board.name
-            plat.status = _STATUS_TO_PROJECT.get(board.status, "active")
-            plat.date_start = board.start_date
-            plat.date_end = board.end_date
-            plat.manager_user_id = board.owner_id
-        else:
-            if plat.date_start is None:
-                plat.date_start = board.start_date
-            if plat.date_end is None:
-                plat.date_end = board.end_date
-            if plat.manager_user_id is None:
-                plat.manager_user_id = board.owner_id
-            if plat.status == "active" and board.status != "active":
-                plat.status = _STATUS_TO_PROJECT.get(board.status, "active")
-            if not name_is_free(plat.name, board):
-                plat.name = board.name
-        plat.save()
-        if plat.manager_user_id:
-            Member.objects.get_or_create(project=plat, user_id=plat.manager_user_id)
+                plat = Plat.objects.create(
+                    code=code, country_code="KZ", name=board.name,
+                    status=_STATUS_TO_PROJECT.get(board.status, "active"), date_start=board.start_date,
+                    date_end=board.end_date, manager_user_id=board.owner_id)
+                if plat.manager_user_id:
+                    Member.objects.get_or_create(project=plat, user_id=plat.manager_user_id)
         board.project_ref = str(plat.pk)
-        board.name = plat.name
+        board.name = board_name(plat, board)
         board.status = _STATUS_FROM_PROJECT.get(plat.status, "active")
         board.start_date = plat.date_start
         board.end_date = plat.date_end
@@ -103,10 +98,15 @@ def link_boards(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("tasks", "0023_contractor_bpp_counterparty"),
+        ("tasks", "0022_project_ref"),
         ("project", "0001_initial"),
     ]
 
     operations = [
+        migrations.AlterField(
+            model_name="project",
+            name="name",
+            field=models.CharField(max_length=255, unique=True),
+        ),
         migrations.RunPython(link_boards, migrations.RunPython.noop),
     ]

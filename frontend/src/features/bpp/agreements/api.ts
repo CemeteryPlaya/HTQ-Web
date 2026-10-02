@@ -8,6 +8,7 @@ import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
 
 import type { CurrentHolders } from '../core/registryTypes';
+import type { AlternativeLinks } from '../selection/links';
 import type { InitiatorRole } from '../requests/api';
 
 export type Money = string;
@@ -85,6 +86,8 @@ export interface AgreementCard {
   budget: { available: Money; over_plan: Money; plan_total: Money } | null;
   items: AgreementItem[];
   current_holders: CurrentHolders | null;
+  /** Связь с альтернативой (B5.1): основание нового договора и чем заменён исходный. */
+  alternative?: AlternativeLinks;
   allowed_actions: string[];
 }
 

@@ -677,6 +677,10 @@ def submit(actor: Actor, offer_id, *, expected_version: int | None) -> Alternati
     _touch(offer, actor.user_id)
     audit.record(offer, "submitted", actor_id=actor.user_id, changes=_snapshot(offer))
     _notify_submitted(offer, source, actor_id=actor.user_id)
+    # Уже проголосовавшим по договору — о новой АП (§12.4 п.1; B5.1, зона B).
+    # Поздний импорт: ``selection.voting`` сам зовёт ``lifecycle``.
+    from apps.bpp.services.selection import voting
+    voting.notify_voters(offer)
     return offer
 
 

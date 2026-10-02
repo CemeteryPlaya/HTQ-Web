@@ -1,4 +1,4 @@
-"""Одна доска задач на «Проект» БЗО. Отдельно от связывания (0024): индекс
+"""Одна доска задач на «Проект» БЗО. Отдельно от связывания (0023): индекс
 строится в своей транзакции, после того как данные уже сведены."""
 
 from django.db import migrations, models
@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("tasks", "0024_link_boards_to_projects"),
+        ("tasks", "0023_link_boards_to_projects"),
     ]
 
     operations = [

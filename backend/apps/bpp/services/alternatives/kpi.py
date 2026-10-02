@@ -76,7 +76,7 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """Все записи видят ФД, ОД, ГД; СН — только свои (D-S5-9, ТЗ §12.6).
-    Круг — узел ``bpp.invoices.all`` (access/0018, D-S6-5), как у АП и
+    Круг — узел ``bpp.invoices.all`` (access/0021, D-S6-5), как у АП и
     реестра счетов: СН, совмещающий ФД, видит все записи."""
     if getattr(actor.request.token, "is_superuser", False):
         return True

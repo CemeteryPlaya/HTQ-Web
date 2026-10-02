@@ -158,6 +158,14 @@ export const fetchProjects = async (params?: Record<string, string>): Promise<Pr
   return unwrap<Project>(res.data).map(normalizeProject);
 };
 
+/** Доска задач «Проекта» БЗО (одна на проект) или `null` — для ссылки с его
+ * карточки. Держателю «Доски задач проекта» сервер открывает доски его
+ * «Проектов» (решение 01.10); остальным — по прежним правилам. */
+export const fetchProjectBoard = async (projectRef: string): Promise<Project | null> => {
+  const res = await api.get(`${BASE}projects/`, { params: { project_ref: projectRef } });
+  return unwrap<Project>(res.data).map(normalizeProject)[0] ?? null;
+};
+
 export const fetchProject = async (id: number): Promise<Project> => {
   const res = await api.get(`${BASE}projects/${id}/`);
   return normalizeProject(res.data);

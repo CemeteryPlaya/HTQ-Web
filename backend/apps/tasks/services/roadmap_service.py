@@ -24,6 +24,7 @@ from django.http import Http404
 
 from ..models import (TERMINAL_STATUSES, Project, ProjectSite, Roadmap,
                       RoadmapStatus, SiteBlock, Task, TaskVolume)
+from . import board_scope
 from . import hydration
 
 
@@ -35,24 +36,29 @@ def scope_for(token) -> tuple[bool, int | None]:
     return True, hydration.employee_department_id(token.user_id)
 
 
-def _visible(employee_scope: bool, department_id: int | None):
+def _visible(employee_scope: bool, department_id: int | None, refs=None):
+    """``refs`` — доски «Проектов» держателя «Доски задач проекта»
+    (``board_scope``): их роудмапы видны в списке доски, в добавок к отделу."""
     qs = Roadmap.objects.all()
-    if employee_scope:
-        if department_id is None:
-            return Roadmap.objects.none()
+    if not employee_scope:
+        return qs
+    cond = None
+    if department_id is not None:
         # Отдел проекта тоже считается своим: роудмап часто заводят без
         # собственного отдела, и без этого он пропал бы из списка у всех.
-        qs = qs.filter(Q(department_id=department_id)
-                       | Q(department_id__isnull=True,
-                           project__department_id=department_id))
-    return qs
+        cond = (Q(department_id=department_id)
+                | Q(department_id__isnull=True, project__department_id=department_id))
+    linked = board_scope.board_q(refs, prefix="project__")
+    if linked is not None:
+        cond = linked if cond is None else cond | linked
+    return Roadmap.objects.none() if cond is None else qs.filter(cond)
 
 
 def list_roadmaps(*, employee_scope: bool, department_id: int | None,
                   project_id: int | None = None, site_id: int | None = None,
                   block_id: int | None = None,
-                  status: str | None = None) -> list[Roadmap]:
-    qs = (_visible(employee_scope, department_id)
+                  status: str | None = None, refs=None) -> list[Roadmap]:
+    qs = (_visible(employee_scope, department_id, refs)
           .select_related("project", "site_block", "site_block__site"))
     if project_id is not None:
         qs = qs.filter(project_id=project_id)

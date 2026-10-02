@@ -4,10 +4,15 @@
 строка UUID, не FK: межаппный FK запрещён) и одна на проект. Название,
 статус, сроки и руководитель у связанной доски — копия «Проекта»: правятся
 только в «Проектах», сюда приезжают подпиской ``on_project_changed`` в той
-же транзакции, а правка этих полей через доску — 422. Остальное (описание,
+же транзакции, а правка этих полей через доску — 409. Остальное (описание,
 цвет, отдел, календарь, объекты) — доски, «Проект» его не знает.
 
-Доски без ссылки — наследие до связи: миграция ``0024`` связала все, что
+Правку «Проекта» доска принимает всегда (решение 01.10: «Проект» главный —
+подстраивается доска). Названия досок уникальны, «Проектов» — нет, поэтому
+название, которое уже носит другая доска, доска получает с кодом проекта:
+«ЖК Нурлы Жол (П-015)» (``board_name``). Сроки проверяет сам «Проект».
+
+Доски без ссылки — наследие до связи: миграция ``0023`` связала все, что
 были, но строки, заведённые мимо сервиса (ORM, старые сиды), правятся
 по-старому, пока их не свяжет ``manage.py project_link_tasks``.
 """
@@ -53,10 +58,28 @@ class ProjectLinkError(Exception):
         self.status = status
 
 
-def mirrored_values(brief: dict) -> dict:
+def board_name(brief: dict, *, board_id: int | None = None) -> str:
+    """Название доски для «Проекта»: его название, а если его уже носит
+    другая доска — с кодом проекта, «ЖК Нурлы Жол (П-015)» (``-2``, ``-3``…
+    — если занято и это). Вмещается в поле доски: длинное название
+    обрезается перед кодом."""
+    others = Project.objects.exclude(pk=board_id) if board_id else Project.objects.all()
+    name = brief["name"][:_NAME_MAX]
+    if not others.filter(name=name).exists():
+        return name
+    n = 1
+    while True:
+        suffix = f" ({brief['code']})" if n == 1 else f" ({brief['code']}-{n})"
+        candidate = brief["name"][:_NAME_MAX - len(suffix)].rstrip() + suffix
+        if not others.filter(name=candidate).exists():
+            return candidate
+        n += 1
+
+
+def mirrored_values(brief: dict, *, board_id: int | None = None) -> dict:
     """Значения зеркальных полей доски по паспорту «Проекта»."""
     return {
-        "name": brief["name"],
+        "name": board_name(brief, board_id=board_id),
         "status": STATUS_FROM_PROJECT[brief["status"]],
         "start_date": brief["date_start"],
         "end_date": brief["date_end"],
@@ -64,33 +87,17 @@ def mirrored_values(brief: dict) -> dict:
     }
 
 
-def _problem(values: dict, *, board_id: int | None = None) -> str | None:
-    """Почему доска не может принять эти значения, или ``None``."""
-    name = values["name"]
-    if len(name) > _NAME_MAX:
-        return (f"Название длиннее {_NAME_MAX} символов — столько не вмещает "
-                f"доска задач проекта.")
-    if Project.objects.filter(name=name).exclude(pk=board_id).exists():
-        return (f"Доска задач «{name}» уже есть у другого проекта — названия "
-                f"досок не повторяются.")
-    if date_rules.out_of_order(values["start_date"], values["end_date"]):
-        return "Дата окончания проекта раньше даты начала."
-    return None
-
-
 def on_project_changed(brief: dict) -> None:
     """Подписчик правки «Проекта» (``project.interface.
-    register_change_listener``): привести связанную доску к нему. Доска не
-    может принять правку — ``ProjectChangeRejected``, и «Проект» остаётся
-    прежним: данные не расходятся ни на миг."""
+    register_change_listener``): привести связанную доску к нему — в той же
+    транзакции, поэтому данные не расходятся ни на миг. Доска принимает
+    любую правку: занятое название — с кодом проекта (``board_name``), сроки
+    проверил сам «Проект»."""
     board = (Project.objects.select_for_update()
              .filter(project_ref=brief["id"]).first())
     if board is None:
         return
-    values = mirrored_values(brief)
-    problem = _problem(values, board_id=board.pk)
-    if problem:
-        raise project.ProjectChangeRejected(problem)
+    values = mirrored_values(brief, board_id=board.pk)
     changed = [field for field, value in values.items() if getattr(board, field) != value]
     if not changed:
         return
@@ -121,22 +128,26 @@ def create_linked(payload: dict) -> Project:
         raise ProjectLinkError(
             f"У проекта {brief['code']} уже есть доска задач «{taken.name}».")
     values = mirrored_values(brief)
-    problem = _problem(values)
-    if problem:
-        raise ProjectLinkError(problem)
+    if date_rules.out_of_order(values["start_date"], values["end_date"]):
+        # «Проект» со старыми перевёрнутыми сроками (до проверки в самом
+        # «Проекте»): доска с такими сроками не правилась бы вовсе.
+        raise ProjectLinkError(
+            f"У проекта {brief['code']} дата окончания раньше даты начала — "
+            f"исправьте сроки в разделе «Проекты».")
     try:
         with transaction.atomic():
             return Project.objects.create(**fields, **values, project_ref=brief["id"])
     except IntegrityError as exc:
         # Параллельная заявка успела первой: та же доска или то же название.
         raise ProjectLinkError(
-            f"Доску к проекту {brief['code']} только что завели — обновите список.") from exc
+            f"Доску к проекту {brief['code']} или доску с тем же названием только что "
+            f"завели — обновите список и повторите.") from exc
 
 
 def strip_mirrored(board: Project, changes: dict) -> dict:
     """Правка связанной доски: зеркальные поля меняются только в «Проектах».
     Прислать их можно (форма шлёт все поля), но лишь с теми же значениями —
-    иначе 422; из правки они убираются."""
+    иначе 409; из правки они убираются."""
     if not board.project_ref:
         return changes
     blocked = [field for field in MIRRORED
@@ -144,7 +155,7 @@ def strip_mirrored(board: Project, changes: dict) -> dict:
     if blocked:
         raise ProjectLinkError(
             "Название, статус, сроки и руководитель доски повторяют проект и "
-            "меняются в разделе «Проекты».", status=422)
+            "меняются в разделе «Проекты».")
     return {field: value for field, value in changes.items() if field not in MIRRORED}
 
 

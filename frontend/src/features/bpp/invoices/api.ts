@@ -9,6 +9,7 @@ import { apiPath } from '@/api/endpoints';
 
 import type { CounterpartyBrief } from '../agreements/api';
 import type { CurrentHolders } from '../core/registryTypes';
+import type { AlternativeLinks, SelectionResult } from '../selection/links';
 
 export type Money = string;
 
@@ -98,6 +99,8 @@ export interface InvoiceCard {
   possible_split: boolean;
   lines: InvoiceLine[];
   current_holders: CurrentHolders | null;
+  /** Связь с альтернативой (B5.1): основание нового счёта и чем заменён исходный. */
+  alternative?: AlternativeLinks;
   allowed_actions: string[];
 }
 
@@ -141,6 +144,11 @@ export const invoiceApi = {
   cancel: (id: string, key: string, version: number, comment: string) =>
     api.post<InvoiceCard>(path(`${id}/cancel`), { version, comment }, withKey(key))
       .then((r) => r.data),
+  /** «Выбрать» альтернативу (B5.1, ТЗ §12.4 п.3): счёт «Заменён альтернативой». */
+  selectAlternative: (id: string, key: string, body: {
+    offer_id: string; comment: string; version: number;
+  }) => api.post<SelectionResult<InvoiceCard>>(path(`${id}/select-alternative`), body,
+    withKey(key)).then((r) => r.data),
   decide: (id: string, key: string, body: {
     decision: 'pay' | 'not_payable' | 'return'; planned_pay_date?: string | null; comment?: string;
   }) => api.post<InvoiceCard>(path(`${id}/decision`), body, withKey(key)).then((r) => r.data),

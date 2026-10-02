@@ -3,7 +3,8 @@
  * отдал сервер, руководитель — участник и без кнопки «Убрать», правка и
  * участники — по узлам `project.projects`/`project.members`, чужой проект —
  * «Проект не найден» (сервер отвечает 404 и для несуществующего, и для
- * проекта-неучастия ПМ, разница фронту не видна).
+ * проекта-неучастия ПМ, разница фронту не видна). «Доска задач» — у
+ * держателей `project.board` (решение 01.10): ссылка на доску или «нет».
  */
 import { render, screen } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -56,10 +57,13 @@ const project = (over: Record<string, unknown> = {}) => ({
   customer_counterparty_id: null, ...over,
 });
 
-function mockServer(members: number[] = [7, 8]) {
-  get.mockImplementation((url: string) => {
+function mockServer(members: number[] = [7, 8], boards: unknown[] = []) {
+  get.mockImplementation((url: string, config?: { params?: Record<string, string> }) => {
     if (url === `project/v1/projects/${ID}/members`) return Promise.resolve({ data: members });
     if (url === `project/v1/projects/${ID}`) return Promise.resolve({ data: project() });
+    if (url === 'tasks/v1/projects/' && config?.params?.project_ref === ID) {
+      return Promise.resolve({ data: boards });
+    }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -114,6 +118,28 @@ describe('ProjectCardPage', () => {
     expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Убрать участника/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Добавить участника' })).not.toBeInTheDocument();
+  });
+
+  it('«Доска задач» — у держателя project.board: ссылка на доску, а без доски — «нет»', async () => {
+    permissions.mockReturnValue(permissionsWith({ ...PM, 'project.board': ['view'] }));
+    mockServer([7, 8], [{ id: 42, name: 'ЖК «Орда» — монтаж', status: 'active' }]);
+    renderCard();
+
+    const link = await screen.findByRole('link', { name: 'ЖК «Орда» — монтаж' });
+    expect(link).toHaveAttribute('href', '/manage/projects?board=42');
+
+    get.mockReset();
+    mockServer([7, 8], []);
+    renderCard();
+    expect(await screen.findByText('Доски задач у проекта нет')).toBeInTheDocument();
+  });
+
+  it('без project.board строки «Доска задач» нет и доску не спрашивают', async () => {
+    mockServer();
+    renderCard();
+    await screen.findByText('Петров Пётр');
+    expect(screen.queryByTestId('project-board')).not.toBeInTheDocument();
+    expect(get.mock.calls.some(([url]) => String(url).startsWith('tasks/'))).toBe(false);
   });
 
   it('чужой проект (404 у сервера) — «Проект не найден», как у ПМ вне участия', async () => {

@@ -14,13 +14,17 @@ is what they always were semantically.
 
 from __future__ import annotations
 
-from django.db.models import Case, Count, F, IntegerField, Sum, When
+import operator
+from functools import reduce
+
+from django.db.models import Case, Count, F, IntegerField, Q, Sum, When
 
 from htqweb import date_rules
 from django.http import Http404
 
 from .. import schemas
 from ..models import TERMINAL_STATUSES, Project, ProjectSite, Task
+from . import board_scope
 from . import hydration
 from . import project_link
 from . import site_service
@@ -33,28 +37,37 @@ def scope_for(token) -> tuple[bool, int | None]:
     return True, hydration.employee_department_id(token.user_id)
 
 
-def _visible(employee_scope: bool, department_id: int | None):
+def _visible(employee_scope: bool, department_id: int | None, refs=None):
+    """Доски в зоне видимости. ``refs`` — доски «Проектов» держателя «Доски
+    задач проекта» (``board_scope.board_refs_for``), в добавок к отделу."""
     qs = Project.objects.all()
-    if employee_scope:
-        if department_id is None:
-            # No resolvable department -> nothing is in scope. The original
-            # returned an empty list rather than falling back to "all".
-            return Project.objects.none()
-        qs = qs.filter(department_id=department_id)
-    return qs
+    if not employee_scope:
+        return qs
+    conds = [Q(department_id=department_id)] if department_id is not None else []
+    linked = board_scope.board_q(refs)
+    if linked is not None:
+        conds.append(linked)
+    if not conds:
+        # No resolvable department -> nothing is in scope. The original
+        # returned an empty list rather than falling back to "all".
+        return Project.objects.none()
+    return qs.filter(reduce(operator.or_, conds))
 
 
-def list_projects(*, employee_scope: bool,
-                  department_id: int | None) -> list[Project]:
+def list_projects(*, employee_scope: bool, department_id: int | None, refs=None,
+                  project_ref: str | None = None) -> list[Project]:
+    qs = _visible(employee_scope, department_id, refs)
+    if project_ref:
+        # Доска «Проекта» — для ссылки с его карточки (одна на проект).
+        qs = qs.filter(project_ref=project_ref)
     # start_date ASC NULLS LAST, then newest first — projects with no start
     # date sort to the bottom (the original's ``.asc().nulls_last()``).
-    return list(_visible(employee_scope, department_id)
-                .order_by(F("start_date").asc(nulls_last=True), "-created_at"))
+    return list(qs.order_by(F("start_date").asc(nulls_last=True), "-created_at"))
 
 
 def get_project(project_id: int, *, employee_scope: bool,
-                department_id: int | None) -> Project:
-    project = _visible(employee_scope, department_id).filter(
+                department_id: int | None, refs=None) -> Project:
+    project = _visible(employee_scope, department_id, refs).filter(
         pk=project_id).first()
     if project is None:
         raise Http404("Project not found")
@@ -113,6 +126,7 @@ def build_responses(projects: list[Project]) -> list[schemas.ProjectResponse]:
     platform = hydration.project_briefs([p.project_ref for p in projects])
     departments = hydration.department_briefs(
         [p.department_id for p in projects])
+    platform = hydration.project_briefs([p.project_ref for p in projects])
     # Объекты — модель этого же аппа, поэтому один prefetch, а не батч через
     # hydration (в отличие от владельцев и отделов, которыми владеют
     # users/hr). Собираем на весь список сразу: иначе роадмап делал бы

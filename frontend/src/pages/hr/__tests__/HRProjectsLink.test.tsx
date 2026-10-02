@@ -3,8 +3,12 @@
  *
  * Доска заводится только выбором «Проекта» — своего названия, статуса, сроков
  * и владельца на создании у неё нет; у связанной доски эти поля только для
- * чтения и в правку не уходят (сервер ответил бы 422). Доска без связи
+ * чтения и в правку не уходят (сервер ответил бы 409). Доска без связи
  * правится по-старому.
+ *
+ * Ссылка с карточки «Проекта» (`?board=<id>`, решение 01.10) открывает доску
+ * сразу; гость по праву «Доска задач проекта» без кадровых прав только
+ * смотрит: ни правки, ни справочника отделов (кадровая ручка ответила бы 403).
  */
 import React from 'react';
 import { screen, waitFor } from '@testing-library/react';
@@ -19,8 +23,14 @@ vi.mock('@/components/tasks/TasksLayout', () => ({
 }));
 vi.mock('@/components/tasks/SiteWorkTree', () => ({ SiteWorkTree: () => null }));
 
+const perms = vi.hoisted(() => ({ hr: true, tasksAdmin: true }));
 vi.mock('@/hooks/usePermissions', () => ({
-  usePermissions: () => ({ atLeast: () => true, level: () => 'admin', can: () => true }),
+  usePermissions: () => ({
+    atLeast: (module: string, level: string) => (module === 'hr' ? perms.hr
+      : module === 'tasks' && level === 'admin' ? perms.tasksAdmin : true),
+    level: () => 'admin',
+    can: () => true,
+  }),
 }));
 vi.mock('@/hooks/useActiveProfile', () => ({
   useActiveProfile: () => ({ activeProfile: { id: 9 } }),
@@ -46,7 +56,8 @@ vi.mock('@/api/tasks', () => ({
   fetchSites: vi.fn().mockResolvedValue([]),
   setProjectSites: vi.fn(),
 }));
-vi.mock('@/api/hr', () => ({ fetchDepartments: vi.fn().mockResolvedValue([]) }));
+const fetchDepartments = vi.hoisted(() => vi.fn());
+vi.mock('@/api/hr', () => ({ fetchDepartments: () => fetchDepartments() }));
 vi.mock('@/api/users', () => ({ searchUserOptions: vi.fn().mockResolvedValue([]) }));
 
 import HRProjects from '../HRProjects';
@@ -66,6 +77,9 @@ const board = (over: Partial<Project> = {}): Project => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  perms.hr = true;
+  perms.tasksAdmin = true;
+  fetchDepartments.mockResolvedValue([]);
   fetchProjects.mockResolvedValue([]);
   fetchProjectLinkCandidates.mockResolvedValue([CANDIDATE]);
   createProject.mockResolvedValue(board());
@@ -133,5 +147,32 @@ describe('HRProjects — связь с «Проектом»', () => {
 
     await waitFor(() => expect(updateProject).toHaveBeenCalledTimes(1));
     expect(updateProject.mock.calls[0][1]).toMatchObject({ name: 'Объект 16', status: 'active' });
+  });
+});
+
+describe('HRProjects — гость доски по ссылке «Проекта»', () => {
+  it('?board= открывает доску; без кадровых прав — без отделов, правки и создания', async () => {
+    perms.hr = false;
+    perms.tasksAdmin = false;
+    // Владелец доски — сам гость (руководитель «Проекта»): правку ему всё
+    // равно не показывают — сервер открыл доску только на чтение.
+    fetchProjects.mockResolvedValue([board({ id: 42, name: 'Доска П-015', owner_id: 9 })]);
+    renderWithProviders(<HRProjects />, { route: '/manage/projects?board=42' });
+
+    await waitFor(() => expect(screen.getAllByText('Доска П-015').length).toBeGreaterThan(1));
+    expect(screen.queryByText('Выберите проект из списка слева')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Изменить/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Добавить проект/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /План и факт/ })).not.toBeInTheDocument();
+    expect(fetchDepartments).not.toHaveBeenCalled();
+  });
+
+  it('с кадровыми правами владелец доски правит её, как раньше', async () => {
+    perms.tasksAdmin = false;
+    fetchProjects.mockResolvedValue([board({ id: 42, name: 'Доска П-015', owner_id: 9 })]);
+    renderWithProviders(<HRProjects />, { route: '/manage/projects?board=42' });
+
+    expect(await screen.findByRole('button', { name: /Изменить/ })).toBeInTheDocument();
+    expect(fetchDepartments).toHaveBeenCalled();
   });
 });

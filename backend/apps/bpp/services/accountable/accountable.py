@@ -58,7 +58,7 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД и бухгалтер видят все заявки, сотрудник — свои — по узлу
-    ``bpp.accountable.all`` (access/0018, D-S6-5). Суперпользователь — тоже."""
+    ``bpp.accountable.all`` (access/0021, D-S6-5). Суперпользователь — тоже."""
     return actor.is_superuser or actor.can("bpp.accountable.all", "view")
 
 

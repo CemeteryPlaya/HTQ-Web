@@ -137,6 +137,29 @@ def card(actor: Actor, budget: Budget) -> dict:
     }
 
 
+def visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
+    """Выборка реестра L-01 — по ней считает «Обзор» модуля."""
+    return _visible(actor, status=status, project_id=project_id)
+
+
+def project_money(actor: Actor) -> list[dict]:
+    """Лимит, «Задействовано» и «Доступно» утверждённого бюджета каждого
+    видимого актору проекта — для «Обзора» модуля (решение Руслана 01.10:
+    бюджет каждого проекта отдельно, суммы разных проектов не складываются).
+    Итоги — по строкам актора, как в реестре L-01 (СН и ПМ — свои группы
+    статей); проект, где у актора нет ни одной строки, не показывается.
+    По коду проекта."""
+    budgets = list(_visible(actor, status=BudgetStatus.APPROVED)
+                   .select_related("active_version"))
+    rows = [{"budget_id": row["id"], "project": row["project"],
+             "currency_code": row["currency_code"], "limit_amount": row["limit_amount"],
+             "committed": row["committed"], "available": row["available"]}
+            for row in _registry_rows(actor, budgets)
+            if row["limit_amount"] or row["committed"]]
+    return sorted(rows, key=lambda row: (row["project"]["code"] or "",
+                                         row["project"]["name"] or ""))
+
+
 def _visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
     """Выборка реестра L-01 — одна на страницу и выгрузку."""
     rows = Budget.objects.all().order_by("-created_at")

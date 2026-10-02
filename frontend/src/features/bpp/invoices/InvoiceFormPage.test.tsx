@@ -227,6 +227,53 @@ describe('InvoiceFormPage', () => {
     expect(screen.getByTestId('alternatives-block')).toBeInTheDocument();
   });
 
+  it('ФД выбирает альтернативу — комментарий, SelectAlternativeOffer, переход к новому документу', { timeout: 20000 }, async () => {
+    serve(card({
+      status: 'under_review', allowed_actions: ['pay', 'not_payable', 'return', 'select_alternative'],
+    }));
+    const offer = {
+      ...COMPARISON.source, kind: 'offer', id: 'of1', number: 'АП-2026-000007', status: 'submitted',
+      status_label: 'Подано', version: 1, source_amount_kzt: '5000000.00',
+      saving: { amount: '500000.00', pct: '10.00', more_expensive: false },
+      payment_terms: 'postpay', payment_terms_note: '', justification: '', files: [],
+      author: { id: 906, name: 'Петров И.', role: 'sn' }, own_document: false,
+      submitted_at: '2026-09-29T05:00:00Z',
+    };
+    const base = get.getMockImplementation()!;
+    get.mockImplementation((url: string) => (url.includes('/comparison')
+      ? Promise.resolve({ data: {
+        ...COMPARISON, source: { ...COMPARISON.source, source_type: 'invoice' },
+        offers: [offer], submitted_count: 1,
+      } })
+      : base(url)));
+    post.mockResolvedValue({ data: {
+      invoice: card({ status: 'replaced', allowed_actions: [] }),
+      result: { type: 'agreement', id: 'ag-new', number: 'ДГ-2026-000009' },
+      remainder: null, kpi_id: 'k1',
+    } });
+    renderForm();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Выбрать' }, { timeout: 4000 }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByRole('textbox'), 'Дешевле при тех же сроках');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Выбрать' }));
+
+    expect(await screen.findByText('Экран договора', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(post).toHaveBeenCalledWith(
+      expect.stringContaining(`invoices/${ID}/select-alternative`),
+      { offer_id: 'of1', comment: 'Дешевле при тех же сроках', version: 3 },
+      expect.objectContaining({ headers: expect.objectContaining({ 'Idempotency-Key': expect.any(String) }) }),
+    );
+  });
+
+  it('без права выбора кнопки «Выбрать» в блоке нет', { timeout: 15000 }, async () => {
+    serve(card({ status: 'under_review', allowed_actions: ['pay', 'not_payable', 'return'] }));
+    withComparison('invoice');
+    renderForm();
+    await screen.findByTestId('alternatives-block', {}, { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Выбрать' })).toBeNull();
+  });
+
   it('счёт по договору — сравнение альтернатив не запрашивается', { timeout: 15000 }, async () => {
     serve(card({
       basis: 'contract',

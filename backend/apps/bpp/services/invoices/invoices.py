@@ -45,6 +45,7 @@ from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.counterparties import lookup as counterparties
 from apps.bpp.services.money import fmt, money
 from apps.bpp.services.plan import service as plan
+from apps.bpp.services.selection import checks as selection_checks
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
 
@@ -75,7 +76,7 @@ def _deny(text: str) -> DomainError:
 
 def sees_all(actor: Actor) -> bool:
     """ФД, БУХ, ТД, ОД и ГД видят все счета (ТЗ §10.1) — по узлу
-    ``bpp.invoices.all`` (access/0018, D-S6-5), а не по отсутствию права
+    ``bpp.invoices.all`` (access/0021, D-S6-5), а не по отсутствию права
     создавать: СН, совмещающий ФД, видит все счета. Суперпользователь — тоже."""
     return actor.is_superuser or actor.can("bpp.invoices.all", "view")
 
@@ -149,6 +150,9 @@ def allowed_actions(actor: Actor, inv: Invoice) -> list[str]:
             actions.append("cancel")
     if fd and inv.status == InvoiceStatus.UNDER_REVIEW:
         actions += ["pay", "not_payable", "return"]
+        if (inv.basis == InvoiceBasis.NO_CONTRACT
+                and actor.can("bpp.alternatives.select", "edit")):
+            actions.append("select_alternative")       # B5.1, ТЗ §12.4 п.3
     if buh and inv.status in (InvoiceStatus.TO_PAY, InvoiceStatus.PARTIALLY_PAID):
         actions.append("mark_paid")
     if buh and inv.status == InvoiceStatus.PAID:
@@ -262,7 +266,7 @@ def _snapshot(inv: Invoice) -> dict:
     }
 
 
-def _new_invoice(actor: Actor, *, rows: list[PurchaseRequestItem], agreement: Agreement | None,
+def new_invoice(actor: Actor, *, rows: list[PurchaseRequestItem], agreement: Agreement | None,
                  quantities: dict[str, Decimal], amounts: dict[str, Decimal]) -> Invoice:
     today = timezone.localdate()
     request = rows[0].request
@@ -300,7 +304,7 @@ def create_from_plan(actor: Actor, item_ids: list[str], *, role: str | None = No
     rows = list(PurchaseRequestItem.objects.select_related("request")
                 .filter(pk__in=[row["id"] for row in selection["items"]]).order_by("sys_number"))
     left = positions.remaining(rows)
-    inv = _new_invoice(
+    inv = new_invoice(
         actor, rows=rows, agreement=None,
         quantities={str(r.pk): qty_available(left[str(r.pk)], InvoiceBasis.NO_CONTRACT)
                     for r in rows},
@@ -337,7 +341,7 @@ def create_from_agreement(actor: Actor, agreement_id, *, item_ids: list[str] | N
         quantities[key] = min(item.qty, left[key]["qty_left_for_invoice"])
         base = item.amount if item.amount is not None else item.request_item.amount
         amounts[key] = max(min(base, left[key]["amount_left"] or base), Decimal("0"))
-    inv = _new_invoice(actor, rows=rows, agreement=agr, quantities=quantities, amounts=amounts)
+    inv = new_invoice(actor, rows=rows, agreement=agr, quantities=quantities, amounts=amounts)
     audit.record(inv, "created", actor_id=actor.user_id,
                  changes={"agreement": agr.number, "items": [r.sys_number for r in rows]})
     return inv
@@ -621,6 +625,8 @@ def submit(actor: Actor, invoice_id, *, expected_version: int | None,
     _check_duplicate(inv)
     _check_lines(inv)
     figures = check_budget(inv, include_self=False)
+    # Новый счёт по АП: сумма в пределах 5 % от неё (ТЗ §12.4 п.5, B5.1).
+    selection_checks.check_within_tolerance("invoice", inv, inv.amount_kzt)
     inv.counterparty_confirmed = inv.counterparty_confirmed or counterparty_confirmed
     inv.save()
     try:

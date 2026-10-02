@@ -24,9 +24,9 @@ class TasksConfig(AppConfig):
         """
         from . import holding_models  # noqa: F401
 
-        # Доска повторяет название, статус, сроки и руководителя «Проекта»
-        # БЗО (D-02: «Проект» главный) — правка там приезжает сюда в той же
-        # транзакции (``services/project_link.py``).
+        # Доска задач повторяет название, статус, сроки и руководителя
+        # «Проекта» БЗО (D-02: «Проект» главный) — правка там приезжает сюда
+        # в той же транзакции (``services/project_link.py``).
         from apps.project import interface as project
         from .services import project_link
         project.register_change_listener(project_link.on_project_changed)

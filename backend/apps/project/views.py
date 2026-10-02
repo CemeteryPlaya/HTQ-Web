@@ -39,6 +39,11 @@ def _project(request, project_id: str) -> Project:
     return project
 
 
+def _dates_error(exc: projects.ProjectDatesError) -> DomainError:
+    return DomainError("E-VAL-01", str(exc),
+                       fields=[{"field": "date_end", "message": "Раньше даты начала"}])
+
+
 @api_view(methods=("GET",), module="project", level="read")
 def _list(request):
     only_member = request.GET.get("mine") == "1" or not _sees_all(request)
@@ -52,6 +57,8 @@ def _create(request, data: schemas.ProjectIn):
     _need(request, "project.projects", "create")
     try:
         project = projects.create(actor_id=request.token.user_id, **data.model_dump())
+    except projects.ProjectDatesError as exc:
+        raise _dates_error(exc) from exc
     except projects.ProjectError as exc:
         raise DomainError("E-PRJ-01", str(exc)) from exc
     return projects.brief(project)
@@ -76,6 +83,8 @@ def _patch(request, project_id: str, data: schemas.ProjectPatch):
     try:
         project = projects.update(_project(request, project_id), actor_id=request.token.user_id,
                                   **data.model_dump(exclude_unset=True))
+    except projects.ProjectDatesError as exc:
+        raise _dates_error(exc) from exc
     except projects.ProjectChangeRejected as exc:
         # Правку не принял сосед, повторяющий поля «Проекта» (доска задач).
         raise DomainError("E-PRJ-04", str(exc), status=409) from exc

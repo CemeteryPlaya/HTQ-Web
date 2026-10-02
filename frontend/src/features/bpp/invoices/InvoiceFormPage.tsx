@@ -69,6 +69,9 @@ import {
 } from './invoiceForm';
 import { usePrompt, type PromptValues } from './PromptDialog';
 import { MigratedNote } from '../migration/MigratedBadge';
+import type { ComparisonOffer } from '../alternatives/api';
+import { AlternativeLinksNote } from '../selection/AlternativeLinksNote';
+import { documentUrl } from '../selection/links';
 
 const COMMENT_MIN = 10;
 const DOC_LABELS: Record<string, string> = {
@@ -421,6 +424,31 @@ export function InvoiceFormPage() {
     });
   };
 
+  /** «Выбрать» альтернативу (B5.1, ТЗ §12.4 п.3): комментарий обязателен, счёт
+   *  «Заменён альтернативой», дальше — новый документ (его черновик ждёт автора
+   *  заявки). */
+  const selectOffer = (offer: ComparisonOffer) => {
+    const key = newIdempotencyKey();
+    void prompt.ask({
+      title: t('bpp.selection.selectTitle', 'Выбрать альтернативу {{number}}?', { number: offer.number }),
+      description: t('bpp.selection.selectHint',
+        'Счёт будет заменён альтернативой: его согласование аннулируется, позиции освободятся, '
+        + 'на альтернативного контрагента создастся черновик — счёт или договор, если сумма выше 1000 МРП.'),
+      submitLabel: t('bpp.selection.select', 'Выбрать'),
+      fields: [{ key: 'comment', kind: 'comment', label: t('bpp.document.comment', 'Комментарий'), min: COMMENT_MIN }],
+      submit: async (values) => {
+        const done = await invoiceApi.selectAlternative(card.id, key, {
+          offer_id: offer.id, comment: String(values.comment).trim(), version: card.version,
+        });
+        apply(done.invoice);
+        void queryClient.invalidateQueries({ queryKey: ['bpp', 'registry'] });
+        toast.success(t('bpp.selection.done', 'Альтернатива выбрана: создан {{number}}',
+          { number: done.result.number }));
+        navigate(documentUrl(done.result.type, done.result.id));
+      },
+    });
+  };
+
   const toAgreement = () => {
     const removeKey = newIdempotencyKey();
     const createKey = newIdempotencyKey();
@@ -479,6 +507,7 @@ export function InvoiceFormPage() {
       >
         <div className="space-y-6">
           <MigratedNote migrated={card.is_migrated} />
+          <AlternativeLinksNote links={card.alternative} />
           {card.status === 'returned' && card.rework_comment && (
             <div role="status" className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -808,7 +837,14 @@ export function InvoiceFormPage() {
           </section>
 
           {card.basis === 'no_contract' && (
-            <AlternativesBlock sourceType="invoice" sourceId={card.id} />
+            <AlternativesBlock
+              sourceType="invoice" sourceId={card.id}
+              renderSelect={allowed.includes('select_alternative') ? (offer) => (
+                <Button size="sm" onClick={() => selectOffer(offer)}>
+                  {t('bpp.selection.select', 'Выбрать')}
+                </Button>
+              ) : undefined}
+            />
           )}
         </div>
       </BppDocumentShell>

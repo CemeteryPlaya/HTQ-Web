@@ -23,10 +23,19 @@ from .services.core import export
 from .services.invoices import decisions, payments, read
 from .services.invoices import invoices as service
 from .services.params import int_param
+from .services.selection import invoice as selection
 
 
 def _card(request, inv, *, vat_warning: str | None = None) -> dict:
     return read.card(Actor(request), inv, vat_warning=vat_warning)
+
+
+def _doc_brief(doc) -> dict | None:
+    """Новый документ по альтернативе для ответа: вид — имя модели (``invoice``
+    или ``agreement``, как ``OfferSource``), id и номер."""
+    if doc is None:
+        return None
+    return {"type": doc._meta.model_name, "id": str(doc.pk), "number": doc.number}
 
 
 def _list_param(request, name: str) -> list[str]:
@@ -210,6 +219,20 @@ def invoice_decision(request, invoice_id, data):
     return _card(request, decisions.decide(actor, invoice_id, decision=data.decision,
                                            planned_pay_date=data.planned_pay_date,
                                            comment=data.comment))
+
+
+@api_view(methods=("POST",), module="bpp", level="write", body=schemas.SelectAlternative,
+          idempotent=True)
+def invoice_select_alternative(request, invoice_id, data):
+    """«Выбрать» альтернативу (B5.1, ТЗ §12.4 п.3): счёт «Заменён альтернативой»,
+    в ответе — его карточка, новый документ и черновик по остатку."""
+    actor = Actor(request)
+    service.get_visible(actor, invoice_id)
+    done = selection.select(actor, invoice_id, offer_id=data.offer_id, comment=data.comment,
+                            expected_version=data.version)
+    return {"invoice": _card(request, done["invoice"]),
+            "result": _doc_brief(done["result"]), "remainder": _doc_brief(done["remainder"]),
+            "kpi_id": str(done["kpi"].pk)}
 
 
 @api_view(methods=("POST",), module="bpp", level="write", body=schemas.BatchDecision,
