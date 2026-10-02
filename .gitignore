@@ -126,3 +126,6 @@ existing_models.py
 .codebase-memory/.gitignore
 .github/instructions/codebase-workflow.instructions.md
 .zed/settings.json
+
+# claude-code-harness — служебное состояние плагина
+.harness/

@@ -177,9 +177,21 @@ Content-Type: application/json
 
 { "email": "<email_or_username>", "password": "..." }
 → 200 { "access": "<jwt>", "refresh": "<jwt>", "token_type": "Bearer" }
-→ 401 { "detail": "Invalid credentials" }
-→ 401 { "detail": "Account is not activated" }   # status != ACTIVE
+→ 401 { "detail": "Invalid credentials" }       # неизвестный логин, неверный пароль,
+                                                  # неактивная учётка с неверным паролем — ответ один
+→ 401 { "detail": "Account is not activated" }   # status != ACTIVE, ТОЛЬКО при верном пароле
+→ 429 { "detail": "...", "code": "E-AUTH-LOCKED", "fields": [] }   # + Retry-After: <секунды>
 ```
+
+**Блокировка входа (D-S7-3).** После `AUTH_LOCKOUT_THRESHOLD` (5) неудач по одному
+логину за `AUTH_LOCKOUT_SECONDS` (900) вход по нему закрыт на столько же секунд:
+429 `E-AUTH-LOCKED` с заголовком `Retry-After`, даже при верном пароле. Логин —
+адрес без учёта регистра (и без пробелов по краям) либо имя пользователя как есть.
+Под блокировкой войти нельзя; её снимают смена пароля и `manage.py auth_unlock <логин>`
+(или истечение 15 минут), а успешный вход до блокировки лишь сбрасывает счётчик
+неудач. `token/refresh/` не блокируется. 429 без `code` — лимит nginx по IP, не блокировка.
+Порог `0` (умолчание в compose, пока блокировку не включили после окна выкатки) —
+блокировки нет. Недоступный кэш блокировку отключает (вход работает).
 
 JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth` — unchanged from
 the FastAPI generation, even though there's no separate user-service
@@ -533,7 +545,7 @@ business logic).
 | `/api/tasks/v1/calendar/{id}/`                    | PATCH, DELETE | Calendar event         |
 | `/api/tasks/v1/calendar/{id}/exceptions/`         | POST   | Calendar event exception      |
 | `/api/tasks/v1/calendar/timeline/`                | GET    | `{ tasks, events }` by `start`/`end` |
-| `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
+| `/api/tasks/v1/production-calendar/`              | GET, PATCH | Переехал в `refdata` (A7.1): nginx `rewrite` на `/api/refdata/v1/production-calendar/` на один релиз; в Django-маршрутах `tasks` нет |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    | Колокольчик — фасад над центром уведомлений (`apps.notifications`): лента компании запроса плюс общие; `id` и `target_id` — строки, `url` — ссылка писателя |
 | `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
@@ -1587,6 +1599,25 @@ schema the platform can run on.
 (= 1000 × МРП), `exchange_rate` (KZT → 1), `article_brief`, `article_groups`,
 `uom_brief`, `country_brief`, `can_edit`.
 
+### Производственный календарь РК (A7.1, D-S7-1)
+
+Общий справочник группы вместо `tasks.ProductionDay` в схемах компаний:
+базовый календарь считает `apps/core/kz_holidays.py`, строки `refdata.ProductionDay` —
+ручные переопределения поверх него.
+
+| Ручка | Доступ | Описание |
+|---|---|---|
+| `GET production-calendar/?date__gte=&date__lte=` | любой вошедший сотрудник (самообслуживание `open`, `access/self_service.py`) | `[{date, day_type, working_days_since_epoch, note, can_edit}]` (`can_edit` — узел `edit` и управляющая компания, по нему фронт показывает кнопку правки дня); окно по умолчанию — «месяц плюс 31 день», больше 370 дней или перевёрнутое — 400, мусорная дата — 422 |
+| `PATCH production-calendar/<YYYY-MM-DD>/` `{day_type, note?}` | `api_view(module="refdata", level="write")` **и** узел `refdata.production_calendar` строго `edit` **и** управляющая компания | `day_type`: `working`/`weekend`/`holiday`/`short`; пересчитывает счётчик года; иначе 403 (`E-REF-03` — не управляющая компания или нет узла) |
+
+Узел `refdata.production_calendar` не наследует глубину от `refdata`
+(`EXPLICIT_ONLY`): явная строка `edit` — у `bpp-od`, `hr-senior`, `hr-lead`
+(`access/0022`), у прочих системных ролей пустая; у модульной `platform-admin` строки узла нет (только модульные строки) — правки нет (узел explicit-only); роль с `refdata:admin` без
+строки узла править не может. `hr-senior`/`hr-lead` получают уровень `refdata:write` (чтение справочников и гейт записи), но правят только календарь: запись в остальные справочники требует прав на их узлы. Расчёты рабочих дней для соседей —
+`refdata.interface`: `day_type`, `is_working_day`, `working_days_between`,
+`days_between`, `add_working_days`, `production_days`. Перенос строк из схем
+компаний — `manage.py refdata_import_production_days [--dry-run]`.
+
 ---
 
 ## `apps.bpp` — `/api/bpp/v1` (модуль БЗО)
@@ -2091,7 +2122,7 @@ change:
 | 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown company's host, from `django-admin` on an archived company's host, or from `api_view` for anyone but a superuser reading an archived company (see the archive spec) |
 | 409      | Conflict (e.g. duplicate email on register)                          |
 | 422      | Pydantic validation error (`body=` schema on `api_view`)              |
-| 429      | Rate limit exceeded (nginx prod only)                                |
+| 429      | `POST users/v1/token/` — блокировка входа, `{"detail","code":"E-AUTH-LOCKED","fields":[]}` + заголовок `Retry-After` (секунды); также лимит nginx на выдачу токена (`limit_req_status 429` только в `location` токена, тело пустое/nginx; остальные зоны по-прежнему отвечают 503) |
 | 500      | Unhandled exception — `api_view` catches everything and logs it       |
 | 503      | A dependency's `ServiceStatus` is disabled (`{"detail","code":"service_disabled","service"}`), or upstream unhealthy at the gateway |
 
