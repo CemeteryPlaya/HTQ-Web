@@ -4,7 +4,7 @@
 #
 #   docker compose -f docker-compose.test-local.yml up -d --build
 #   ./scripts/bpp-e2e-seed.sh
-#   cd frontend && npx playwright test tests/e2e/3*_bpp_* --project=msedge
+#   cd frontend && npx playwright test tests/e2e/3*_bpp_* --project=chromium   # Edge установлен — можно --project=msedge
 #
 # Что делает (всё идемпотентно — повтор ничего не дублирует):
 #   0. migrate_companies — схемы компаний на актуальной версии.
