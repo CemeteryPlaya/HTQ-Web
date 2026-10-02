@@ -45,7 +45,7 @@ HTQWeb1/
 ├── webtransport/         # QUIC signalling proxy (Python aioquic) для SFU
 ├── docs/                 # Архитектура, аудиты, ngrok/tunnel-инструкции; deploy/subdomains-runbook.md —
 │                         #   чеклист перевода компаний на поддомены (DNS, сертификат, порядок окна выкатки);
-│                         #   deploy/bpp-rollout-runbook.md — ранбук выкатки модуля БЗО на пилота (шаги, откат, протоколы прогонов)
+│                         #   deploy/bpp-rollout-runbook.md — ранбук выкатки модуля БЗО на все компании группы (шаги, откат, протоколы прогонов)
 ├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic);
 │                         #   bpp-e2e-seed.sh — сид пилотной компании стенда под сценарии приёмки БЗО SC-001…SC-006
 ├── tools/                # Локальные бинари туннелей (gitignored)
