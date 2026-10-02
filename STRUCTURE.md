@@ -30,7 +30,8 @@ HTQWeb1/
 │   ├── htqweb/            # Проектный пакет: settings/, urls.py, asgi.py/wsgi.py,
 │   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/,
 │   │                       #   tenancy/ (контекст компании и схема Postgres, см. §3.7),
-│   │                       #   fallback.py (громкие подмены, см. §8)
+│   │                       #   fallback.py (громкие подмены, см. §8),
+│   │                       #   integrations/ (клиенты внешних систем; onec.py — OData 1С, заготовка A7.3)
 │   ├── apps/               # Доменные Django-аппки — units изоляции (см. §3.1)
 │   ├── manage.py   requirements.txt   pytest.ini   conftest.py
 │   ├── Dockerfile   docker-entrypoint.sh
