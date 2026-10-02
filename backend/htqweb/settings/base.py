@@ -724,6 +724,16 @@ ANTIVIRUS_CLAMD_HOST = env("ANTIVIRUS_CLAMD_HOST", "")
 ANTIVIRUS_CLAMD_PORT = int(env("ANTIVIRUS_CLAMD_PORT", "3310"))
 # 20 МБ на локальной сети clamd проверяет за секунды; таймаут — на зависание.
 ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "60"))
+# ── 1С (заготовка, A7.3, D-38, D-S7-5) ──────────────────────────────────
+# Адрес публикации OData, учётная запись и пароль живут в файле секретов
+# (secrets/onec.env, подключается через env_file compose), а не в репозитории
+# и не в ``environment:`` compose. Пустой ONEC_ODATA_URL — интеграция выключена.
+ONEC_ODATA_URL = env("ONEC_ODATA_URL", "")
+ONEC_USER = env("ONEC_USER", "")
+ONEC_PASSWORD = env("ONEC_PASSWORD", "")
+ONEC_TIMEOUT = float(env("ONEC_TIMEOUT", "20"))
+# http (не https) — только для стенда: клиент иначе отказывается.
+ONEC_ALLOW_HTTP = env("ONEC_ALLOW_HTTP", "").lower() in ("1", "true", "yes")
 ALLOWED_MIME_TYPES = env("ALLOWED_MIME_TYPES", "")  # comma-separated, "" = allow all
 IMAGE_JPEG_QUALITY = int(env("IMAGE_JPEG_QUALITY", "85"))
 THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png

@@ -88,6 +88,8 @@ def _patch(request, project_id: str, data: schemas.ProjectPatch):
     except projects.ProjectChangeRejected as exc:
         # Правку не принял сосед, повторяющий поля «Проекта» (доска задач).
         raise DomainError("E-PRJ-04", str(exc), status=409) from exc
+    except projects.ProjectError as exc:
+        raise DomainError("E-PRJ-01", str(exc)) from exc
     return projects.brief(project)
 
 

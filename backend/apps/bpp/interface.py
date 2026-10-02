@@ -60,3 +60,12 @@ def migrated_targets(source_type: str, source_ids) -> dict[str, list[dict]]:
     from apps.bpp.services.migration import links
 
     return links.targets(source_type, source_ids)
+
+
+def upsert_counterparty_from_1c(record: dict):
+    """Один контрагент из 1С — идемпотентно (заготовка A7.3, D-38): ``Outcome``
+    (``created|updated|unchanged|conflict|rejected``). В контексте компании."""
+    require_service("bpp")
+    from apps.bpp.services.counterparties import onec
+
+    return onec.upsert_counterparty(record)

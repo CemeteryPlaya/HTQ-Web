@@ -46,6 +46,11 @@ class Project(models.Model):
 
     class Meta:
         ordering = ("code",)
+        constraints = [
+            # Ключ записи в 1С уникален среди непустых внутри компании (A7.3, D-S7-5).
+            models.UniqueConstraint(fields=["ext_1c_ref"], condition=~models.Q(ext_1c_ref=""),
+                                    name="uq_project_ext_1c"),
+        ]
         verbose_name = "Проект"
         verbose_name_plural = "Проекты"
 

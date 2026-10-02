@@ -141,6 +141,7 @@ export function ProjectCardPage() {
         <Detail label={t('bpp.projects.customer', 'Заказчик')} value={data.customer_name} />
         <Detail label={t('bpp.projects.dateStart', 'Начало')} value={data.date_start ? formatDate(data.date_start) : ''} />
         <Detail label={t('bpp.projects.dateEnd', 'Окончание')} value={data.date_end ? formatDate(data.date_end) : ''} />
+        <Detail label={t('bpp.projects.ext1c', 'Код в 1С')} value={data.ext_1c_ref ?? ''} />
         {canBoard && (
           <div data-testid="project-board">
             <dt className="text-xs text-muted-foreground">{t('bpp.projects.board', 'Доска задач')}</dt>

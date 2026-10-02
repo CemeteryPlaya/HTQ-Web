@@ -71,6 +71,9 @@ class Counterparty(VersionedModel):
         constraints = [
             models.UniqueConstraint(fields=["country_code", "reg_number"],
                                     name="uq_bpp_counterparty_reg"),
+            # Ключ записи в 1С уникален среди непустых внутри компании (A7.3, D-S7-5).
+            models.UniqueConstraint(fields=["ext_1c_ref"], condition=~models.Q(ext_1c_ref=""),
+                                    name="uq_bpp_counterparty_ext_1c"),
         ]
         indexes = [
             models.Index(fields=["status", "name"], name="ix_bpp_counterparty_status"),

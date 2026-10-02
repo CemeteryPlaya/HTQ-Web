@@ -27,6 +27,8 @@ export interface Project {
   /** Сроки проекта — их повторяет доска задач проекта (D-02). */
   date_start?: string | null;
   date_end?: string | null;
+  /** Код записи в 1С (заготовка интеграции); пустая строка — не связан. */
+  ext_1c_ref?: string;
 }
 
 export interface ProjectCreate {

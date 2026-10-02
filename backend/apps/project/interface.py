@@ -104,3 +104,12 @@ def delete_project(project_id: str) -> None:
     удаляет сам и раньше: ссылки на проект у них — ключом, без FK."""
     require_service("project")
     Project.objects.filter(pk=project_id).delete()
+
+
+def upsert_project_from_1c(record: dict):
+    """Один «Проект» из 1С — идемпотентно (заготовка A7.3, D-38): ``Outcome``
+    (``created|updated|unchanged|conflict|rejected``). В контексте компании."""
+    require_service("project")
+    from .services import onec
+
+    return onec.upsert_project(record)

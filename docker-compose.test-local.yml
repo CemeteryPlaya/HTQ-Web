@@ -264,6 +264,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
       # Миграции на локальной базе — норма: она для того и заведена.
@@ -306,6 +310,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -328,6 +336,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
@@ -348,6 +360,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]

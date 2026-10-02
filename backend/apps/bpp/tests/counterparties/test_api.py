@@ -124,6 +124,21 @@ def test_invalid_bin_is_422_e_ctr_03(slug):
 
 
 @pytest.mark.django_db
+def test_taken_ext_1c_ref_is_422_on_post_and_patch(slug):
+    """Занятый «Код в 1С» — 422 с полем ext_1c_ref, а не 500."""
+    guid = "0f8fad5b-d9cb-469f-a165-70867728950e"
+    first, second, third = common.valid_bins(3)
+    client = Client()
+    assert _post(client, BASE, common.data(first, ext_1c_ref=guid), s.auth(slug, FD)).status_code == 201
+    dup = _post(client, BASE, common.data(second, ext_1c_ref=guid), s.auth(slug, FD))
+    assert dup.status_code == 422 and dup.json()["fields"][0]["field"] == "ext_1c_ref"
+    other = _post(client, BASE, common.data(third), s.auth(slug, FD)).json()
+    patched = _patch(client, f"{BASE}/{other['id']}",
+                     {"version": other["version"], "ext_1c_ref": guid.upper()}, s.auth(slug, FD))
+    assert patched.status_code == 422 and patched.json()["fields"][0]["field"] == "ext_1c_ref"
+
+
+@pytest.mark.django_db
 def test_registry_search_filters_and_page_size(slug):
     client = Client()
     numbers = common.valid_bins(2)
