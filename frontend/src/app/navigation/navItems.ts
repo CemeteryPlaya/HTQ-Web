@@ -30,7 +30,7 @@ import {
 
 /** Какое право нужно, чтобы раздел был виден. */
 export type NavRequirement =
-  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail' | 'bpp';
+  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail' | 'bpp' | 'contracts';
 
 export interface NavItem {
   /** Стабильный ключ для React и тестов. */
@@ -50,7 +50,9 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'calendar', href: '/calendar', icon: Calendar, labelKey: 'hr.nav.calendar', labelFallback: 'Календарь', requires: 'always', inBottomNav: true },
   { id: 'messenger', href: '/messenger', icon: MessageCircle, labelKey: 'nav.messenger', labelFallback: 'Чаты', requires: 'messenger', inBottomNav: true },
   { id: 'email', href: '/email', icon: Mail, labelKey: 'nav.email', labelFallback: 'Почта', requires: 'mail', inBottomNav: true },
-  { id: 'contracts', href: '/contracts', icon: FileSignature, labelKey: 'contracts.nav.title', labelFallback: 'Договоры', requires: 'always' },
+  // Заморожен после переноса в БЗО (A6.2) — уходит в меню «Закупок и оплат»
+  // как «Архив договоров» (`BppLayout`), см. `allowed`/`labelled`.
+  { id: 'contracts', href: '/contracts', icon: FileSignature, labelKey: 'contracts.nav.title', labelFallback: 'Договоры', requires: 'contracts' },
   { id: 'signoff', href: '/signoff', icon: Stamp, labelKey: 'signoff.nav.title', labelFallback: 'Согласования', requires: 'always' },
   // Модуль БЗО: раздел со своим левым меню (`features/bpp/BppLayout`).
   { id: 'bpp', href: '/bpp', icon: ShoppingCart, labelKey: 'bpp.nav.title', labelFallback: 'Закупки и оплаты', requires: 'bpp' },
@@ -69,6 +71,13 @@ export interface NavAbilities {
   hasMail: boolean;
   /** `bpp:read` — раздел «Закупки и оплаты» (гейт маршрута `/bpp/*` тот же). */
   hasBpp: boolean;
+  /**
+   * Раздел «Договоры» заморожен после переноса в БЗО (A6.2). Тогда пункт
+   * «Договоры» уходит из шапки в меню «Закупок и оплат» как «Архив
+   * договоров»; без `bpp:read` туда не попасть — пункт остаётся в шапке под
+   * именем «Архив договоров» (`labelled`), иначе архив стал бы недостижим.
+   */
+  contractsFrozen?: boolean;
 }
 
 const allowed = (item: NavItem, a: NavAbilities): boolean => {
@@ -81,13 +90,20 @@ const allowed = (item: NavItem, a: NavAbilities): boolean => {
     case 'messenger': return a.hasMessenger;
     case 'mail': return a.hasMail;
     case 'bpp': return a.hasBpp;
+    case 'contracts': return !(a.contractsFrozen && a.hasBpp);
     default: return false;
   }
 };
 
+/** Подпись пункта с учётом состояния раздела: архив «Договоров» (A6.2). */
+const labelled = (item: NavItem, a: NavAbilities): NavItem =>
+  item.id === 'contracts' && a.contractsFrozen
+    ? { ...item, labelKey: 'contracts.nav.archive', labelFallback: 'Архив договоров' }
+    : item;
+
 /** Разделы, доступные пользователю, в каноническом порядке. */
 export const visibleNavItems = (a: NavAbilities): NavItem[] =>
-  NAV_ITEMS.filter((item) => allowed(item, a));
+  NAV_ITEMS.filter((item) => allowed(item, a)).map((item) => labelled(item, a));
 
 /** Разделы для мобильной нижней панели. */
 export const bottomNavItems = (a: NavAbilities): NavItem[] =>

@@ -136,6 +136,14 @@ class OnOption(Protocol):
         """
 
 
+class RouteEditors(Protocol):
+    def __call__(self, token: Any) -> bool:
+        """Может ли владелец токена править маршруты этого типа, не будучи
+        администратором платформы. Права решает предметная аппка своими
+        узлами (модуль БЗО, В-09: ФД и АДМ); движок узлов не знает. Контекст
+        компании запроса уже установлен."""
+
+
 @dataclass(frozen=True)
 class Subject:
     """Что предметная аппка рассказала signoff о своём типе объектов.
@@ -200,6 +208,9 @@ class Subject:
     Ключ объекта колбэки получают в типе ключа ЕГО модели (``native_id``):
     ``int`` у целочисленных моделей, ``uuid.UUID`` у моделей с UUID-ключом.
     В ``ApprovalProcess.subject_id`` он хранится строкой (``storage_key``).
+
+    ``route_editors`` — кто, кроме администратора платформы, правит маршруты
+    типа (``can_edit_routes``). Нет колбэка — только администратор, как было.
     """
 
     subject_type: str
@@ -223,6 +234,7 @@ class Subject:
     options: Options | None = None
     check_option: CheckOption | None = None
     on_option: OnOption | None = None
+    route_editors: RouteEditors | None = None
     takes_scope_fact_fields: bool = False
     takes_scope_approver_fields: bool = False
     takes_scope_requirement_fields: bool = False
@@ -249,7 +261,8 @@ def register_subject(subject_type: str, *, label: str, model: type,
                      check_requirement: CheckRequirement | None = None,
                      options: Options | None = None,
                      check_option: CheckOption | None = None,
-                     on_option: OnOption | None = None) -> Subject:
+                     on_option: OnOption | None = None,
+                     route_editors: RouteEditors | None = None) -> Subject:
     """Объявить тип объектов согласуемым.
 
     Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
@@ -329,6 +342,7 @@ def register_subject(subject_type: str, *, label: str, model: type,
         on_event=on_event,
         requirement_fields=requirement_fields, check_requirement=check_requirement,
         options=options, check_option=check_option, on_option=on_option,
+        route_editors=route_editors,
         takes_scope_fact_fields=_takes_scope(fact_fields),
         takes_scope_approver_fields=_takes_scope(approver_fields),
         takes_scope_requirement_fields=_takes_scope(requirement_fields),
@@ -366,6 +380,22 @@ def get_subject(subject_type: str) -> Subject:
 
 def registered_subjects() -> list[Subject]:
     return [_SUBJECTS[key] for key in sorted(_SUBJECTS)]
+
+
+def can_edit_routes(subject_type: str, token) -> bool:
+    """Правит ли владелец токена маршруты типа: администратор платформы —
+    любые, остальные — по колбэку ``route_editors`` типа. Незарегистрированный
+    тип и тип без колбэка — только администратор."""
+    if token.is_elevated:
+        return True
+    subject = _SUBJECTS.get(subject_type)
+    return bool(subject and subject.route_editors and subject.route_editors(token))
+
+
+def route_editable_types(token) -> set[str]:
+    """Типы, маршруты которых владелец токена правит не как администратор."""
+    return {key for key, subject in _SUBJECTS.items()
+            if subject.route_editors and subject.route_editors(token)}
 
 
 def fields_for(subject_type: str, scope: str = "") -> list[dict]:

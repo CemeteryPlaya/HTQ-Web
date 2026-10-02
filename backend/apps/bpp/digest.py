@@ -15,9 +15,9 @@ from __future__ import annotations
 
 SOURCE_KEY = "bpp.closing_docs"
 SECTION = "Ждут от вас закрывающих документов"
-# Реестр счетов. Вкладку «Ждут закрывающих» (`tab=awaiting_docs`) адресом не
-# открыть: InvoicesPage держит вкладку в состоянии страницы, а не в `?tab=`.
-LANDING_URL = "/bpp/invoices"
+# Реестр счетов на вкладке «Ждут закрывающих»: с этапа 4 вкладка открывается
+# из адреса (`?tab=awaiting_docs`, InvoicesPage).
+LANDING_URL = "/bpp/invoices?tab=awaiting_docs"
 
 
 def closing_docs_items(user_id: int) -> list[dict]:

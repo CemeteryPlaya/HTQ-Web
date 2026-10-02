@@ -56,17 +56,29 @@ class ContractorRef(BaseModel):
     name: str
 
 
-class CounterpartyRef(BaseModel):
-    """Контрагент из «Договоров» в карточке партнёра — бейдж со ссылкой.
+class BppCounterpartyRef(BaseModel):
+    """Контрагент модуля «Закупки и оплаты» в карточке партнёра (A6.1) —
+    бейдж со ссылкой: наименование, БИН/ИИН (``reg_number``) и статус.
 
-    ``status``/``approval_state`` — строками, а не enum'ами ``apps.contracts``:
-    импортировать чужие модели нельзя, а сверять значения здесь незачем."""
+    ``status`` — строкой, а не enum'ом ``apps.bpp``: импортировать чужие
+    модели нельзя, а сверять значения здесь незачем."""
 
-    id: int
+    id: str
     name: str
-    bin_iin: str
+    reg_number: str
     status: str
-    approval_state: str
+
+
+class BppCounterpartyOption(BppCounterpartyRef):
+    """Строка поиска контрагента для формы партнёра: плюс то, что форма
+    подтягивает к себе при выборе (краткое имя, страна, контакты)."""
+
+    short_name: str = ""
+    country_code: str = ""
+    contact_person: str = ""
+    phone: str = ""
+    email: str = ""
+    legal_address: str = ""
 
 
 class AgreementRef(BaseModel):
@@ -253,9 +265,10 @@ class ContractorCreate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str = Field(default="", max_length=5000)
     status: ContractorStatus = Field(default=ContractorStatus.ACTIVE)
-    # Та же организация в «Договорах». Необязательно — см. докстринг
-    # ``models.Contractor``; проверки — ``contractor_service``.
-    counterparty_id: int | None = None
+    # Та же организация в модуле «Закупки и оплаты» (ключ UUID строкой).
+    # Необязательно — см. докстринг ``models.Contractor``; проверки —
+    # ``contractor_service``.
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorUpdate(BaseModel):
@@ -269,8 +282,9 @@ class ContractorUpdate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str | None = Field(None, max_length=5000)
     status: ContractorStatus | None = None
-    # ``null`` снимает связь (PATCH разбирается с exclude_unset).
-    counterparty_id: int | None = None
+    # ``null`` (или пустая строка) снимает связь (PATCH разбирается с
+    # exclude_unset).
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorResponse(BaseModel):
@@ -284,8 +298,10 @@ class ContractorResponse(BaseModel):
     address: str | None = None
     notes: str
     status: ContractorStatus
-    counterparty_id: int | None = None
-    counterparty: CounterpartyRef | None = None
+    bpp_counterparty_id: str | None = None
+    # ``None`` при заполненном ``bpp_counterparty_id`` — модуль «Закупки и
+    # оплаты» выключен: связь есть, показать её нечем.
+    bpp_counterparty: BppCounterpartyRef | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -667,21 +683,33 @@ class RoadmapMetricsResponse(BaseModel):
     equipment: ResourceComparison
 
 
-class ProjectCreate(OrderedDates):
-    name: str = Field(..., min_length=1, max_length=200)
+class ProjectCreate(BaseModel):
+    """Доска заводится к «Проекту» модуля БЗО (D-02): название, статус, сроки
+    и руководитель берутся из него (``services/project_link.py``), поэтому в
+    теле их нет — лишние ключи Pydantic отбрасывает."""
+
+    project_ref: str = Field(..., min_length=1, max_length=36)
     description: str = Field(default="", max_length=5000)
-    status: ProjectStatus = Field(default=ProjectStatus.ACTIVE)
     color: str = Field(default="#3b82f6", max_length=20)
-    start_date: date | None = None
-    end_date: date | None = None
-    owner_id: int | None = None
     department_id: int | None = None
     # False = календарные дни (стройка идёт 7/7), True = рабочие.
     use_production_calendar: bool = False
 
 
+class ProjectLinkCandidate(BaseModel):
+    """«Проект», к которому ещё можно завести доску задач."""
+
+    id: str
+    code: str
+    name: str
+    status: str
+    date_start: date | None = None
+    date_end: date | None = None
+    manager_user_id: int | None = None
+
+
 class ProjectUpdate(OrderedDates):
-    name: str | None = Field(None, min_length=1, max_length=200)
+    name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=5000)
     status: ProjectStatus | None = None
     color: str | None = Field(None, max_length=20)
@@ -707,6 +735,11 @@ class ProjectResponse(BaseModel):
     sites: list[ProjectSiteRef] = []
     site_ids: list[int] = []
     use_production_calendar: bool = False
+    # Связь с «Проектом» БЗО: у связанной доски название, статус, сроки и
+    # руководитель — его копия и правятся в «Проектах» (D-02).
+    project_ref: str = ""
+    project_code: str | None = None
+    linked: bool = False
     task_count: int = 0
     done_count: int = 0
     progress: float = 0.0

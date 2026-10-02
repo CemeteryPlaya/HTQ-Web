@@ -495,8 +495,9 @@ business logic).
 | `/api/tasks/v1/tasks/{id}/progress/`              | PATCH  | `{percent}`                   |
 | `/api/tasks/v1/labels/`                           | GET, POST |                           |
 | `/api/tasks/v1/versions/`                         | GET, POST | Project versions          |
-| `/api/tasks/v1/projects/`                         | GET, POST |                            |
-| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE |                  |
+| `/api/tasks/v1/projects/`                         | GET, POST | `GET ?project_ref=<uuid>` — доска этого «Проекта» (ссылка с его карточки). Держатель узла `project.board` (ТД, ОД, ПМ, АДМ) видит, кроме досок своего отдела, доски «Проектов», которые видит в БЗО — с `project.all` все связанные, иначе проекты-участия; так же карточка доски, её `tasks/` и список `roadmaps/?project_id=`; правка доски этим не открывается. Доска задач заводится только к «Проекту» БЗО (D-02: «Проект» главный): `POST {project_ref, description?, color?, department_id?, use_production_calendar?}` — название, статус, сроки и владелец (руководитель проекта) берутся из «Проекта». Нет такого — 422; в архиве, уже с доской или со старыми перевёрнутыми сроками — 409. Название, занятое другой доской, доска получает с кодом проекта: «ЖК Нурлы Жол (П-015)». В ответе `project_ref`, `project_code`, `linked` |
+| `/api/tasks/v1/projects/link-candidates`          | GET    | `?q=` — «Проекты» без доски и не в архиве (до 20), для выбора при создании доски. Гейт как у создания (`tasks:admin`) |
+| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE | У связанной доски `name`/`status`/`start_date`/`end_date`/`owner_id` — копия «Проекта»: в PATCH можно прислать только те же значения, другое — 409 (правятся в «Проектах», оттуда приезжают на доску в той же транзакции). Доска без связи правится целиком |
 | `/api/tasks/v1/projects/{id}/tasks/`              | GET    |                              |
 | `/api/tasks/v1/roadmaps/`                         | GET, POST | Пакеты работ **на блоке**: проект → площадка → блок → **роудмап** → задача. Тело принимает `site_block_id`; площадки колонкой нет, `?site_id=` фильтрует джойном |
 | `/api/tasks/v1/roadmaps/{id}/`                    | GET, PATCH, DELETE | Правка — владелец или админ. DELETE непустого пакета → 409 |
@@ -536,6 +537,9 @@ business logic).
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
 | `/api/tasks/v1/notifications/`                    | GET    | Колокольчик — фасад над центром уведомлений (`apps.notifications`): лента компании запроса плюс общие; `id` и `target_id` — строки, `url` — ссылка писателя |
 | `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
+| `/api/tasks/v1/contractors/`, `contractors/{id}/` | GET, POST, PATCH, DELETE | Партнёры (подрядные организации). Связь с контрагентом модуля «Закупки и оплаты» (A6.1): ввод `bpp_counterparty_id` (UUID строкой; `null`/`""` — снять), в ответе `bpp_counterparty_id` и `bpp_counterparty {id, name, reg_number, status}` (`null` при заполненном ключе — модуль выключен). Новая связь — только с «Активен» (иначе 409), неизвестный ключ — 404, контрагент у другого партнёра или расходится БИН/ИИН — 409, выключенный модуль на записи связи — 503. Смена контрагента снимает договоры привлечений (номер в `contract_no` остаётся). Прежних `counterparty_id`/`counterparty` («Договоры») в API нет |
+| `/api/tasks/v1/contractors/counterparty-search`   | GET    | `?q=&limit=` (по умолчанию 20, до 100) — выбор контрагента в карточке партнёра: только «Активен», по наименованию или БИН/ИИН; строки `{id, name, short_name, reg_number, country_code, status, contact_person, phone, email, legal_address}`. Гейт — как у правки партнёра (`tasks:admin`, `admin=True`): ролей модуля закупок не требует; модуль выключен — 503 |
+| `/api/tasks/v1/contractor-engagements/`, `{id}/`  | GET, POST, PATCH, DELETE | Привлечения партнёра. `agreement_id` — договор «Договоров»: принимается, только если контрагент договора перенесён (B6.1) в контрагента модуля, с которым связан партнёр (иначе 409); номер ложится в `contract_no` |
 | `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
@@ -1053,6 +1057,39 @@ would mean approvers signed off on a document that is no longer in the card.
 Every path is registered in **both** the slashed and bare spelling
 (`APPEND_SLASH = False`). No frontend consumes this yet.
 
+**Заморозка после переноса в БЗО (A6.2, D-S6-4).** Признак — строка
+`contracts.FreezeState` в схеме компании; ставит и снимает её только
+`manage.py contracts_freeze --company <slug> [--comment …] [--actor <user_id>] [--undo]`
+— шаг ранбука после проверок `bpp_migrate_contracts` (морозит человек, когда ФД
+сверил сальдо). Повтор идемпотентен (дата первой заморозки не сдвигается),
+`--undo` возвращает запись. У замороженной компании:
+
+- любой метод, кроме `GET`/`HEAD`/`OPTIONS`, под `/api/contracts/` — **403**
+  `{"detail": "Раздел перенесён в «Закупки и оплаты». Данные доступны только для чтения.", "code": "contracts_frozen"}`
+  — до аутентификации и вьюхи, всем, включая суперпользователя
+  (`apps/contracts/middleware.py`, после `CompanyContextMiddleware` и
+  `ServiceGateMiddleware`; без компании запроса признак не спрашивается);
+- django-admin раздела — только чтение;
+- чтение (списки, карточки, файлы) работает как раньше; `ServiceStatus`
+  домена не трогается — архив обязан читаться;
+- соседние компании пишут как раньше.
+
+`GET /api/contracts/v1/freeze` → `{frozen, frozen_at, comment}` (права — как у
+остального чтения раздела: любой JWT; вне контекста компании — `frozen: false`).
+Карточки `GET agreements/{id}`, `invoices/{id}`, `counterparties/{id}` несут
+`migrated_to: [{target_type, target_id, number}]` — куда запись переехала в
+модуль (`bpp.interface.migrated_targets`, только документ того же рода:
+`bpp.agreement` / `bpp.invoice` / `bpp.counterparty`; техническая заявка
+переноса не показывается); в списках — `[]`, при выключенном `bpp` — `[]`.
+Согласования (`/api/signoff/`, мимо префикса раздела): в замороженной компании
+запуск согласования документа `contracts.*` и возврат закрытого документа на
+доработку — тоже 403 `contracts_frozen` (колбэки предметов, `approval_hooks._guard`).
+`contracts_freeze` не морозит раздел, пока есть идущие согласования его документов
+(ошибка со списком); `--revoke-pending` отзывает их (документы — в черновик) и
+замораживает одной транзакцией. Пока в схеме компании нет таблицы заморозки
+(код выкачен, `migrate_companies` не прогнан) раздел считается незамороженным
+(`fallback contracts.freeze.table_missing`, expected). Фоновых задач у `contracts` нет.
+
 **Purchase requests → documents.** `Agreement` and `Invoice` carry an optional
 `request_id` — the approved request of the form builder («Запросы») they
 fulfil, a plain integer (no cross-app FK). It is accepted on create and PATCH
@@ -1067,6 +1104,7 @@ is disabled. `?request_id=` filters `GET /agreements` and `GET /invoices`.
 
 | Endpoint                                          | Method | Notes                          |
 |---------------------------------------------------|--------|--------------------------------|
+| `/api/contracts/v1/freeze`                       | GET    | `{frozen, frozen_at, comment}` — раздел заморожен после переноса в БЗО (A6.2); запись тогда — 403 `contracts_frozen` |
 | `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
 | `/api/contracts/v1/countries`                    | GET, POST | Reference                   |
 | `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
@@ -1290,16 +1328,18 @@ clicking. `signoff.interface.pending_requirement_keys(user_id, subject_type,
 subject_id)` tells a domain whose working stage is running right now — that
 is how `approvals` decides who may fill approver-filled fields.
 
+**Who edits routes (`editor` below).** The platform admin (`is_elevated`) edits every route; a subject type may also name its own editors with `register_subject(route_editors=fn(token) -> bool)`. BPP does: routes of `bpp.*` documents are edited by holders of `bpp.routes` `edit` — ФД and АДМ (В-09, `access/0018`). Every route and stage handle checks the type of *its* route, so a BPP editor gets 403 on any other route.
+
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
 | `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and every state enum — process, stage, task, and the subject's own `approval_state` |
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
-| `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
-| `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
-| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | admin | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `skip_unmatched_groups` (a group whose conditions all miss and that has no fallback is skipped instead of 409; no stage left → the process is approved at once, D-18), `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
-| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
-| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
-| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
+| `/api/signoff/v1/routes`                    | GET    | editor | `?subject_type=&is_active=` — a non-admin gets only the types they may edit (none → 403; a `subject_type` they may not edit → 403) |
+| `/api/signoff/v1/routes`                    | POST   | editor | 409 if the subject type isn't registered, or a second active route |
+| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | editor | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `skip_unmatched_groups` (a group whose conditions all miss and that has no fallback is skipped instead of 409; no stage left → the process is approved at once, D-18), `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
+| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | editor | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | editor | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | editor | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
 | `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
@@ -1487,8 +1527,8 @@ schema the platform can run on.
 | Метод и путь | Что делает |
 |---|---|
 | `GET projects` (`?q=`, `?mine=1`) | Поиск без архива; `mine=1` — только где я участник |
-| `POST projects` | Создать; повтор кода — 422 `E-PRJ-01` |
-| `GET` / `PATCH projects/<id>` | Карточка / правка (смена руководителя добавляет его в участники) |
+| `POST projects` | Создать; повтор кода — 422 `E-PRJ-01`, конец раньше начала — 422 `E-VAL-01` (поле `date_end`) |
+| `GET` / `PATCH projects/<id>` | Карточка (со сроками `date_start`/`date_end`) / правка (смена руководителя добавляет его в участники). Название, статус, сроки и руководителя повторяет доска задач проекта и принимает любую правку (D-02, решение 01.10: «Проект» главный) — название, занятое другой доской, она получает с кодом проекта. Конец раньше начала — 422 `E-VAL-01` (поле `date_end`). `409 E-PRJ-04` — отказ соседа, повторяющего поля «Проекта»; доска задач так не отказывает |
 | `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
 | `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
 
@@ -1659,6 +1699,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 | `POST invoices/<id>/cancel` (`comment` ≥ 10) | Отменить: автор — до решения ФД, ФД — до первой отметки оплаты. Счёт, по которому сверка выписки уже держит оплату (`paid_bank_amount > 0` — действующие сопоставления), не отменяется — 409 `E-STATE-01` «сначала отмените сопоставление строки выписки» (как отмена отметки оплаты); `cancel` тогда нет в `allowed_actions` |
 | `POST invoices/<id>/decision` (`{decision: pay\|not_payable\|return, planned_pay_date?, comment}`) | Решение ФД: «Оплатить» — повторная проверка бюджета «на текущий момент» под блокировкой (422 `E-BUD-01`) и плановая дата (по умолчанию — срок оплаты); «Не оплачивать» и «Вернуть» — комментарий ≥ 10 (`BR-060`) |
 | `POST invoices/batch-decision` (`{invoice_ids, decision: pay\|not_payable, comment?}`) | Массово: каждый счёт отдельно, ответ `{ok: [id], failed: [{id, reason}]}` (§10.5) |
+| `POST invoices/<id>/select-alternative` (`{offer_id, comment, version?}`) | «Выбрать» альтернативу (B5.1, SelectAlternativeOffer ТЗ §26): ФД — держатель решения по этому счёту (`bpp.alternatives.select`; не своей задаче — 403 `E-ACC-01`), счёт «На рассмотрении ФД», комментарий ≥ 10 (`BR-060`); АП дороже исходной части больше свободного остатка статьи — 422 `BR-093` текстом ТЗ. Одной транзакцией: (1) АП «Выбрано», прочие «Не выбрано»; (2) решение ФД отзывается, счёт «Заменён альтернативой»; (3) черновик нового документа на автора заявки (D-25) — договор, если АП в KZT больше 1000 МРП (BR-094), иначе счёт без договора; контрагент, позиции и цены — из АП, КП — файлом `alternative_offer`; у частичной АП — второй черновик по остатку; (4) KPI «Предварительный». Ответ — `{invoice: карточка, result: {type, id, number}, remainder: … \| null, kpi_id}`; повторный выбор — 409/422 (BR-096). Кнопка — `select_alternative` в `allowed_actions`. Карточки счёта и договора отдают `alternative: {basis, replaced_by}` — основание нового документа и чем заменён исходный. При отправке нового документа сумма в KZT отличается от АП не больше чем на 5 %, иначе 422 `E-VAL-01` на `amount` (§12.4 п.5). **Договор** выбирают голосованием: карточка процесса signoff отдаёт `options`, решает голос ГД (`signoff.final_option`); у нового договора по такой АП этап ГД предсогласован (D-26); голос за АП, на которую не хватает остатка статьи, — 422 |
 | `POST invoices/<id>/payments` (`{pay_date, amount, pp_number?, rate?}`) | «Оплачено» — БУХ: сумма ≤ неоплаченного остатка (422 `BR-052`); частично — «Оплачено частично», полностью — «Оплачено» |
 | `POST invoices/<id>/payments/<mark_id>/cancel` (`comment` ≥ 10) | Отменить отметку — БУХ или ФД, пока банк не подтвердил (`paid_bank_amount` = 0, иначе 409) |
 | `POST invoices/<id>/request-docs` (`{avr, waybill, vat_invoice, comment}`), `…/submit-docs`, `…/accept-docs`, `…/return-docs` (`comment` ≥ 10) | Закрывающие документы после оплаты (D-13): запрос БУХ (без флажков — по типу: ТМЦ → накладная, услуги → АВР) → «Ждёт закрывающих» → автор (или ФД от его имени) вложил файлы запрошенных типов на панели (`act` — АВР, `waybill` — накладная, `vat_invoice` — счёт-фактура) → «Документы предоставлены» (нет файла запрошенного типа — 422 `E-INV-04`) → принять («Закрыт») / вернуть |
@@ -1668,6 +1709,13 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 Для соседних аппок (`bpp.interface`): `find_by_number(number)` — счёт по
 `СЧ-ГГГГ-NNNNNN` для сверки выписки (A4.2); `closing_docs_pending_for_user
 (user_id)` — счета автора в «Ждёт закрывающих» для ежедневной сводки (A3.2).
+Для партнёров `tasks` (A6.1): `counterparty_brief(ids)` — `{id: {id, name,
+short_name, reg_number, country_code, status, contact_person, phone, email,
+legal_address}}` батчем (неизвестные и невозможные ключи пропускаются) и
+`search_counterparties(query, *, limit=20)` — те же карточки, только
+«Активен», по наименованию или номеру; `migrated_targets(source_type, ids)`
+— куда перенесены записи `contracts` (B6.1; у контрагентов `source_type =
+"contracts.counterparty"`, цель `bpp.counterparty`).
 
 **Контрагенты** — ядро модуля, без своего рубильника (ТЗ §18, L-08, D-20,
 задача A2.3). Без согласования; уникальна пара (страна, рег. номер), номер
@@ -1800,6 +1848,17 @@ POST идемпотентны (`Idempotency-Key`: повтор отдаёт пе
 | Метод и путь | Что делает |
 |---|---|
 | `GET dashboard/payments` (`?period_from=&period_to=&project_id=&article_id=&counterparty_id=&author_id=`) | `{filters, sections, authors, indicators, article_chart, weekly_paid, top_counterparties, as_of}`. `sections` — `{invoices, bank, budget}`: включены ли у компании `bpp_invoices`, `bpp_bank`, `bpp_budget` (экран пишет «подмодуль выключен», а не «данных нет»). `authors` — `[{id, name}]` для фильтра «Автор счёта»: авторы счетов, видимых пользователю по правилам реестра (`GET invoices`), без остальных фильтров дашборда, по имени; учётки нет — `name: null`; выключен `bpp_invoices` — `[]` (кадровый список сотрудников не годится: у ролей дашборда нет прав `hr`). `indicators` — `[{key, label, count, amount, link}]` в порядке ТЗ: `fd` (вкладка «На решение ФД»), `to_pay` («К оплате» + «Оплачено частично»), `awaiting_docs`, `bank_unconfirmed` (вкладка «Оплачено, банк не подтвердил» и последняя отметка БУХ старше 3 рабочих дней), `full`, `underpaid` (сумма — Σ(сумма − оплачено по банку)), `overpaid` (Σ(оплачено по банку − сумма)), `no_mark` (статус сверки ≠ `no_data`, статус счёта без отметки оплаты БУХ — ссылка фильтрами `status` и `recon_status`), `unmatched` (строки выписки «Не сопоставлена» загрузок `loaded`/`reconciled`, ссылка — реестр загрузок `/bpp/bank?period_from=&period_to=` (только период: загрузки, чей период выписки с ним пересекается; без периода — `/bpp/bank`) и только держателю `bpp.bank` view — ФД, БУХ; остальным `link: null`); `amount` — в KZT (`amount_kzt`; недоплата и переплата — по курсу счёта; счёт в валюте без курса в KZT-сумму не входит — как его пустой `amount_kzt`, в `count` входит; строка выписки в валюте — по курсу НБРК на дату платежа, без курса — вне суммы). Выключен у компании `bpp_invoices` — показателей по счетам нет в ответе вовсе, графики оплат и `authors` пустые; выключен `bpp_bank` — нет `bank_unconfirmed`, `full`, `underpaid`, `overpaid`, `no_mark`, `unmatched`, графики оплат пустые, `paid_fact` — `null`; выключен `bpp_budget` — `article_chart: []`. `link` — адрес реестра счетов фронта `/bpp/invoices?…` с параметрами ручки `GET invoices`: `total` реестра по ссылке равен `count`. Фильтры проекта, статьи, контрагента и автора — у всех показателей по счетам и в ссылках (у `unmatched` — только контрагент, по БИН получателя). Период — по дате платежа в выписке и только у банковских показателей (`full`, `underpaid`, `overpaid`, `no_mark`, `unmatched`) и графиков, в ссылку — `bank_date_from`/`bank_date_to`; очереди — на текущий момент. `article_chart` — `[{article_id, code, name, limit, committed, paid_fact}]` по статьям действующей версии бюджета проекта (без `project_id` или без бюджета — `[]`); `paid_fact` — «Оплачено факт» CALC-007 (`services/bank/recon.paid_fact_by_article`): Σ действующих сопоставлений строк выписки по счетам статьи (`Invoice.article_id`), без отменённых строк и загрузок, в валюте счёта — как «Задействовано». `weekly_paid` — `[{week_start, amount}]` (неделя с понедельника, недели периода без платежей — нулём), `top_counterparties` — `[{counterparty_id, name, amount}]`, топ-10; оба — «Оплачено по банку» (действующие сопоставления, D-S4-1) в KZT. Неверная дата, «по» раньше «с», период длиннее 5 лет (1827 дней; недельный график заполняет нулями каждую неделю — поле `period_to`), не UUID, не целый автор — 422 `E-VAL-01` с полем. Период с одной открытой границей не ограничен, но шире 5 лет `weekly_paid` отдаёт только недели с платежами. Фильтр контрагента у `unmatched` сравнивает БИН без пробелов и регистра — как автосверка и кандидаты |
+
+**Обзор модуля** (ТЗ §05, §17; B, 01.10 — стартовая страница раздела по ролям). Гейт `bpp:read`; своего
+подмодуля у ручки нет. Блок приходит, только если у пользователя есть право просмотра его узла и у компании
+включён его подмодуль: нет права или рубильник `bpp_*` выключен — нет ключа (а не нули); несколько ролей —
+объединение. Числа считаются на выборках реестров (`visible` каждого: «свои» СН и ПМ, проекты-участия ПМ,
+группы статей) и совпадают с `total` реестра по его ссылке; деньги — только при `shows_money` (право
+`bpp.invoices` view: у АДМ — количества без сумм, ТЗ §17). Без кэша.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET overview` | `{shows_money, approvals, budgets?, requests?, plan?, agreements?, invoices?, accountable?, bank?, dashboard?, alternatives?, kpi?, admin?}`. `approvals` — `{pending}`: задачи signoff по документам `bpp.*`, ждущие решения пользователя (`signoff.pending_for_user`). `budgets` (`bpp.budgets` view, `bpp_budget`) — `{total, approved, draft, can_create, projects?}`, `projects` — бюджет каждого проекта отдельно (решение 01.10: суммы разных проектов не складываются): `[{budget_id, project: {id, code, name}, currency_code, limit_amount, committed, available}]` по утверждённым бюджетам, итоги — по видимым строкам (как реестр L-01: СН и ПМ — свои группы статей); проект без строк пользователя не показывается; по коду проекта. `requests` (`bpp.requests` view, `bpp_requests`) — `{total, draft, in_approval, rework, approved, can_create}`. `plan` (`bpp.plan` или `bpp.plan.all` view, `bpp_requests`) — `{open}`: открытые позиции; у СН и ПМ — свои по всем ролям инициатора (реестр показывает одну роль за раз). `agreements` (`bpp_agreements`) — `{total, draft, on_review, rework, active}`. `invoices` (`bpp_invoices`) — `{total, draft, returned, tabs}`; `tabs` — счётчики вкладок реестра L-06 по правам: `fd` (`bpp.invoices.decision` edit), `to_pay` и `docs_provided` (`bpp.invoices.payment` edit), `awaiting_docs` (`bpp.invoices` create или `bpp.invoices.closing_docs` edit), `bank_unconfirmed` (`bpp.bank` view, `bpp_bank`); число = `total` ответа `GET invoices?tab=<вкладка>`. `accountable` (`bpp_accountable`) — `{total, awaiting_report, can_create, awaiting_accounting?}` (последнее — при `bpp.accountable.payment` edit). `bank` (`bpp.bank` view, `bpp_bank`) и `dashboard` (`bpp.dashboard` view) — `{}`: раздел открыт. `alternatives` (`bpp_alternatives`) — `{feed, submitted?, mine_submitted?}`: документы ленты L-09, поданные АП в ожидании решения (ФД, ТД, ОД, ГД — `alternatives.read.sees_all`), свои поданные (с правом подавать). `kpi` (`bpp.kpi` view, `bpp_alternatives`) — `{preliminary, confirmed, saving_confirmed?}`, видимость как у отчёта R-01 (СН — свои). `admin` (`bpp.settings` или `bpp.routes` edit) — `{no_executor, routes, settings, refdata, projects}`: идущие процессы документов модуля с этапом «Нет исполнителя» (`signoff.interface.count_no_executor`) и какие разделы администрирования открыты. |
 
 **Альтернативы (A5.1)** — подмодуль `bpp_alternatives`, префикс `/api/bpp/v1/alternatives/…` (ТЗ §12.1, §12.3,
 §12.7, BR-090…092; этап 5 A, задачи 2 и 4). Альтернативное предложение (АП, `АП-ГГГГ-NNNNNN`) — другой контрагент на часть

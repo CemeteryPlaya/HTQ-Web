@@ -9,13 +9,17 @@
   доработку; после отправки — только помеченное удаление (ТЗ §21 «до „На
   рассмотрении ФД“ — удаление; далее — нет»: был отправлен → файл остаётся).
 - ``act`` (АВР), ``waybill`` (накладная), ``vat_invoice`` (счёт-фактура, D-13)
-  — закрывающие, до 10 каждого. **Видят только автор, ФД и БУХ** (ТЗ §21:
-  «Автор, ФД, БУХ»; ТД, ОД и ГД видят сам счёт, но не закрывающие) — плюс
+  — закрывающие, до 10 каждого. **Видят только автор, ФД, БУХ и ГД** (ТЗ §21:
+  «Автор, ФД, БУХ»; ГД — решение 01.10 «ГД видит всё», просмотр узла
+  ``bpp.invoices.closing_docs``; ТД и ОД видят сам счёт, но не закрывающие) — плюс
   держатель ``bpp.invoices.closing_docs``, который вкладывает их от имени
   автора. Вкладываются, когда бухгалтер их запросил (статус «Ждёт закрывающих
   документов»), и только запрошенные типы; после возврата БУХ — снова в этом
   статусе. «Документы предоставлены» (``payments.submit_docs``) проверяет,
   что по каждому запрошенному типу вложен хоть один файл (``E-INV-04``).
+- ``alternative_offer`` — КП выбранной альтернативы, до 5: переезжает в
+  новый счёт при выборе (B5.1, D-B51-7) загрузкой из кода; правила — как у
+  файла счёта.
 - Видит файлы счёта тот, кто видит счёт (``invoices.can_view``).
 """
 
@@ -30,10 +34,12 @@ from apps.signoff import interface as signoff
 from . import invoices as service
 from .payments import DOC_FILE_TYPES, DOC_TYPES
 
-__all__ = ["CLOSING_TYPES", "FILE_TYPE", "OWNER", "register"]
+__all__ = ["CLOSING_TYPES", "FILE_TYPE", "KP_TYPE", "OWNER", "register"]
 
 OWNER = "bpp.invoice"
 FILE_TYPE = "invoice"
+#: КП альтернативы, по которой создан счёт (B5.1).
+KP_TYPE = "alternative_offer"
 #: Тип файла закрывающего документа → ключ ``Invoice.docs_required``.
 CLOSING_TYPES = {file_type: key for key, file_type in DOC_FILE_TYPES.items()}
 
@@ -59,8 +65,10 @@ def _can_view_type(owner_id, token, file_type) -> bool:
     if inv is None:
         return False
     actor = actor_from_token(token)
+    # Просмотр узла — ГД (решение 01.10 «ГД видит всё», access/0019).
     return (_closing_editor(actor, inv) or actor.can("bpp.invoices.decision", "edit")
-            or actor.can("bpp.invoices.payment", "edit"))
+            or actor.can("bpp.invoices.payment", "edit")
+            or actor.can("bpp.invoices.closing_docs", "view"))
 
 
 def _can_modify(owner_id, token) -> None:
@@ -122,7 +130,8 @@ def register() -> None:
         OWNER, label="Счёт на оплату", service="bpp_invoices", tenant=True,
         folder="invoice", model=Invoice,
         file_types=(files.FileTypeSpec(FILE_TYPE, max_documents=5, required=True),
-                    *(files.FileTypeSpec(code, max_documents=10) for code in CLOSING_TYPES)),
+                    *(files.FileTypeSpec(code, max_documents=10) for code in CLOSING_TYPES),
+                    files.FileTypeSpec(KP_TYPE, max_documents=5)),
         can_view=_can_view, can_modify=_can_modify, was_sent=_was_sent, lock=_lock,
         on_event=history_on_event(Invoice),
         can_view_type=_can_view_type, can_modify_type=_can_modify_type,

@@ -307,7 +307,10 @@ def test_task_types_are_not_admin_gated():
 
 @pytest.mark.django_db
 def test_regular_user_cannot_create_a_project():
-    resp = post_json(Client(), f"{BASE}/projects/", {"name": "Мой проект"},
+    from apps.project.models import Project as Platform
+
+    platform = Platform.objects.create(code="П-1", name="Мой проект", country_code="KZ")
+    resp = post_json(Client(), f"{BASE}/projects/", {"project_ref": str(platform.pk)},
                      **auth())
     assert resp.status_code == 403
     assert not Project.objects.filter(name="Мой проект").exists()

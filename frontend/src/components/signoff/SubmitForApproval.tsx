@@ -42,6 +42,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { signoffApi } from '@/api/signoff';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import type { ApprovalProcess, ApprovalState } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
@@ -99,6 +100,13 @@ export function SubmitForApproval<Id extends SubjectId>({
   const [startedId, setStartedId] = useState<number | null>(null);
 
   const decided = state === 'approved' || state === 'rejected';
+  // Раздел «Договоры» заморожен после переноса в БЗО (A6.2): отправка его
+  // документов отвечает 403 `contracts_frozen`, поэтому кнопки нет вовсе —
+  // как и остальных кнопок правки архива. Одна точка вместо полутора
+  // десятков мест, где раздел рисует отправку.
+  const isContracts = subjectType.startsWith('contracts.');
+  const { frozen: contractsFrozen } = useContractsFreeze(isContracts);
+  const archived = isContracts && contractsFrozen;
 
   /** Процесс объекта — чтобы из карточки можно было провалиться в
    *  согласование: пока оно идёт (посмотреть, на ком оно) и когда решение
@@ -141,6 +149,12 @@ export function SubmitForApproval<Id extends SubjectId>({
     onError: (err) =>
       reportApiError(err, t('signoff.submit.error')),
   });
+
+  if (archived && !(state === 'pending' || decided)) {
+    return showState
+      ? <div className="flex items-center justify-end gap-2"><ApprovalStateBadge state={state} /></div>
+      : <span className="text-sm text-muted-foreground">—</span>;
+  }
 
   // Решение принято или ещё принимается — отправлять нечего. Ссылка на
   // карточку появляется, только если её есть за что показать (см.

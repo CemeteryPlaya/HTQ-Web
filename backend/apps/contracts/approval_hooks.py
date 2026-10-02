@@ -68,7 +68,7 @@ from .models import (
     PaymentType,
     Program,
 )
-from .services import budget_calc
+from .services import budget_calc, freeze
 
 logger = logging.getLogger(__name__)
 
@@ -785,8 +785,30 @@ def _agreement_fact_fields() -> list[dict]:
     ]
 
 
+def _guard(callback):
+    """Колбэк предмета, который сперва проверяет заморозку раздела (A6.2).
+
+    Движок signoff живёт под ``/api/signoff/`` и middleware заморозки его не
+    видит: без этого в замороженной компании можно было бы запустить новое
+    согласование документа раздела или вернуть закрытый документ на
+    доработку (``engine.reopen`` зовёт ``on_rework``). Исключение летит из
+    транзакции движка — процесс не создаётся, документ не меняется.
+    """
+    def guarded(subject_id):
+        freeze.assert_not_frozen()
+        if callback is not None:
+            callback(subject_id)
+    return guarded
+
+
+def _register(subject_type: str, **kwargs) -> None:
+    kwargs["on_started"] = _guard(kwargs.get("on_started"))
+    kwargs["on_rework"] = _guard(kwargs.get("on_rework"))
+    signoff.register_subject(subject_type, **kwargs)
+
+
 def register() -> None:
-    signoff.register_subject(
+    _register(
         Budget.SIGNOFF_SUBJECT_TYPE,
         label="Бюджет",
         model=Budget,
@@ -794,7 +816,7 @@ def register() -> None:
         facts=_budget_facts,
         fact_fields=_budget_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         Counterparty.SIGNOFF_SUBJECT_TYPE,
         label="Контрагент",
         model=Counterparty,
@@ -802,7 +824,7 @@ def register() -> None:
         facts=_counterparty_facts,
         fact_fields=_counterparty_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         Agreement.SIGNOFF_SUBJECT_TYPE,
         label="Договор",
         model=Agreement,
@@ -815,7 +837,7 @@ def register() -> None:
         facts=_agreement_facts,
         fact_fields=_agreement_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         Invoice.SIGNOFF_SUBJECT_TYPE,
         label="Счёт на оплату",
         model=Invoice,
@@ -828,7 +850,7 @@ def register() -> None:
         facts=_invoice_facts,
         fact_fields=_invoice_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         AdvancePayment.SIGNOFF_SUBJECT_TYPE,
         label="Предоплата на основании договора",
         model=AdvancePayment,
@@ -841,7 +863,7 @@ def register() -> None:
         facts=_advance_payment_facts,
         fact_fields=_advance_payment_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE,
         label="Заявка на подотчётные средства",
         model=AccountableFundsRequest,
@@ -854,7 +876,7 @@ def register() -> None:
         facts=_accountable_funds_request_facts,
         fact_fields=_accountable_funds_request_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         AdvanceReport.SIGNOFF_SUBJECT_TYPE,
         label="Авансовый отчёт",
         model=AdvanceReport,
@@ -863,7 +885,7 @@ def register() -> None:
         facts=_advance_report_facts,
         fact_fields=_advance_report_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         ContractPayment.SIGNOFF_SUBJECT_TYPE,
         label="Оплата по договору",
         model=ContractPayment,
@@ -876,7 +898,7 @@ def register() -> None:
         facts=_contract_payment_facts,
         fact_fields=_contract_payment_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         CompletionAct.SIGNOFF_SUBJECT_TYPE,
         label="Акт выполненных работ",
         model=CompletionAct,
@@ -889,7 +911,7 @@ def register() -> None:
         facts=_completion_act_facts,
         fact_fields=_completion_act_fact_fields,
     )
-    signoff.register_subject(
+    _register(
         GoodsInvoice.SIGNOFF_SUBJECT_TYPE,
         label="Товарная накладная",
         model=GoodsInvoice,

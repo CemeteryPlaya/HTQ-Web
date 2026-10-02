@@ -7,12 +7,13 @@ import type {
   Label, Project, Task, TaskComment, TaskAttachment, TaskStats, TaskStatus,
   TaskLink, Notification, TaskAssigneeRef, AssigneeRole, TaskTypeRef,
   Equipment, ResourceGanttResponse, Assignment, Site, ProjectSiteRef,
-  Contractor, ContractorWorker, ContractorEngagement,
+  Contractor, ContractorCounterpartyOption, ContractorWorker, ContractorEngagement,
   Roadmap, RoadmapStatus, RoadmapMetrics, SiteBlock, BlockStatus, BlockVolume,
   BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
   ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
+  ProjectBoardCreate, ProjectLinkCandidate,
 } from '@/types/tasks';
 import i18next from '@/i18n';
 
@@ -157,14 +158,29 @@ export const fetchProjects = async (params?: Record<string, string>): Promise<Pr
   return unwrap<Project>(res.data).map(normalizeProject);
 };
 
+/** Доска задач «Проекта» БЗО (одна на проект) или `null` — для ссылки с его
+ * карточки. Держателю «Доски задач проекта» сервер открывает доски его
+ * «Проектов» (решение 01.10); остальным — по прежним правилам. */
+export const fetchProjectBoard = async (projectRef: string): Promise<Project | null> => {
+  const res = await api.get(`${BASE}projects/`, { params: { project_ref: projectRef } });
+  return unwrap<Project>(res.data).map(normalizeProject)[0] ?? null;
+};
+
 export const fetchProject = async (id: number): Promise<Project> => {
   const res = await api.get(`${BASE}projects/${id}/`);
   return normalizeProject(res.data);
 };
 
-export const createProject = async (data: Partial<Project>): Promise<Project> => {
+/** Доска заводится к «Проекту» БЗО — название, статус, сроки и владелец из него. */
+export const createProject = async (data: ProjectBoardCreate): Promise<Project> => {
   const res = await api.post(`${BASE}projects/`, toBackendRecord(data as Record<string, any>, PROJECT_FIELD_ALIASES));
   return normalizeProject(res.data);
+};
+
+/** «Проекты» БЗО без доски задач (не в архиве) — выбор при создании доски. */
+export const fetchProjectLinkCandidates = async (q = ''): Promise<ProjectLinkCandidate[]> => {
+  const res = await api.get(`${BASE}projects/link-candidates`, { params: q ? { q } : undefined });
+  return res.data;
 };
 
 export const updateProject = async (id: number, data: Partial<Project>): Promise<Project> => {
@@ -544,6 +560,17 @@ export const fetchContractors = async (params?: {
 }): Promise<Contractor[]> => {
   const res = await api.get(`${BASE}contractors/`, { params });
   return unwrap<Contractor>(res.data);
+};
+
+/** Поиск контрагента модуля «Закупки и оплаты» для карточки партнёра
+ *  (A6.1): только действующие, по наименованию или БИН/ИИН. */
+export const searchContractorCounterparties = async (
+  q: string, limit = 20,
+): Promise<ContractorCounterpartyOption[]> => {
+  const res = await api.get(`${BASE}contractors/counterparty-search`, {
+    params: { q: q || undefined, limit },
+  });
+  return unwrap<ContractorCounterpartyOption>(res.data);
 };
 
 export const createContractor = async (data: Partial<Contractor>): Promise<Contractor> => {

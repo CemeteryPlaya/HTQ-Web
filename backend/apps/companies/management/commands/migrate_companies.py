@@ -31,7 +31,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--company", help="slug одной компании")
         parser.add_argument("--app",
-                            help="только эта аппка (hr/tasks/contracts/signoff)")
+                            help="только эта тенантная аппка (settings.TENANT_APPS: hr, tasks, contracts, signoff, bpp, project)")
         parser.add_argument(
             "--to",
             help="довести аппку до этой миграции, напр. 0042_x. Только "

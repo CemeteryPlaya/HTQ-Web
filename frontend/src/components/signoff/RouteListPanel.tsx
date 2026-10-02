@@ -1,0 +1,327 @@
+/**
+ * Маршруты согласования — по одному согласуемому типу.
+ *
+ * Список строится вокруг РЕЕСТРА ТИПОВ (`GET /subjects`), а не вокруг
+ * списка маршрутов: список типов наполняют сами предметные аппки на старте,
+ * и «для чего вообще можно завести маршрут» — вопрос к нему. Маршруты
+ * подкладываются к типам.
+ *
+ * **Активный маршрут на тип ровно один** (частичный уникальный индекс), и
+ * второй бэкенд отобьёт 409. Поэтому кнопка «Создать» превращается в
+ * «Создать неактивным», как только активный уже есть: завести запасной
+ * маршрут можно, включить два сразу — нет.
+ *
+ * **Включение маршрута — поступок.** С этого момента `contracts` перестаёт
+ * принимать несогласованную бюджетную строку как источник денег и
+ * несогласованного контрагента как сторону договора. Без активного
+ * маршрута не блокируется ничего.
+ *
+ * Живёт в двух местах: `/signoff/routes` (администратор — все типы) и
+ * «Маршруты согласования» раздела «Закупки и оплаты» (ФД и АДМ — только
+ * документы модуля, В-09). Сервер отдаёт маршруты только тех типов, что
+ * вызывающий вправе править; `subjectFilter` сужает и список типов.
+ */
+
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, Loader2, Plus } from 'lucide-react';
+import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
+
+import { reportApiError } from '@/lib/apiError';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Skeleton } from '@/components/ui/skeleton';
+import { signoffApi } from '@/api/signoff';
+import type { ApprovalRoute, Subject } from '@/types/signoff';
+
+interface Props {
+  /** Какие типы показывать; без фильтра — все зарегистрированные. */
+  subjectFilter?: (subjectType: string) => boolean;
+  /** Адрес карточки маршрута. */
+  routeHref?: (routeId: number) => string;
+}
+
+const signoffHref = (routeId: number) => `/signoff/routes/${routeId}`;
+
+export function RouteListPanel({ subjectFilter, routeHref = signoffHref }: Props) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [creatingFor, setCreatingFor] = useState<Subject | null>(null);
+  const [name, setName] = useState('');
+
+  const {
+    data: allSubjects = [],
+    isLoading: subjectsLoading,
+    isError: subjectsError,
+  } = useQuery({
+    queryKey: ['signoff', 'subjects'],
+    queryFn: () => signoffApi.listSubjects().then((r) => r.data),
+  });
+
+  const { data: allRoutes = [], isLoading: routesLoading } = useQuery({
+    queryKey: ['signoff', 'routes'],
+    queryFn: () => signoffApi.listRoutes().then((r) => r.data),
+  });
+
+  const subjects = useMemo(
+    () => (subjectFilter
+      ? allSubjects.filter((subject) => subjectFilter(subject.subject_type))
+      : allSubjects),
+    [allSubjects, subjectFilter],
+  );
+  const routes = useMemo(
+    () => (subjectFilter
+      ? allRoutes.filter((route) => subjectFilter(route.subject_type))
+      : allRoutes),
+    [allRoutes, subjectFilter],
+  );
+
+  const routesByType = useMemo(() => {
+    const map = new Map<string, ApprovalRoute[]>();
+    for (const route of routes) {
+      const bucket = map.get(route.subject_type);
+      if (bucket) bucket.push(route);
+      else map.set(route.subject_type, [route]);
+    }
+    return map;
+  }, [routes]);
+
+  /** Маршруты на типы, которых больше нет в реестре: аппку отключили или
+   *  сняли регистрацию. Строки в БД остались, и прятать их нельзя. */
+  const orphanTypes = useMemo(() => {
+    const known = new Set(subjects.map((subject) => subject.subject_type));
+    return [...routesByType.keys()].filter((type) => !known.has(type));
+  }, [routesByType, subjects]);
+
+  const create = useMutation({
+    mutationFn: ({ subjectType, isActive }: { subjectType: string; isActive: boolean }) =>
+      signoffApi
+        .createRoute({ subject_type: subjectType, name, is_active: isActive })
+        .then((r) => r.data),
+    onSuccess: (route) => {
+      toast.success(t('signoff.routes.created'));
+      setCreatingFor(null);
+      setName('');
+      queryClient.invalidateQueries({ queryKey: ['signoff'] });
+      // Маршрут без этапов неисполним, так что новый ведёт сразу в редактор:
+      // «создал и забыл» здесь означает тип, который нельзя согласовать.
+      navigate(routeHref(route.id));
+    },
+    // 409 — тип не зарегистрирован либо активный маршрут для него уже есть.
+    onError: (err) => reportApiError(err, t('signoff.routes.createError')),
+  });
+
+  const openCreate = (subject: Subject) => {
+    setCreatingFor(subject);
+    setName(t('signoff.routes.defaultName', { label: subject.label.toLowerCase() }));
+  };
+
+  const isLoading = subjectsLoading || routesLoading;
+
+  return (
+    <>
+      <Alert className="mb-6">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          {t('signoff.routes.enabledWarning')}
+        </AlertDescription>
+      </Alert>
+
+      {isLoading ? (
+        <div className="space-y-3">
+          {[0, 1, 2].map((row) => (
+            <Skeleton key={row} className="h-28 w-full" />
+          ))}
+        </div>
+      ) : subjectsError ? (
+        <p className="text-sm text-destructive">
+          {t('signoff.routes.typesLoadError')}
+        </p>
+      ) : subjects.length === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t('signoff.routes.noTypes')}</CardTitle>
+            <CardDescription>
+              {t('signoff.routes.noTypesHint')}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {subjects.map((subject) => {
+            const typeRoutes = routesByType.get(subject.subject_type) ?? [];
+            return (
+              <Card key={subject.subject_type}>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base flex items-center gap-2">
+                        {subject.label}
+                        {subject.has_active_route ? (
+                          <Badge
+                            variant="outline"
+                            className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                          >
+                            {t('signoff.routes.approvalOn')}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-muted-foreground">
+                            {t('signoff.routes.noActiveRoute')}
+                          </Badge>
+                        )}
+                      </CardTitle>
+                      <CardDescription className="font-mono text-xs mt-1">
+                        {subject.subject_type}
+                      </CardDescription>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={subject.has_active_route ? 'outline' : 'default'}
+                      onClick={() => openCreate(subject)}
+                    >
+                      <Plus className="mr-1.5 h-4 w-4" />
+                      {subject.has_active_route
+                        ? t('signoff.routes.addInactive')
+                        : t('signoff.routes.create')}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {typeRoutes.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {t('signoff.routes.emptyForType')}
+                    </p>
+                  ) : (
+                    <ul className="divide-y">
+                      {typeRoutes.map((route) => (
+                        <li
+                          key={route.id}
+                          className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+                        >
+                          <div className="min-w-0">
+                            <Link
+                              to={routeHref(route.id)}
+                              className="font-medium hover:underline underline-offset-2"
+                            >
+                              {route.name}
+                            </Link>
+                            <p className="text-xs text-muted-foreground">
+                              {route.stages.length === 0
+                                ? t('signoff.routes.noStages')
+                                : t('signoff.routes.stageCount', { count: route.stages.length })}
+                            </p>
+                          </div>
+                          <Badge variant={route.is_active ? 'default' : 'outline'}>
+                            {route.is_active ? t('signoff.routes.activeLower') : t('signoff.routes.disabledLower')}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          {orphanTypes.length > 0 && (
+            <Card className="border-dashed">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">
+                  {t('signoff.routes.orphanTitle')}
+                </CardTitle>
+                <CardDescription>
+                  {t('signoff.routes.orphanHint')}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="divide-y">
+                  {orphanTypes.flatMap((type) =>
+                    (routesByType.get(type) ?? []).map((route) => (
+                      <li key={route.id} className="py-2 first:pt-0 last:pb-0">
+                        <Link
+                          to={routeHref(route.id)}
+                          className="font-medium hover:underline underline-offset-2"
+                        >
+                          {route.name}
+                        </Link>
+                        <span className="ml-2 font-mono text-xs text-muted-foreground">
+                          {type}
+                        </span>
+                      </li>
+                    )),
+                  )}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      <Dialog
+        open={creatingFor !== null}
+        onOpenChange={(open) => !open && setCreatingFor(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('signoff.routes.newTitle')}</DialogTitle>
+            <DialogDescription>
+              {creatingFor?.label}
+              {creatingFor?.has_active_route && (
+                <span className="block mt-2">
+                  {t('signoff.routes.newHint')}
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="route-name">{t('signoff.routes.nameLabel')}</Label>
+            <Input
+              id="route-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={200}
+              placeholder={t('signoff.routes.namePlaceholder')}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreatingFor(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              disabled={!name.trim() || create.isPending}
+              onClick={() =>
+                creatingFor
+                && create.mutate({
+                  subjectType: creatingFor.subject_type,
+                  isActive: !creatingFor.has_active_route,
+                })
+              }
+            >
+              {create.isPending && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
+              {t('common.create')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

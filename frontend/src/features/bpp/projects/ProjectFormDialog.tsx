@@ -5,9 +5,11 @@
  *
  * При правке код, вид и страна не меняются (сервер их не принимает):
  * бюджет ведётся в стране проекта (Q-B08), и смена страны задним числом
- * перекроила бы уже утверждённые лимиты. Сроки проекта сервер в карточке
- * не отдаёт — поэтому при правке их нет, иначе пустое поле затёрло бы
- * заданные при создании.
+ * перекроила бы уже утверждённые лимиты. Название, статус, сроки и
+ * руководитель правятся только здесь: доска задач проекта их повторяет и
+ * принимает любую правку (решение 01.10: «Проект» главный — имя, занятое
+ * другой доской, доска получает с кодом проекта). Перевёрнутые сроки
+ * отклоняет сам «Проект» — 422 E-VAL-01; форма ловит их раньше.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -83,6 +85,8 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
       manager_user_id: project.manager_user_id,
       customer_name: project.customer_name,
       customer_counterparty_id: project.customer_counterparty_id ?? '',
+      date_start: project.date_start ?? null,
+      date_end: project.date_end ?? null,
     } : EMPTY);
     setStatus(project?.status ?? 'active');
   }, [open, project]);
@@ -115,6 +119,8 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
           manager_user_id: values.manager_user_id,
           customer_name: values.customer_name.trim(),
           customer_counterparty_id: values.customer_counterparty_id,
+          date_start: values.date_start,
+          date_end: values.date_end,
         })
         : await projectApi.create({
           ...values,
@@ -245,29 +251,25 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSaved }: Prop
               disabled={saving}
             />
           </div>
-          {!project && (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="prj-start">{t('bpp.projects.dateStart', 'Начало')}</Label>
-                <DateInput
-                  id="prj-start"
-                  value={values.date_start ?? ''}
-                  onChange={(value) => set('date_start', value || null)}
-                  disabled={saving}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="prj-end">{t('bpp.projects.dateEnd', 'Окончание')}</Label>
-                <DateInput
-                  id="prj-end"
-                  value={values.date_end ?? ''}
-                  onChange={(value) => set('date_end', value || null)}
-                  disabled={saving}
-                />
-                {errorOf('date_end')}
-              </div>
-            </>
-          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="prj-start">{t('bpp.projects.dateStart', 'Начало')}</Label>
+            <DateInput
+              id="prj-start"
+              value={values.date_start ?? ''}
+              onChange={(value) => set('date_start', value || null)}
+              disabled={saving}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="prj-end">{t('bpp.projects.dateEnd', 'Окончание')}</Label>
+            <DateInput
+              id="prj-end"
+              value={values.date_end ?? ''}
+              onChange={(value) => set('date_end', value || null)}
+              disabled={saving}
+            />
+            {errorOf('date_end')}
+          </div>
         </form>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>

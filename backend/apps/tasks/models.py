@@ -355,15 +355,22 @@ class Contractor(models.Model):
     партнёра нет ни отдела, ни штатной должности. Синтетические записи
     испортили бы оргструктуру и все HR-отчёты, которые эти колонки читают.
 
-    ``counterparty_id`` — та же организация в «Договорах» (``contracts.
-    Counterparty``): партнёр — это контрагент в роли исполнителя на объектах.
-    Слить их в одну таблицу нельзя (междоменный FK запрещён, а у партнёра
-    своя оперативная жизнь — люди, техника, привлечения), поэтому здесь
-    голый id, а целостность держит ``contractor_service`` через
-    ``apps.contracts.interface``. Связь необязательная: партнёра заводят и
-    без контрагента — модуль «Договоры» у компании может быть выключен, а
-    бригаду ставят на объект раньше, чем карточка контрагента согласована.
-    ``unique`` — одна организация не может числиться двумя партнёрами.
+    ``bpp_counterparty_id`` — та же организация в модуле «Закупки и оплаты»
+    (``bpp.Counterparty``, ключ UUID строкой; A6.1, D-S6-2): партнёр — это
+    контрагент в роли исполнителя на объектах. Слить их в одну таблицу
+    нельзя (междоменный FK запрещён, а у партнёра своя оперативная жизнь —
+    люди, техника, привлечения), поэтому здесь голый ключ, а целостность
+    держит ``contractor_service`` через ``apps.bpp.interface``. Связь
+    необязательная: партнёра заводят и без контрагента — модуль у компании
+    может быть выключен, а бригаду ставят на объект раньше, чем заведён
+    контрагент. Пустая строка — «не связан»; уникальна среди непустых — одна
+    организация не может числиться двумя партнёрами.
+
+    ``counterparty_id`` — прежняя связь с контрагентом ``contracts``. С
+    A6.1 её никто не читает и не пишет (сторож — ``tests/
+    test_contractor_counterparty.py::test_old_field_is_not_read``): связи
+    переведены на ``bpp`` командой ``tasks_link_counterparties`` по связям
+    переноса B6.1. Столбец снимается contract-миграцией этапа 8.
     """
 
     name = models.CharField(max_length=255, unique=True)
@@ -381,6 +388,8 @@ class Contractor(models.Model):
         db_index=True,
     )
     counterparty_id = models.IntegerField(null=True, blank=True, unique=True)
+    bpp_counterparty_id = models.CharField(max_length=36, default="", blank=True,
+                                           db_default="")
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -388,6 +397,13 @@ class Contractor(models.Model):
     class Meta:
         verbose_name = "Партнёр"
         verbose_name_plural = "Партнёры"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["bpp_counterparty_id"],
+                condition=~models.Q(bpp_counterparty_id=""),
+                name="uq_tasks_contractor_bpp_cp",
+            ),
+        ]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Contractor id={self.id} name={self.name!r}>"
@@ -623,7 +639,8 @@ class Project(models.Model):
     not model state and live in the response builder here instead.
     """
 
-    name = models.CharField(max_length=200, unique=True)
+    # 255 — как у «Проекта» БЗО: связанная доска повторяет его название (D-02).
+    name = models.CharField(max_length=255, unique=True)
     description = models.TextField(default="", blank=True, db_default="")
     status = models.CharField(
         max_length=20, choices=ProjectStatus.choices,
@@ -653,8 +670,10 @@ class Project(models.Model):
     owner_id = models.IntegerField(null=True, blank=True, db_index=True)
     department_id = models.IntegerField(null=True, blank=True, db_index=True)
     # Ссылка на «Проект» модуля БЗО (apps.project, D-02): строка UUID, не FK —
-    # межаппный FK запрещён. Пусто у проектов, ещё не связанных командой
-    # manage.py project_link_tasks.
+    # межаппный FK запрещён. Одна доска на «Проект» (uq_task_project_ref).
+    # Название, статус, сроки и владелец связанной доски — копия «Проекта»
+    # (services/project_link.py). Пусто только у досок, заведённых мимо
+    # сервиса после миграции 0023, — их связывает manage.py project_link_tasks.
     project_ref = models.CharField(max_length=36, default="", blank=True, db_default="")
 
     # Объекты, на которых идёт проект. Многие-ко-многим, а не FK на Site:
@@ -670,6 +689,10 @@ class Project(models.Model):
     class Meta:
         verbose_name = "Проект"
         verbose_name_plural = "Проекты"
+        constraints = [
+            models.UniqueConstraint(fields=["project_ref"], condition=~models.Q(project_ref=""),
+                                    name="uq_task_project_ref"),
+        ]
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Project id={self.id} name={self.name!r}>"

@@ -350,9 +350,10 @@ def test_paid_fact_by_article_counts_only_confirmed_matches(company_context):
 
 
 def test_unmatched_link_only_for_bank_viewers_and_amount_in_kzt(company_context):
-    """Ссылка «Несопоставленные списания» — экран выписок, его видят ФД и БУХ
-    (``bpp.bank`` view); ГД — число без ссылки. Строка в валюте — по курсу НБРК
-    на дату платежа; нет курса — в сумму не входит, в число входит."""
+    """Ссылка «Несопоставленные списания» — экран выписок, его видят ФД, БУХ и
+    ГД (``bpp.bank`` view; ГД — решение 01.10 «ГД видит всё», access/0019);
+    ТД — число без ссылки. Строка в валюте — по курсу НБРК на дату платежа;
+    нет курса — в сумму не входит, в число входит."""
     from apps.refdata.models import ExchangeRate
 
     slug = company_context["slug"]
@@ -378,7 +379,9 @@ def test_unmatched_link_only_for_bank_viewers_and_amount_in_kzt(company_context)
         f"/bpp/bank?period_to={today.isoformat()}")
 
     gd = s.actor(slug, GD, "bpp-gd")
-    assert _by_key(dashboard.dashboard(gd, week))["unmatched"]["link"] is None
+    assert _by_key(dashboard.dashboard(gd, week))["unmatched"]["link"] is not None
+    td = s.actor(slug, s.TD, "bpp-td")
+    assert _by_key(dashboard.dashboard(td, week))["unmatched"]["link"] is None
 
 
 def _switch_off(company_id, name):

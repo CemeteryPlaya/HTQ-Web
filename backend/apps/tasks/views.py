@@ -34,6 +34,7 @@ from apps.companies import interface as companies
 
 from . import schemas
 from .services import block_service
+from .services import board_scope
 from .services import calendar_service
 from .services import contractor_service
 from .services import daily_report_service
@@ -43,6 +44,7 @@ from .services import holding_service
 from .services import link_service
 from .services import notification_service
 from .services import plan_fact_service
+from .services import project_link
 from .services import project_service
 from .services import reference_service as ref_svc
 from .services import resource_service
@@ -1166,6 +1168,24 @@ def contractors_collection(request):
     return _method_not_allowed(request)
 
 
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def contractor_counterparty_search(request):
+    """Выбор контрагента в карточке партнёра (A6.1): поиск по реестру модуля
+    «Закупки и оплаты» — только «Активен». Своя ручка, а не реестр ``bpp``:
+    карточку партнёра правит администратор задач, у которого ролей модуля
+    закупок может не быть, а выбрать контрагента ему нужно. Уровень — как у
+    правки партнёра: искать незачем тому, кто не может связать.
+    Выключенный модуль — 503 (``ServiceDisabled``)."""
+    from apps.bpp import interface as bpp
+
+    try:
+        limit = _int_param(request, "limit", 20, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.BppCounterpartyOption.model_validate(card)
+            for card in bpp.search_counterparties(_str_param(request, "q"), limit=limit)]
+
+
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_contractor(request, contractor_id: int):
     return schemas.ContractorResponse.model_validate(
@@ -1562,13 +1582,27 @@ def project_sites(request, project_id: int):
 def _list_projects(request):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_responses(project_service.list_projects(
-        employee_scope=employee_scope, department_id=department_id))
+        employee_scope=employee_scope, department_id=department_id,
+        refs=board_scope.refs_for_request(request),
+        project_ref=request.GET.get("project_ref", "").strip() or None))
 
 
 @api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
-    return project_service.build_response(project_service.create_project(
-        data.model_dump(), creator_id=request.token.user_id))
+    try:
+        project = project_service.create_project(data.model_dump())
+    except project_link.ProjectLinkError as exc:
+        return json_error(str(exc), exc.status)
+    return project_service.build_response(project)
+
+
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def project_link_candidates(request):
+    """«Проекты» БЗО, к которым ещё можно завести доску, — выбор в диалоге
+    создания доски. Уровень — как у самого создания доски."""
+    return [schemas.ProjectLinkCandidate.model_validate(row)
+            for row in project_link.candidates(request.GET.get("q", "").strip(),
+                                               user_id=request.token.user_id)]
 
 
 def projects_collection(request):
@@ -1584,7 +1618,7 @@ def _get_project(request, project_id: int):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_response(project_service.get_project(
         project_id, employee_scope=employee_scope,
-        department_id=department_id))
+        department_id=department_id, refs=board_scope.refs_for_request(request)))
 
 
 def _project_for_write(request, project_id: int):
@@ -1614,6 +1648,8 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     try:
         project = project_service.update_project(
             project_id, data.model_dump(exclude_unset=True))
+    except project_link.ProjectLinkError as exc:
+        return json_error(str(exc), exc.status)
     except date_rules.DatesOutOfOrder as exc:
         # У проекта нет ни CheckConstraint, ни валидатора до этой правки:
         # перепутанные даты просто сохранялись.
@@ -1662,7 +1698,8 @@ def _list_roadmaps(request):
                 roadmap_service.list_roadmaps(
                     employee_scope=employee_scope, department_id=department_id,
                     project_id=project_id, site_id=site_id, block_id=block_id,
-                    status=_str_param(request, "status")))]
+                    status=_str_param(request, "status"),
+                    refs=board_scope.refs_for_request(request)))]
 
 
 @api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True, module="tasks", level="admin")
@@ -1786,9 +1823,12 @@ def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
     employee_scope, department_id = project_service.scope_for(request.token)
     # 404s first if the project is out of scope, so this cannot be used to
-    # enumerate tasks of a project the caller may not see.
+    # enumerate tasks of a project the caller may not see. Доска своего
+    # «Проекта» (``board_scope``) — в зоне видимости; задачи внутри — ниже,
+    # по своим правилам.
     project_service.get_project(project_id, employee_scope=employee_scope,
-                                department_id=department_id)
+                                department_id=department_id,
+                                refs=board_scope.refs_for_request(request))
     # Seeing the project is NOT seeing every task in it: narrowing by
     # department alone still handed over tasks the caller has no part in.
     # Same visibility triple as the flat list endpoint.

@@ -125,6 +125,24 @@ describe('BppDocumentShell — шапка и режимы', () => {
     expect(screen.getByText(`Файлы bpp.purchase_request ${DOC_ID} только чтение`)).toBeInTheDocument();
   });
 
+  it('панель файлов: по умолчанию наследует readOnly, filesReadOnly={false} открывает её при закрытой форме', async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderShell({ allowedActions: [], readOnly: true });
+    await user.click(screen.getByRole('tab', { name: 'Файлы' }));
+    expect(screen.getByText(`Файлы bpp.purchase_request ${DOC_ID} только чтение`)).toBeInTheDocument();
+    unmount();
+
+    renderShell({
+      allowedActions: [],
+      readOnly: true,
+      filesReadOnly: false,
+      children: ({ readOnly }: { readOnly: boolean }) => <div>{readOnly ? 'форма закрыта' : 'форма открыта'}</div>,
+    });
+    expect(screen.getByText('форма закрыта')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Файлы' }));
+    expect(screen.getByText(`Файлы bpp.purchase_request ${DOC_ID} правка`)).toBeInTheDocument();
+  });
+
   it('у нового документа вкладок нет', () => {
     renderShell({ documentId: null, number: null, status: null });
     expect(screen.getByRole('heading', { name: 'Новый документ' })).toBeInTheDocument();
@@ -158,6 +176,33 @@ describe('BppDocumentShell — действия', () => {
     await waitFor(() => expect(button).not.toBeDisabled());
     expect(run).toHaveBeenCalledTimes(1);
     expect(other).not.toHaveBeenCalled();
+  });
+
+  it('кнопка исчезла (сменился статус), пока действие «шло», — занятость сброшена, соседнее действие доступно', async () => {
+    const call = deferred<void>();
+    const pay = { label: 'Оплачено', run: vi.fn(() => call.promise) };
+    const request = { label: 'Запросить закрывающие', run: vi.fn(() => Promise.resolve()) };
+    const props = {
+      subjectType: 'bpp.invoice', historyType: 'bpp.invoice', documentId: DOC_ID,
+      number: 'СЧ-2026-000001', status: { kind: 'invoice' as const, code: 'to_pay' },
+      authorName: 'Иванов А.', createdAt: '2026-09-27T20:30:00Z',
+      actions: { pay, request }, children: <div>Тело формы</div>,
+    };
+    const view = (allowed: string[]) => (
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter>
+          <BppDocumentShell {...({ ...props, allowedActions: allowed } as unknown as BppDocumentShellProps<unknown>)} />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(view(['pay', 'request']));
+    fireEvent.click(screen.getByRole('button', { name: 'Оплачено' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Запросить закрывающие' })).toBeDisabled());
+
+    // Ответ пришёл: статус сменился, кнопки «Оплачено» больше нет — размонтирована с pending=true.
+    rerender(view(['request']));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Запросить закрывающие' })).toBeEnabled());
+    await act(async () => { call.resolve(); await call.promise; });
   });
 
   it('«Отклонить» с 9 символами не отправляется, с 10 — отправляется; повтор после 5xx — тем же ключом', async () => {

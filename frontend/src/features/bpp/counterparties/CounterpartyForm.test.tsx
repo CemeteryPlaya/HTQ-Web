@@ -12,6 +12,9 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Под общей нагрузкой прогона форма не укладывается в 5 с (сверка B §20).
+vi.setConfig({ testTimeout: 15000 });
+
 import { createTestQueryClient } from '@/test/renderWithProviders';
 
 import { CounterpartyForm } from './CounterpartyForm';

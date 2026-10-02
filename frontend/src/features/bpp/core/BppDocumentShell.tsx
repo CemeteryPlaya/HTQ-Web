@@ -90,6 +90,14 @@ export interface BppDocumentShellBaseProps<T> {
    * («Печать», «Экспорт», «Копировать»): тогда режим задаёт форма.
    */
   readOnly?: boolean;
+  /**
+   * Панель файлов — «только просмотр»? По умолчанию как `readOnly` документа.
+   * Документу, у которого файлы можно вкладывать и после отправки (счёт:
+   * закрывающие документы по запросу бухгалтера), форма передаёт `false`: что
+   * и когда вкладывать, решает владелец файлов на сервере (`can_modify`, `can_add`
+   * по типам), а не режим формы счёта.
+   */
+  filesReadOnly?: boolean;
   /** Свои вкладки документа после «Файлов» («Версии» бюджета, «Исполнение»). */
   extraTabs?: { key: string; label: string; content: ReactNode }[];
   draft?: BppDocumentDraft<T>;
@@ -128,6 +136,7 @@ export function BppDocumentShell<T>({
   withApproval = true,
   withFiles = true,
   readOnly: readOnlyProp,
+  filesReadOnly,
   extraTabs = [],
   history,
   historyType,
@@ -286,7 +295,7 @@ export function BppDocumentShell<T>({
               <FilesPanel
                 ownerType={fileOwnerType ?? subjectType}
                 ownerId={documentId}
-                readOnly={readOnly}
+                readOnly={filesReadOnly ?? readOnly}
               />
             </TabsContent>
           )}

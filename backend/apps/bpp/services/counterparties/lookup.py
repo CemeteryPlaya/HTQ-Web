@@ -34,6 +34,8 @@ __all__ = [
     "get",
     "is_verified",
     "needs_confirmation",
+    "neighbour_card",
+    "neighbour_cards",
     "record_success",
     "verified_threshold",
 ]
@@ -87,6 +89,25 @@ def brief(ids) -> dict[str, dict]:
         "is_vat_payer": cp.is_vat_payer, "status": cp.status,
         "is_verified": is_verified(cp, threshold),
     } for cp in Counterparty.objects.filter(pk__in=keys)}
+
+
+def neighbour_card(cp: Counterparty) -> dict:
+    """Карточка для соседней аппки (партнёр ``tasks``, A6.1): реквизиты и
+    контакты, которые форма партнёра подтягивает к себе. Без счётчиков и
+    метки «Проверенный» — соседу они не нужны и стоили бы запроса."""
+    return {
+        "id": str(cp.pk), "name": cp.name, "short_name": cp.short_name,
+        "reg_number": cp.reg_number, "country_code": cp.country_code,
+        "status": cp.status, "contact_person": cp.contact_person,
+        "phone": cp.phone, "email": cp.email, "legal_address": cp.legal_address,
+    }
+
+
+def neighbour_cards(ids) -> dict[str, dict]:
+    keys = [key for key in (as_uuid(i) for i in set(ids or ())) if key]
+    if not keys:
+        return {}
+    return {str(cp.pk): neighbour_card(cp) for cp in Counterparty.objects.filter(pk__in=keys)}
 
 
 def assert_usable(counterparty_id) -> Counterparty:

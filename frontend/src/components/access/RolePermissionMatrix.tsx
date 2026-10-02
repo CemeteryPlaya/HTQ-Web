@@ -142,7 +142,10 @@ export function RolePermissionMatrix({
                     <option value="">
                       {isModule
                         ? t('access.matrix.notSet', 'не задано (нет доступа)')
-                        : t('access.matrix.inherits', 'наследует: {{value}}',
+                        : node.explicit_only
+                          ? t('access.matrix.explicitOnly',
+                            'нет доступа (выдаётся только явно)')
+                          : t('access.matrix.inherits', 'наследует: {{value}}',
                           { value: inheritedTitle(node.path) })}
                     </option>
                     {registry.presets

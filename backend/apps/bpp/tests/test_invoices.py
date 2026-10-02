@@ -361,8 +361,9 @@ def _token(user_id):
 
 def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company_context):
     """ТЗ §21: счёт видят автор, ФД, БУХ, ТД, ОД, ГД, а АВР и накладную —
-    только автор, ФД и БУХ; закрывающие вкладываются по запросу БУХ и только
-    запрошенных типов, файл счёта после отправки не меняется."""
+    только автор, ФД и БУХ, плюс ГД (решение 01.10 «ГД видит всё»);
+    закрывающие вкладываются по запросу БУХ и только запрошенных типов, файл
+    счёта после отправки не меняется."""
     slug = company_context["slug"]
     sn, _, inv = _to_pay(slug, 1000)
     buh = _buh(slug)
@@ -370,6 +371,7 @@ def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company
     payments.request_docs(buh, inv.id, docs={"avr": False, "waybill": True,
                                              "vat_invoice": False})
     s.grant(slug, s.TD, "bpp-td")
+    s.grant(slug, GD, "bpp-gd")
     entry = files_registry.get_owner("bpp.invoice")
 
     def sees(user_id, file_type):
@@ -377,6 +379,9 @@ def test_closing_docs_are_for_author_fd_and_buh_and_only_requested_types(company
 
     assert sees(s.SN, "waybill") and sees(BUH, "waybill") and sees(s.FD, "waybill")
     assert sees(s.TD, "invoice") and not sees(s.TD, "waybill")
+    assert sees(GD, "waybill") and sees(GD, "act")
+    with pytest.raises(files_interface.FilesForbidden):       # ГД смотрит, но не вкладывает
+        entry.can_modify(inv.pk, _token(GD))
 
     with pytest.raises(files_interface.FilesLocked):          # счёт уже у ФД и оплачен
         entry.can_modify_type(inv.pk, _token(s.SN), "invoice")
@@ -531,6 +536,28 @@ def test_superuser_sees_every_invoice_agreement_and_accountable(company_context)
     assert [row["id"] for row in read.registry(root)["items"]] == [str(inv.pk)]
     assert agreement_service.sees_all(root) and accountable_service.sees_all(root)
     assert not service.sees_all(s.actor(slug, s.SN, "bpp-sn"))
+
+
+def test_combined_roles_see_all_by_node(company_context):
+    """D-S6-5, Review Focus 4: СН + ФД видит все счета, договоры и АП,
+    СН без ФД — только свои, ПМ — только свои."""
+    from apps.bpp.services.accountable import accountable as accountable_service
+    from apps.bpp.services.alternatives import kpi as kpi_service
+    from apps.bpp.services.alternatives import read as alt_read
+
+    slug = company_context["slug"]
+    _, _, inv = _submitted(slug, 100_000)
+    combined = s.actor(slug, s.SN2, "bpp-sn", "bpp-fd")
+    assert service.sees_all(combined) and service.can_view(combined, inv)
+    assert agreement_service.sees_all(combined) and accountable_service.sees_all(combined)
+    assert alt_read.sees_all(combined) and kpi_service.sees_all(combined)
+    sn = s.actor(slug, s.SN, "bpp-sn")
+    pm = s.actor(slug, s.PM, "bpp-pm")
+    for plain in (sn, pm):
+        assert not service.sees_all(plain)
+        assert not agreement_service.sees_all(plain)
+        assert not accountable_service.sees_all(plain)
+        assert not alt_read.sees_all(plain) and not kpi_service.sees_all(plain)
 
 
 def test_fd_cannot_cancel_invoice_while_bank_holds_payment(company_context):

@@ -54,12 +54,14 @@ def _fresh(offer) -> AlternativeOffer:
     return AlternativeOffer.objects.get(pk=offer.pk)
 
 
-def _agr_decide(agr, user_id, decision="approve", comment=""):
+def _agr_decide(agr, user_id, decision="approve", comment="", option_key=None):
     process = signoff.get_process_for("bpp.agreement", str(agr.pk))
     task = next(t for stage in process["stages"] for t in stage["tasks"]
                 if t["user_id"] == user_id and t["state"] == "pending")
-    result = signoff.decide_many(actor_id=user_id, items=[
-        {"task_id": task["id"], "decision": decision, "comment": comment}])[0]
+    # С B5.1 договор с поданными АП согласуют с вариантом голоса (D-26).
+    item = {"task_id": task["id"], "decision": decision, "comment": comment,
+            **({"option_key": option_key} if option_key else {})}
+    result = signoff.decide_many(actor_id=user_id, items=[item])[0]
     assert result.get("ok"), result
     return result
 
@@ -104,9 +106,9 @@ def test_agreement_approved_in_original_sets_not_selected(company_context):
     offer = common.filed(common.sn(slug, common.SN2), agr, common.cp(2), price=900,
                          source_type=common.AGREEMENT)
 
-    _agr_decide(agr, s.FD, "approve")
+    _agr_decide(agr, s.FD, "approve", option_key=lifecycle.ORIGINAL)
     assert _fresh(offer).status == OfferStatus.SUBMITTED  # голосование идёт
-    _agr_decide(agr, GD, "approve")
+    _agr_decide(agr, GD, "approve", option_key=lifecycle.ORIGINAL)
 
     row = _fresh(offer)
     assert (row.status, row.closed_reason) == (OfferStatus.NOT_SELECTED,

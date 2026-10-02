@@ -87,9 +87,11 @@ __all__ = [
     "pending_for_user",
     "PreapprovalMismatch",
     "cancel_process",
+    "count_no_executor",
     "rework_process",
     "get_process",
     "get_process_for",
+    "lock_process_for",
     "final_option",
     "approval_state_of",
     "count_awaiting",
@@ -216,6 +218,37 @@ def rework_process(*, process_id: int, actor_id: int | None = None,
     return serialize_process(
         engine.reopen(process_id=process_id, actor_id=actor_id,
                       comment=comment), enrich=enrich)
+
+
+def count_no_executor(subject_type_prefix: str) -> int:
+    """Сколько идущих согласований типов ``<prefix>…`` стоят на этапе «Нет
+    исполнителя» (ленивое разрешение не нашло держателя должности, ТЗ §16.1
+    п.5) — для «Обзора» администратора модуля."""
+    require_service("signoff")
+
+    return (ApprovalProcess.objects
+            .filter(state=ProcessState.PENDING, subject_type__startswith=subject_type_prefix,
+                    stages__state=StageState.NO_EXECUTOR)
+            .distinct().count())
+
+
+def lock_process_for(subject_type: str, subject_id: int | str) -> dict | None:
+    """Взять под замок (``SELECT … FOR UPDATE``) последний процесс объекта.
+
+    Первый шаг транзакции, которая дальше трогает и строку объекта, и его
+    процесс (выбор альтернативы в модуле БЗО, B5.1): решения движка берут
+    замки в порядке «процесс → строка объекта» (колбэки ``on_*`` правят
+    строку уже под замком процесса), и встречная транзакция в обратном
+    порядке поймала бы взаимную блокировку. Зовётся внутри транзакции
+    вызывающего. ``{"id", "state"}``; ``None`` — процесса у объекта нет.
+    """
+    require_service("signoff")
+
+    process = (ApprovalProcess.objects.select_for_update()
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
+               .order_by("-created_at", "-id").first())
+    return None if process is None else {"id": process.pk, "state": process.state}
 
 
 def get_process(process_id: int, *, enrich: bool = False) -> dict | None:

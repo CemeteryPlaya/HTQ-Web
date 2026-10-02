@@ -8,6 +8,9 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Под общей нагрузкой прогона форма не укладывается в 5 с (сверка B §20).
+vi.setConfig({ testTimeout: 15000 });
+
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import type { StatementTemplate } from './api';

@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from django.apps import apps as django_apps
 from django.utils.module_loading import module_has_submodule
 
@@ -104,6 +106,25 @@ def _declared() -> list[tuple[str, str, tuple[str, ...]]]:
     return found
 
 
+@lru_cache(maxsize=1)
+def explicit_only() -> frozenset[str]:
+    """Узлы, глубина которых НЕ наследуется от предков.
+
+    Аппка объявляет их константой ``EXPLICIT_ONLY`` в ``access_functions.py``.
+    Нужно узлам «все документы» (``bpp.invoices.all``): право создавать и
+    смотреть свои документы на родителе не должно открывать чужие, а роль,
+    заведённая позже в редакторе, не несёт явных строк на под-узлах. У такого
+    узла действует только собственная строка роли; нет строки — запрет.
+    """
+    found: set[str] = set()
+    for config in django_apps.get_app_configs():
+        if not module_has_submodule(config.module, _SUBMODULE):
+            continue
+        module = __import__(f"{config.name}.{_SUBMODULE}", fromlist=[_SUBMODULE])
+        found.update(getattr(module, "EXPLICIT_ONLY", ()))
+    return frozenset(found)
+
+
 def kind_of(path: str) -> str:
     """Уровень узла по числу сегментов пути."""
     if path.startswith(PAGE_PREFIX):
@@ -165,8 +186,11 @@ def nodes() -> list[dict]:
                       "module_kind": kinds.get(module, DOCUMENT),
                       "flags": list(flags)}
 
+    only = explicit_only()
     for row in rows.values():
         row["presets"] = _presets_for(row)
+        if row["path"] in only:
+            row["explicit_only"] = True
     return [rows[path] for path in sorted(rows)] + page_nodes()
 
 

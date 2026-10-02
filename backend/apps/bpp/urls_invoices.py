@@ -27,6 +27,8 @@ urlpatterns = [
     path(f"{INV}/cancel/", views.invoice_cancel),
     path(f"{INV}/decision", views.invoice_decision),
     path(f"{INV}/decision/", views.invoice_decision),
+    path(f"{INV}/select-alternative", views.invoice_select_alternative),
+    path(f"{INV}/select-alternative/", views.invoice_select_alternative),
     path(f"{INV}/payments", views.invoice_payment),
     path(f"{INV}/payments/", views.invoice_payment),
     path(f"{INV}/payments/<uuid:mark_id>/cancel", views.invoice_payment_cancel),

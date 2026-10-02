@@ -55,6 +55,13 @@ def invoice_on_review(slug, *amounts):
     return invoice_flow._submitted(slug, *amounts)
 
 
+def with_file(doc, file_type: str) -> None:
+    """Обязательный файл документа для «Отправить» (ТЗ §21; E-FIL-04 —
+    скан договора и файл счёта, PR #41)."""
+    core_files.attach(doc, file_type, data=PDF, filename=f"{file_type}.pdf",
+                      mime="application/pdf", actor_id=doc.author_id)
+
+
 def agreement_on_review(slug, *amounts):
     """Договор «На согласовании» от СН (``s.SN``) — ``(автор, проект, договор)``."""
     proj = invoice_flow._setup(slug)
