@@ -5096,6 +5096,7 @@
       "depthColumn": "Depth",
       "notSet": "not set (no access)",
       "inherits": "inherits: {{value}}",
+      "explicitOnly": "no access (granted explicitly only)",
       "allowed": "allowed",
       "pages": "Site pages",
       "pagesHint": "a hidden page overrides everything allowed above",
