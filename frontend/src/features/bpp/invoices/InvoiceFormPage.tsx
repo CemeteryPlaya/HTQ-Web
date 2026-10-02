@@ -465,6 +465,8 @@ export function InvoiceFormPage() {
         allowedActions={shellActions}
         actions={actions}
         readOnly={!editable}
+        // Закрывающие документы автор вкладывает по запросу БУХ, когда счёт уже не правится.
+        filesReadOnly={false}
         historyType={INVOICE_HISTORY_TYPE}
         historyFields={INVOICE_HISTORY_FIELDS}
         extraTabs={showPayments ? [{
