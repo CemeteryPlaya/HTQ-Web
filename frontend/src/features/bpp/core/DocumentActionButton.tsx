@@ -62,6 +62,11 @@ export function DocumentActionButton({
 
   useEffect(() => {
     onPendingChange(actionKey, pending);
+    // Кнопка исчезает вместе со сменой статуса (после «Оплачено» её нет в
+    // `allowed_actions`) и размонтируется, пока действие ещё «идёт»: без
+    // сброса `busy[actionKey]` остался бы true, и соседние действия
+    // документа («Запросить закрывающие») были бы закрыты до перезагрузки.
+    return () => onPendingChange(actionKey, false);
   }, [actionKey, pending, onPendingChange]);
 
   const execute = () => {
