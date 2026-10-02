@@ -118,7 +118,7 @@ def invoice_list(request):
         "recon_statuses": _recon_statuses(request),
         "bank_date_from": _date_param(request, "bank_date_from"),
         "bank_date_to": _date_param(request, "bank_date_to"),
-        "bank_wait_days": int_param(params, "bank_wait_days", minimum=0),
+        "bank_wait_days": int_param(params, "bank_wait_days", minimum=0, maximum=3650),
     }
     actor = Actor(request)
     if params.get("format") == "xlsx":

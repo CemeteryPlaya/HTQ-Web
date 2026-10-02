@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
@@ -46,13 +46,14 @@ from apps.bpp.services.counterparties import lookup as counterparties
 from apps.bpp.services.money import fmt, money
 from apps.bpp.services.plan import service as plan
 from apps.bpp.services.selection import checks as selection_checks
+from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
 from htqweb.errors import DomainError
 
 SUBJECT = Invoice.SIGNOFF_SUBJECT_TYPE
 COMMENT_MIN = 10
 EDITABLE = (InvoiceStatus.DRAFT, InvoiceStatus.RETURNED)
-#: Срок оплаты по умолчанию — дата счёта + 5 рабочих дней (ТЗ §10.2 [У]).
+#: Срок оплаты по умолчанию — дата счёта + 5 банковских дней (ТЗ §10.2 [У], D-S7-7).
 DUE_WORKING_DAYS = 5
 #: До решения ФД автор может отменить счёт сам (ТЗ §10.1).
 BEFORE_DECISION = (InvoiceStatus.DRAFT, InvoiceStatus.RETURNED, InvoiceStatus.UNDER_REVIEW)
@@ -195,13 +196,11 @@ def _refuse_while_bank_paid(inv: Invoice) -> None:
 
 # ── расчёты ─────────────────────────────────────────────────────────────
 
-def add_working_days(start: date, days: int) -> date:
-    current = start
-    while days > 0:
-        current += timedelta(days=1)
-        if current.weekday() < 5:
-            days -= 1
-    return current
+def default_due_date(start: date) -> date:
+    """Срок оплаты по умолчанию — дата счёта + 5 БАНКОВСКИХ дней (ТЗ §10.2,
+    D-S7-7): платить в небанковский день нельзя, поэтому праздники РК
+    пропускаются, а день переноса праздника с субботы считается."""
+    return refdata.add_bank_days(start, DUE_WORKING_DAYS)
 
 
 def recalc(inv: Invoice) -> str | None:
@@ -278,7 +277,7 @@ def new_invoice(actor: Actor, *, rows: list[PurchaseRequestItem], agreement: Agr
         counterparty=agreement.counterparty if agreement else None,
         currency_code=agreement.currency_code if agreement else request.currency_code,
         purchase_type=(agreement.agreement_type if agreement else request.purchase_type) or "",
-        ext_date=today, due_date=add_working_days(today, DUE_WORKING_DAYS),
+        ext_date=today, due_date=default_due_date(today),
         amount=money(sum(amounts.values(), Decimal("0"))),
         with_vat=agreement.with_vat if agreement else True,
         created_by=actor.user_id, updated_by=actor.user_id)
