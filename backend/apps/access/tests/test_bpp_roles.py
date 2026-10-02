@@ -101,6 +101,7 @@ def test_board_link_is_for_td_od_pm_and_adm():
         assert _flags(code, "project.board") <= {"view"}, code
 
 
+@pytest.mark.django_db
 def test_only_fd_and_gd_see_all_plan_items():
     """I-2 итогового ревью: ``bpp.plan.all`` — explicit-only, строка у ФД и
     (решение 01.10 «ГД видит всё», access/0019) у ГД."""
