@@ -50,7 +50,6 @@ export function ProjectCardPage() {
   const { id = '' } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const permissions = usePermissions();
-  const nameOf = useUserNames();
   const [editing, setEditing] = useState(false);
   const [busyMember, setBusyMember] = useState<number | null>(null);
 
@@ -64,6 +63,8 @@ export function ProjectCardPage() {
     queryFn: () => projectApi.members(id),
     enabled: project.isSuccess,
   });
+
+  const nameOf = useUserNames([project.data?.manager_user_id, ...(members.data ?? [])]);
 
   const canEdit = permissions.can('project.projects', 'edit');
   const canMembers = permissions.can('project.members', 'edit');

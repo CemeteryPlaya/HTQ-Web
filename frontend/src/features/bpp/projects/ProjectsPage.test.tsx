@@ -18,11 +18,11 @@ import { ProjectsPage } from './ProjectsPage';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('@/api/client', () => ({ default: { get, post: vi.fn(), patch: vi.fn() } }));
+// У ТД/ОД/ПМ кадровых прав нет: `hr` отвечает 403. Имена обязаны приходить из
+// учёток `users` (`project/v1/user-names`), а не из этого запроса.
 vi.mock('@/api/hr', () => ({
-  fetchEmployees: vi.fn(() => Promise.resolve([
-    { id: 1, user: 7, user_id: 7, full_name: 'Иванов Иван' },
-  ])),
-  fetchDepartments: vi.fn(() => Promise.resolve([])),
+  fetchEmployees: vi.fn(() => Promise.reject(new Error('403 Forbidden'))),
+  fetchDepartments: vi.fn(() => Promise.reject(new Error('403 Forbidden'))),
 }));
 
 function permissionsWith(depth: Record<string, DepthFlag[]>): Permissions {
@@ -69,7 +69,9 @@ function renderPage() {
 describe('ProjectsPage', () => {
   beforeEach(() => {
     get.mockReset();
-    get.mockResolvedValue({ data: PROJECTS });
+    get.mockImplementation((url: string) => Promise.resolve({
+      data: url === 'project/v1/user-names' ? { 7: 'Иванов Иван' } : PROJECTS,
+    }));
     permissions.mockReturnValue(permissionsWith({ 'project.projects': ['view', 'create', 'edit'] }));
   });
 

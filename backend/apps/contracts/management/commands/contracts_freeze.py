@@ -11,6 +11,8 @@
 Идущие согласования документов раздела заморозку не пускают (команда
 печатает список и завершается с ошибкой); ``--revoke-pending`` отзывает их
 (документы возвращаются в черновик) и замораживает одной транзакцией.
+Документы «на согласовании» БЕЗ процесса отозвать нечем — они замораживаются
+как есть, и команда печатает их списком в отчёте.
 
 Идемпотентна: повтор не сдвигает дату первой заморозки; ``--undo`` на
 незамороженном разделе ничего не делает.
@@ -68,9 +70,11 @@ class Command(BaseCommand):
                 self.stdout.write(f"{company}: заморозка снята" if changed
                                   else f"{company}: раздел и не был заморожен")
                 return
+            orphans: list[dict] = []
             try:
                 changed = freeze.freeze(actor_id=actor, comment=comment,
-                                        revoke_pending=revoke_pending)
+                                        revoke_pending=revoke_pending,
+                                        without_process=orphans)
             except freeze.PendingApprovals as exc:
                 lines = [f"  {d['subject_type']} #{d['id']}: {d['title']}"
                          for d in exc.documents]
@@ -80,6 +84,12 @@ class Command(BaseCommand):
                     + "\n".join(lines) + "\n"
                     "Дождитесь решений или отзовите их: --revoke-pending.")
             state = freeze.info()
+        if orphans:
+            self.stdout.write(self.style.WARNING(
+                f"{company}: документы «на согласовании» без процесса — отозвать "
+                f"нечем, заморожены в этом состоянии ({len(orphans)}):"))
+            for d in orphans:
+                self.stdout.write(f"  {d['subject_type']} #{d['id']}: {d['title']}")
         when = f"{timezone.localtime(state['frozen_at']):%d.%m.%Y %H:%M}"
         self.stdout.write(f"{company}: раздел «Договоры» заморожен ({when})" if changed
                           else f"{company}: уже заморожен с {when} — ничего не изменено")

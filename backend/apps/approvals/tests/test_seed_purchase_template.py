@@ -291,3 +291,39 @@ def test_seed_refuses_a_route_with_an_inactive_approver():
     gone_a, gone_b = ensure_user(31, active=False), ensure_user(32, active=False)
     with pytest.raises(Exception, match="Маршрут не принят"):
         seed(buyer_user=gone_a.pk, cfo_user=gone_b.pk)
+
+
+def test_with_registered_companies_company_is_required(company_row):
+    """Маршрут пишется в ``signoff`` — таблицу схемы компании. Вне контекста
+    компании команда падала на ``signoff_approvalroute.scope``; при заведённых
+    компаниях ``--company`` обязателен, и без него — явная ошибка."""
+    from django.core.management import CommandError
+
+    with pytest.raises(CommandError, match="--company"):
+        seed()
+    assert not RequestFormTemplate.objects.filter(slug=DEFAULT_SLUG).exists()
+
+
+def test_unknown_company_is_refused(company_row):
+    from django.core.management import CommandError
+
+    with pytest.raises(CommandError, match="не найдена"):
+        seed(company="no-such-company")
+
+
+def test_with_company_the_route_lands_in_its_schema(company_context):
+    slug = company_context["slug"]
+    ensure_user(11), ensure_user(12)
+    out = seed(company=slug, buyer_user=11, cfo_user=12)
+    assert "Шаблон создан" in out
+    assert RequestFormTemplate.objects.filter(slug=DEFAULT_SLUG).exists()
+
+
+def test_archived_company_with_schema_also_requires_company(company_context):
+    from django.core.management import CommandError
+
+    from apps.companies.models import Company, CompanyStatus
+
+    Company.objects.filter(slug=company_context["slug"]).update(status=CompanyStatus.ARCHIVED)
+    with pytest.raises(CommandError, match="--company"):
+        seed()
