@@ -63,6 +63,8 @@ _DEFINED_OUTSIDE_APPS = {
     PREFIX + "fallback_total",
     # Блокировки входа (htqweb/ratelimit.py, D-S7-3): Counter процесса web.
     PREFIX + "auth_lockout_total",
+    # Вердикты антивируса (media_files/services/upload_service.py, A7.4).
+    PREFIX + "antivirus_scans_total",
 }
 
 # Условные метрики: аппка не отдаёт их, пока нет ни одной строки-источника

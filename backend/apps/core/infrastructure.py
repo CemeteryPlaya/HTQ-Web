@@ -239,6 +239,18 @@ def build_response(*, reveal: bool) -> dict:
             "links": [{"label": "MinIO Console", "url": settings.MINIO_CONSOLE_URL, "external": True}],
         },
     ]
+    if getattr(settings, "ANTIVIRUS_CLAMD_HOST", ""):
+        resources.append({
+            "id": "clamav",
+            "name": "ClamAV",
+            "kind": "antivirus",
+            "status": "configured",
+            "summary": "Антивирусная проверка загружаемых документов",
+            "endpoint": f"{settings.ANTIVIRUS_CLAMD_HOST}:{settings.ANTIVIRUS_CLAMD_PORT}",
+            "database": None,
+            "credentials": [],
+            "links": [],
+        })
 
     now = datetime.now(timezone.utc)
     return {
@@ -298,11 +310,37 @@ def _check_minio() -> tuple[str, str]:
     return "error", f"HTTP {resp.status_code}"
 
 
+def _check_clamav() -> tuple[str, str]:
+    """PING clamd (A7.4): ``PONG`` — зелёный, всё остальное — красный. Текст
+    чужого ответа в сообщение не попадает: в панель админа уходит только
+    вердикт, а не то, что сказал порт."""
+    import socket
+
+    host, port = settings.ANTIVIRUS_CLAMD_HOST, settings.ANTIVIRUS_CLAMD_PORT
+    with socket.create_connection((host, port), timeout=HEALTH_TIMEOUT) as sock:
+        sock.settimeout(HEALTH_TIMEOUT)
+        sock.sendall(b"zPING\0")
+        reply = sock.recv(64).rstrip(b"\0").strip()
+    if reply == b"PONG":
+        return "ok", "PONG"
+    return "error", "clamd ответил не PONG"
+
+
 HEALTH_CHECKS: dict[str, Callable[[], tuple[str, str]]] = {
     "postgres": _check_postgres,
     "redis": _check_redis,
     "minio": _check_minio,
 }
+
+
+def active_checks() -> dict[str, Callable[[], tuple[str, str]]]:
+    """Базовые проверки плюс ``clamav``, когда сканер включён
+    (``ANTIVIRUS_CLAMD_HOST`` непуст). Выключенный сканер — не красный ресурс,
+    а отсутствующий."""
+    checks = dict(HEALTH_CHECKS)
+    if getattr(settings, "ANTIVIRUS_CLAMD_HOST", ""):
+        checks["clamav"] = _check_clamav
+    return checks
 
 
 def _record_history(resource_id: str, status: str, latency_ms: int | None, at: datetime) -> None:
@@ -314,7 +352,7 @@ def _record_history(resource_id: str, status: str, latency_ms: int | None, at: d
 def run_health(resource_id: str) -> dict:
     """Порт ``_run_health``."""
     checked_at = datetime.now(timezone.utc)
-    check = HEALTH_CHECKS.get(resource_id)
+    check = active_checks().get(resource_id)
     if check is None:
         return {"id": resource_id, "status": "error", "latency_ms": None,
                 "message": "unknown resource", "checked_at": checked_at.isoformat()}
@@ -345,8 +383,9 @@ def health_all(*, use_cache: bool = True) -> dict:
         if cached is not None:
             return cached
 
-    with ThreadPoolExecutor(max_workers=len(HEALTH_CHECKS)) as pool:
-        results = list(pool.map(run_health, HEALTH_CHECKS.keys()))
+    ids = list(active_checks())
+    with ThreadPoolExecutor(max_workers=len(ids)) as pool:
+        results = list(pool.map(run_health, ids))
 
     payload = {"checked_at": datetime.now(timezone.utc).isoformat(), "results": results}
     cache.set(_HEALTH_CACHE_KEY, payload, int(HEALTH_CACHE_TTL))
@@ -362,7 +401,7 @@ def invalidate_health_cache() -> None:
 
 
 def health_history() -> dict:
-    return {"history": {rid: _ring_read(_HISTORY_KEY % rid) for rid in HEALTH_CHECKS}}
+    return {"history": {rid: _ring_read(_HISTORY_KEY % rid) for rid in active_checks()}}
 
 
 # ── Аудит раскрытия креденшелов ────────────────────────────────────────────

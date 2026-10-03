@@ -1794,6 +1794,55 @@ groups:
           severity: warning
           team: platform
 
+      # ── Антивирус загрузок недоступен (A7.4, D-31) ───────────────────────
+      # Сканер включён (ANTIVIRUS_CLAMD_HOST), но не отвечает: загрузка
+      # документов получает 503 (fail-closed), и без правила об этом знают
+      # только пользователи. Серия растёт лишь при включённом сканере, у
+      # выключенного её нет вовсе (noDataState: OK).
+      - uid: htqweb-antivirus-unavailable
+        title: "Антивирус недоступен"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(increase(htqweb_antivirus_scans_total{verdict="unavailable"}[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "16"
+          threshold: "0"
+          summary: "Загрузки документов отклоняются: антивирус не отвечает"
+          description: |
+            За 10 минут были попытки загрузки, а clamd не ответил (503
+            E-SYS-01). Первый запуск: базы сигнатур качаются минуты, clamd в это
+            время молчит. Иначе: состояние здоровья контейнера clamav
+            (docker inspect, State.Health.Status), логи freshclam (403 от
+            database.clamav.net — нужно зеркало), память контейнера. Ранбук —
+            docs/deploy/antivirus-runbook.md. Откат — пустой ANTIVIRUS_CLAMD_HOST.
+        labels:
+          severity: warning
+          team: platform
+
       # ── Перебор публичных ссылок оргструктуры ────────────────────────────
       - uid: htqweb-share-link-probing
         title: "Перебор публичных ссылок оргструктуры"

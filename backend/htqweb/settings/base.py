@@ -723,7 +723,11 @@ FILES_UPLOAD_CEILING_MB = 20
 ANTIVIRUS_CLAMD_HOST = env("ANTIVIRUS_CLAMD_HOST", "")
 ANTIVIRUS_CLAMD_PORT = int(env("ANTIVIRUS_CLAMD_PORT", "3310"))
 # 20 МБ на локальной сети clamd проверяет за секунды; таймаут — на зависание.
-ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "60"))
+# Меньше самого короткого ``proxy_read_timeout`` путей загрузки в nginx (45s у
+# /api/ и /api/bpp/v1/bank/) и ``gunicorn --timeout 60``: иначе шлюз или
+# gunicorn оборвут запрос раньше, чем сканер «не ответит», и пользователь
+# получит 504/обрыв вместо 503 E-SYS-01 (A7.4).
+ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "30"))
 # ── 1С (заготовка, A7.3, D-38, D-S7-5) ──────────────────────────────────
 # Адрес публикации OData, учётная запись и пароль живут в файле секретов
 # (secrets/onec.env, подключается через env_file compose), а не в репозитории

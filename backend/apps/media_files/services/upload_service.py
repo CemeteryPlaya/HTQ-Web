@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import logging
 
 from django.conf import settings
+from prometheus_client import Counter
 
 from htqweb import antivirus
 from htqweb.http import ApiError
@@ -94,6 +95,33 @@ class ScanUnavailable(UploadValidationError):
 
 
 logger = logging.getLogger(__name__)
+
+#: Вердикты антивируса (A7.4, D-31). Вне ``collect_all()``, как
+#: ``htqweb_fallback_total``: счётчик процесса web. Не растёт, пока сканер
+#: выключен (пустой ``ANTIVIRUS_CLAMD_HOST``) или scope проверки не требует.
+#: ``unavailable`` — включённый, но молчащий сканер: пользователь видит 503,
+#: а оператор — рост этой серии (алерт ``htqweb-antivirus-unavailable``).
+antivirus_scans_total = Counter(
+    "htqweb_antivirus_scans_total",
+    "Проверки файлов антивирусом по вердиктам (clean, infected, unavailable)",
+    ["verdict"],
+)
+_VERDICTS = ("clean", "infected", "unavailable")
+_labels_ready = False
+
+
+def _init_verdict_labels() -> None:
+    """Создать все три серии при первом использовании включённого сканера.
+
+    Без этого серия ``unavailable`` рождается сразу значением 1, а
+    ``increase()`` Prometheus не видит прироста у серии, появившейся уже
+    ненулевой, — первый отказ сканера остался бы без алерта."""
+    global _labels_ready
+    if _labels_ready:
+        return
+    for verdict in _VERDICTS:
+        antivirus_scans_total.labels(verdict)
+    _labels_ready = True
 
 
 @dataclass
@@ -230,11 +258,14 @@ def _scan(data: bytes, filename: str, policy: ScopePolicy) -> None:
     что их превратила обработка."""
     if not policy.antivirus or not antivirus.enabled():
         return
+    _init_verdict_labels()
     try:
         verdict = antivirus.scan(data)
     except antivirus.ScanUnavailable as exc:
+        antivirus_scans_total.labels("unavailable").inc()
         logger.error("antivirus unavailable, upload of %r refused: %s", filename, exc)
         raise ScanUnavailable(str(exc)) from exc
+    antivirus_scans_total.labels("clean" if verdict.clean else "infected").inc()
     if not verdict.clean:
         logger.warning("antivirus: %r rejected, signature %s", filename, verdict.signature)
         raise FileInfected(verdict.signature)

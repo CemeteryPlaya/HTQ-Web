@@ -142,6 +142,11 @@ x-django-env: &django-env
   # (`--profile antivirus`). Включённый, но недоступный сканер отвечает
   # загрузке документов 503, а не пропускает файл.
   ANTIVIRUS_CLAMD_HOST: ${ANTIVIRUS_CLAMD_HOST:-}
+  ANTIVIRUS_CLAMD_PORT: ${ANTIVIRUS_CLAMD_PORT:-3310}
+  # Меньше самого короткого `proxy_read_timeout` путей загрузки в nginx (сейчас
+  # 45s у /api/ и /api/bpp/v1/bank/) и `gunicorn --timeout 60`: молчащий сканер
+  # должен успеть стать 503 E-SYS-01, а не 504 шлюза или обрывом воркера.
+  ANTIVIRUS_TIMEOUT: ${ANTIVIRUS_TIMEOUT:-30}
 
 services:
   # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
@@ -403,7 +408,26 @@ services:
     # 1,5 ГБ памяти, пока проверка выключена.
     profiles: ["antivirus"]
     restart: unless-stopped
+    # Порт clamd (:3310) наружу НЕ публикуется: сервис виден только backend-ам
+    # по имени в сети стека. Лимит — с запасом над ~1,5 ГБ сигнатур: при
+    # перезагрузке баз clamd на время держит две копии.
+    mem_limit: 3g
+    # Проверка встроена в образ (`clamdcheck.sh` — PING на :3310); здесь она
+    # объявлена явно, чтобы `docker inspect --format '{{.State.Health.Status}}'`
+    # и start_period были видны в репозитории. Окно запуска — 10 минут: первая
+    # закачка баз идёт минутами, и до неё clamd не отвечает (503 на загрузку).
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
     environment:
+      # Зеркало баз, если database.clamav.net отдаёт 403 (не во все страны).
+      # По умолчанию — штатный адрес образа: пустое значение образ записал бы
+      # в freshclam.conf пустой строкой DatabaseMirror, и freshclam бы не
+      # стартовал. Значение — только https. См. docs/deploy/antivirus-runbook.md.
+      FRESHCLAM_CONF_DatabaseMirror: ${CLAMAV_DATABASE_MIRROR:-database.clamav.net}
       # Предел потока: по умолчанию 25M, а документы бывают больше (шлюз
       # пускает в /api/media/ до 100M). Больше предела clamd отвечает ERROR,
       # и файл не принимается как непроверенный.
