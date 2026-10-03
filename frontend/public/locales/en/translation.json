@@ -2472,7 +2472,9 @@
         "addFirst": "add a partner",
         "bppAgreement": "Purchasing & Payments contract",
         "noBppAgreement": "Not selected",
-        "bppAgreementSearch": "Find a contract by number or name"
+        "bppAgreementSearch": "Find a contract by number or name",
+        "bppAgreementNone": "No suitable agreements: only \"Active\" and \"Completed\" ones with the partner's counterparty fit —",
+        "bppAgreementRegistry": "agreement registry"
       },
       "roadmaps": {
         "title": "Roadmaps",

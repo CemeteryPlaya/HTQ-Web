@@ -171,7 +171,7 @@ const HRContractors: React.FC = () => {
   // Договоры модуля — только у партнёра, связанного с контрагентом, и пока
   // открыт диалог привлечения. Права на договоры решает сервер: нет права —
   // пустой список, и остаётся ввод номера текстом.
-  const { data: agreementOptions = [] } = useQuery({
+  const { data: agreementOptions = [], isLoading: agreementsLoading } = useQuery({
     queryKey: ['contractor-engagement-agreements', selectedId, agreementQuery.trim()],
     queryFn: () => searchEngagementAgreements(selectedId!, agreementQuery.trim() || undefined),
     enabled: engagementDialog && selectedId !== null && Boolean(selected?.bpp_counterparty_id),
@@ -1066,6 +1066,18 @@ const HRContractors: React.FC = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                {/* Пустой поиск — не сбой: подходят только «Действует»/«Исполнен»
+                    контрагента партнёра и только те, что пользователь вправе видеть. */}
+                <PrerequisiteNotice
+                  variant="inline"
+                  items={[{
+                    when: !agreementsLoading && agreementOptions.length === 0,
+                    text: t('tasks.pages.contractors.bppAgreementNone',
+                      'Подходящих договоров нет: годятся «Действует» и «Исполнен» с контрагентом партнёра —'),
+                    to: '/bpp/agreements',
+                    linkText: t('tasks.pages.contractors.bppAgreementRegistry', 'реестр договоров'),
+                  }]}
+                />
               </div>
             )}
             <div>
