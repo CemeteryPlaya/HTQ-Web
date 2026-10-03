@@ -31,7 +31,10 @@ HTQWeb1/
 │   │                       #   authn/ (JWT), http.py (api_view), middleware/, storage/,
 │   │                       #   tenancy/ (контекст компании и схема Postgres, см. §3.7),
 │   │                       #   fallback.py (громкие подмены, см. §8),
-│   │                       #   integrations/ (клиенты внешних систем; onec.py — OData 1С, заготовка A7.3)
+│   │                       #   ratelimit.py (блокировка входа по логину, A7.2; снятие —
+│   │                       #     manage.py auth_unlock), antivirus.py (клиент clamd, INSTREAM),
+│   │                       #   integrations/ (клиенты внешних систем; onec.py — OData 1С, заготовка A7.3;
+│   │                       #     диагностика — manage.py onec_check)
 │   ├── apps/               # Доменные Django-аппки — units изоляции (см. §3.1)
 │   ├── manage.py   requirements.txt   pytest.ini   conftest.py
 │   ├── Dockerfile   docker-entrypoint.sh
@@ -50,6 +53,9 @@ HTQWeb1/
 ├── scripts/              # PS/JS/bash-утилиты (TLS, firewall, туннели, monitoring traffic);
 │                         #   bpp-e2e-seed.sh — сид пилотной компании стенда под сценарии приёмки БЗО SC-001…SC-006
 ├── tools/                # Локальные бинари туннелей (gitignored)
+├── secrets/              # Файлы секретов хоста (gitignored, вне образов): onec.env — доступы 1С,
+│                         #   читается env_file (required: false) четырёх backend-сервисов
+│                         #   всех трёх compose (нужен compose ≥ 2.24)
 ├── docker-compose.yml       # Прод-стек (полный)
 ├── docker-compose.test-local.yml  # Тест-стек: Vite HMR + Postgres в контейнере (:55432)
 ├── docker-compose.test-env.yml    # Тест-стек: Vite HMR, БД из .env (миграции по умолчанию OFF)

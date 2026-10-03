@@ -70,7 +70,7 @@ CDN ClamAV отдаёт базы не во все страны. Признак �
 CLAMAV_DATABASE_MIRROR=<хост зеркала>
 ```
 
-(значение — только имя хоста или https-адрес зеркала), затем
+(значение — имя хоста зеркала, как у штатного `database.clamav.net`; оно уходит в `DatabaseMirror` freshclam), затем
 `docker compose --profile antivirus up -d clamav`. Сверить, что именно
 попало в конфиг freshclam:
 
@@ -107,8 +107,9 @@ docker compose exec clamav grep -E '^(DatabaseMirror|PrivateMirror)' /etc/clamav
    метрику `verdict="infected"` (дальше — ложный всплеск на панели):
 
    ```bash
-   docker compose exec -e ANTIVIRUS_E2E_HOST=clamav backend-web \
-     python -m pytest -q -p no:cacheprovider apps/core/tests/test_antivirus_live.py
+   docker compose -f docker-compose.test-local.yml --profile antivirus up -d --no-deps clamav
+   docker compose -f docker-compose.test-local.yml exec -e ANTIVIRUS_E2E_HOST=clamav \
+     backend-web python -m pytest -q -p no:cacheprovider apps/core/tests/test_antivirus_live.py
    ```
 
 ## 6. Наблюдаемость
