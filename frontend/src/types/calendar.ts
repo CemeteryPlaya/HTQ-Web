@@ -52,6 +52,8 @@ export interface ProductionDay {
   day_type: 'working' | 'weekend' | 'holiday' | 'short';
   working_days_since_epoch: number;
   note?: string;
+  /** Сервер: узел refdata.production_calendar + управляющая компания. */
+  can_edit?: boolean;
 }
 
 export interface CalendarTimeline {

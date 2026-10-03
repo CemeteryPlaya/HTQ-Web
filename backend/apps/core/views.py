@@ -172,7 +172,7 @@ def infrastructure_health_history(request):
 @api_view(methods=("POST",), auth="jwt", admin=True)
 def infrastructure_health_one(request, resource_id: str):
     """Порт ``health_check_one`` — POST /infrastructure/{resource_id}/health-check."""
-    if resource_id not in infrastructure.HEALTH_CHECKS:
+    if resource_id not in infrastructure.active_checks():
         return json_error("Unknown resource", 404)
     result = infrastructure.run_health(resource_id)
     infrastructure.invalidate_health_cache()

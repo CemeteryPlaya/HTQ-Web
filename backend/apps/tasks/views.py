@@ -72,6 +72,10 @@ def _param_error(name: str, message: str):
     )
 
 
+def _company_slug(request) -> str | None:
+    return (getattr(request, "company", None) or {}).get("slug")
+
+
 def _int_param(request, name: str, default=None, *, minimum=None, maximum=None):
     raw = request.GET.get(name)
     if raw is None or raw == "":
@@ -1296,13 +1300,38 @@ def _list_engagements(request):
           status=201, admin=True, module="tasks", level="admin")
 def _create_engagement(request, data: schemas.ContractorEngagementCreate):
     try:
-        row = contractor_service.create_engagement(data.model_dump())
+        row = contractor_service.create_engagement(
+            data.model_dump(), token=request.token, company=_company_slug(request))
     except contractor_service.CounterpartyLinkConflict as exc:
         return json_error(str(exc), 409)
+    except contractor_service.AgreementLinkInvalid as exc:
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
         contractor_service.build_engagement(row))
+
+
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def engagement_agreement_search(request):
+    """Выбор договора модуля «Закупки и оплаты» в привлечении партнёра
+    (хвост этапа 6, M-5): ``?contractor_id=&q=&limit=`` — договоры контрагента
+    этого партнёра, «Действует»/«Исполнен», с учётом ПРАВ пользователя на
+    договоры (узлы ``bpp.agreements``/``bpp.agreements.all``, как в реестре):
+    нет права — пустой список. Гейт — как у правки привлечения. Выключенный
+    модуль — 503."""
+    try:
+        contractor_id = _int_param(request, "contractor_id")
+        limit = _int_param(request, "limit", 20, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    if contractor_id is None:
+        return json_error("Укажите contractor_id", 422)
+    company = _company_slug(request)
+    return [schemas.BppAgreementOption.model_validate(card)
+            for card in contractor_service.search_agreements(
+                contractor_id, _str_param(request, "q"), token=request.token,
+                company=company, limit=limit)]
 
 
 def engagements_collection(request):
@@ -1319,12 +1348,15 @@ def _update_engagement(request, engagement_id: int,
                        data: schemas.ContractorEngagementUpdate):
     try:
         row = contractor_service.update_engagement(
-            engagement_id, data.model_dump(exclude_unset=True))
+            engagement_id, data.model_dump(exclude_unset=True),
+            token=request.token, company=_company_slug(request))
     except date_rules.DatesOutOfOrder as exc:
         # 422, а не 500: до правила дат раньше добиралась только БД.
         return json_error(str(exc), 422)
     except contractor_service.CounterpartyLinkConflict as exc:
         return json_error(str(exc), 409)
+    except contractor_service.AgreementLinkInvalid as exc:
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -2189,15 +2221,14 @@ def equipment_usage(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Calendar — /calendar/ and /production-calendar/
+# Calendar — /calendar/ (производственный календарь переехал в refdata)
 # ─────────────────────────────────────────────────────────────────────────
 
 def _bounded_range(request, start_key: str, end_key: str):
-    """Shared window parsing for the timeline and the production calendar.
+    """Окно дат для ленты календаря (timeline).
 
-    Both default to "this month plus 31 days" and both reject an inverted or
-    over-long range with the original's 400 (not 422 — these are range
-    *semantics*, which FastAPI could not express as a type either).
+    По умолчанию «этот месяц плюс 31 день»; перевёрнутое или слишком длинное окно — 400 (не 422: это семантика диапазона,
+    а не тип параметра).
     """
     start = _date_param(request, start_key)
     end = _date_param(request, end_key)
@@ -2333,29 +2364,6 @@ def calendar_user_options(request):
         for row in list_users_brief(search=query or None, limit=limit)
         if row.get("is_active", True)
     ]
-
-
-@api_view(methods=("GET",), module="tasks", level="read")
-def production_calendar(request):
-    try:
-        start, end = _bounded_range(request, "date__gte", "date__lte")
-    except _ParamError as exc:
-        return exc.response
-    return [schemas.ProductionDayResponse.model_validate(row)
-            for row in calendar_service.list_production_days(start, end)]
-
-
-@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate, module="tasks", level="write")
-def production_day_detail(request, target_date: str,
-                          data: schemas.ProductionDayUpdate):
-    try:
-        parsed = date.fromisoformat(target_date)
-    except ValueError:
-        return _param_error("target_date",
-                            "Input should be a valid date in YYYY-MM-DD format")
-    return schemas.ProductionDayResponse.model_validate(
-        calendar_service.update_production_day(parsed, day_type=data.day_type,
-                                               note=data.note))
 
 
 # ── /holding/projects — сводка по группе (блок H) ────────────────────────────

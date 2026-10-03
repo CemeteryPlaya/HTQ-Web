@@ -1,38 +1,41 @@
 /**
  * Имена пользователей по `user_id` для руководителя и участников проекта.
  *
- * Ручки «имя по id» на платформе нет, «Проект» хранит только `user_id`, —
- * имена берутся из кадрового списка сотрудников (тот же запрос и ключ кеша,
- * что у `EmployeePicker`, поэтому второго запроса нет). Нет права на кадры
- * или запрос упал — «Пользователь №id»: это штатная деградация подписи, а не
- * подмена данных.
+ * Берутся из учёток `users` через `GET project/v1/user-names?ids=…`, а не из
+ * кадрового списка сотрудников: у ТД, ОД и ПМ кадровых прав нет, и `hr/v1/
+ * employees` отвечал им 403 («Пользователь №13» вместо ФИО). Сервер отдаёт
+ * имена только руководителей и участников проектов. Нет имени (запрос упал,
+ * id чужой) — «Пользователь №id»: штатная деградация подписи, а не подмена.
  */
 import { useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
-import { fetchEmployees } from '@/api/hr';
+import api from '@/api/client';
+import { apiPath } from '@/api/endpoints';
 
-export function useUserNames(): (userId: number | null | undefined) => string {
+export function useUserNames(
+  userIds: ReadonlyArray<number | null | undefined>,
+): (userId: number | null | undefined) => string {
   const { t } = useTranslation();
+  const ids = useMemo(
+    () => [...new Set(userIds.filter((id): id is number => typeof id === 'number'))].sort((a, b) => a - b),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [userIds.join(',')],
+  );
   const { data } = useQuery({
-    queryKey: ['hr', 'employees', 'picker'],
-    queryFn: () => fetchEmployees(),
+    queryKey: ['project', 'user-names', ids.join(',')],
+    queryFn: () =>
+      api
+        .get<Record<string, string>>(apiPath('project', 'user-names'), { params: { ids: ids.join(',') } })
+        .then((r) => r.data),
+    enabled: ids.length > 0,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
 
-  const names = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const employee of data ?? []) {
-      const id = employee.user_id ?? employee.user;
-      if (id != null && employee.full_name) map.set(id, employee.full_name);
-    }
-    return map;
-  }, [data]);
-
   return useCallback((userId) => {
     if (userId === null || userId === undefined) return '—';
-    return names.get(userId) ?? t('bpp.projects.user', 'Пользователь №{{id}}', { id: userId });
-  }, [names, t]);
+    return data?.[String(userId)] ?? t('bpp.projects.user', 'Пользователь №{{id}}', { id: userId });
+  }, [data, t]);
 }

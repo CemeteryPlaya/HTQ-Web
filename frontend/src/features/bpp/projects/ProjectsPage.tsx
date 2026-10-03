@@ -34,7 +34,6 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const permissions = usePermissions();
-  const nameOf = useUserNames();
   const [search, setSearch] = useState('');
   const [mine, setMine] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -45,6 +44,7 @@ export function ProjectsPage() {
     queryFn: () => projectApi.list(query, mine),
   });
 
+  const nameOf = useUserNames(data.map((project) => project.manager_user_id));
   const canCreate = permissions.can('project.projects', 'create');
   const colSpan = 6;
 

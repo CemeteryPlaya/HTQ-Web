@@ -5,7 +5,8 @@ from __future__ import annotations
 from htqweb.errors import DomainError
 
 
-def int_param(params, name: str, default: int | None = None, *, minimum: int | None = None):
+def int_param(params, name: str, default: int | None = None, *, minimum: int | None = None,
+              maximum: int | None = None):
     raw = params.get(name)
     if raw in (None, ""):
         return default
@@ -14,4 +15,7 @@ def int_param(params, name: str, default: int | None = None, *, minimum: int | N
     except (TypeError, ValueError):
         raise DomainError("E-VAL-01", f"Параметр «{name}» должен быть целым числом.",
                           fields=[{"field": name, "message": "Целое число"}]) from None
+    if maximum is not None and value > maximum:
+        raise DomainError("E-VAL-01", f"Параметр «{name}» не больше {maximum}.",
+                          fields=[{"field": name, "message": f"Не больше {maximum}"}])
     return max(minimum, value) if minimum is not None else value

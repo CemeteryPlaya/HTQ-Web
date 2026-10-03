@@ -7,7 +7,7 @@
 всей выборке.
 
 Фильтры автора, статуса сверки, даты платежа по выписке и «банк молчит N
-рабочих дней» (D-S4-8) нужны ссылкам дашборда D-01
+банковских дней» (D-S4-8, D-S7-7) нужны ссылкам дашборда D-01
 (``services/dashboard/payments.py``): показатель дашборда считается ЭТОЙ
 выборкой, и его ссылка открывает реестр ровно с тем же числом строк.
 """
@@ -187,25 +187,21 @@ def _agreement_remaining(agr, inv: Invoice) -> Decimal | None:
 
 # ── реестр ──────────────────────────────────────────────────────────────
 
-def working_days_before(day: date, days: int) -> date:
-    """День, отстоящий от ``day`` на ``days`` рабочих дней назад (Пн–Пт, без
-    праздников — как метрика этапа 3 ``metrics._stale_before``). Отметка с
-    датой оплаты раньше него ждёт банк дольше ``days`` рабочих дней."""
-    left = days
-    while left > 0:
-        day -= timedelta(days=1)
-        if day.weekday() < 5:
-            left -= 1
-    return day
+def bank_days_before(day: date, days: int) -> date:
+    """День, отстоящий от ``day`` на ``days`` БАНКОВСКИХ дней назад (D-S7-7:
+    Пн–Пт без праздников РК, с днём переноса праздника с субботы). Отметка с
+    датой оплаты раньше него ждёт банк дольше ``days`` банковских дней. Метрика
+    ``metrics._stale_before`` (согласования) праздников не учитывает — Пн–Пт."""
+    return refdata.bank_days_before(day, days)
 
 
 def _bank_waiting(rows, days: int):
     """Последняя неотменённая отметка оплаты БУХ (по дате оплаты) старше
-    ``days`` рабочих дней (D-S4-5, ТЗ §11.5 «банк не подтвердил > 3 раб.
-    дней»)."""
+    ``days`` банковских дней (D-S4-5 → D-S7-7, ТЗ §11.5 «банк не подтвердил
+    > 3 раб. дней»)."""
     last = (PaymentMark.objects.filter(invoice=OuterRef("pk"), cancelled_at__isnull=True)
             .order_by("-pay_date").values("pay_date")[:1])
-    cutoff = working_days_before(timezone.localdate(), days)
+    cutoff = bank_days_before(timezone.localdate(), days)
     return rows.annotate(last_pay_date=Subquery(last)).filter(last_pay_date__lt=cutoff)
 
 

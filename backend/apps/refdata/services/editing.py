@@ -11,10 +11,13 @@ from apps.access import interface as access
 from apps.companies import interface as companies
 
 
-def can_edit(user, company_slug: str | None, node: str = "refdata") -> bool:
+def can_edit(user, company_slug: str | None, node: str = "refdata", *,
+             flags: tuple[str, ...] = ("edit", "create")) -> bool:
+    """``flags`` — какие признаки глубины считаются правом правки. Календарь
+    (узел ``refdata.production_calendar``) просит строго ``("edit",)``."""
     if getattr(user, "is_superuser", False):
         return True
     if not company_slug or not companies.is_holding(company_slug):
         return False
-    return "edit" in access.flags_for(user, node, company_slug) or \
-        "create" in access.flags_for(user, node, company_slug)
+    have = access.flags_for(user, node, company_slug)
+    return any(flag in have for flag in flags)

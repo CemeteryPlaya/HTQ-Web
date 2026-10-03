@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -84,3 +84,22 @@ class ArticlePatch(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: Optional[bool] = None
     ext_1c_ref: Optional[str] = Field(None, max_length=64)
+
+
+DayType = Literal["working", "weekend", "holiday", "short"]
+
+
+class ProductionDayUpdate(BaseModel):
+    day_type: DayType
+    note: Optional[str] = Field(None, max_length=255)
+
+
+class ProductionDayResponse(BaseModel):
+    date: date
+    day_type: DayType
+    working_days_since_epoch: int
+    note: Optional[str] = None
+    # Может ли пользователь править день: узел + управляющая компания (для кнопки).
+    can_edit: bool = False
+
+    model_config = {"from_attributes": True}

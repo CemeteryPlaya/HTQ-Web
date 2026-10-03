@@ -17,7 +17,7 @@ _SEE = ("view",)     # только видимость
 #: view+create на документе, кастомная или «модульная», видела бы чужие).
 EXPLICIT_ONLY = frozenset({
     "bpp.requests.all", "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all",
-    "bpp.plan.all",
+    "bpp.plan.all", "bpp.holding",
 })
 
 FUNCTIONS = (
@@ -52,4 +52,5 @@ FUNCTIONS = (
     ("bpp.articles.pm", "Группа статей «Проектное управление»", _SEE),
     ("bpp.settings", "Настройки модуля: счета организации, шаблоны выписок"),
     ("bpp.routes", "Маршруты согласования документов модуля", _OP),
+    ("bpp.holding", "Сводка группы по модулю (поддомен холдинга)", _SEE),
 )

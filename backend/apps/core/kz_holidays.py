@@ -59,6 +59,9 @@ KZ_FIXED_HOLIDAYS: dict[tuple[int, int], str] = {
 # объявляется ДУМК/постановлением ближе к году. 2026 (27 мая) и 2027 (16 мая,
 # воскресенье) подтверждены; дальше — расчётная оценка, ПРОВЕРИТЬ и поправить
 # одной строкой, когда дата станет официальной.
+# Название с «(перенос)», вписанное сюда вручную на дату, которую движок не
+# выбирал целью переноса, не имеет источника (``transfer_source`` — ``None``)
+# и для банковского календаря считается небанковским днём.
 KZ_YEAR_OVERRIDES: dict[int, dict[date, str | None]] = {
     2025: {date(2025, 6, 6): "Курбан-айт"},
     2026: {date(2026, 5, 27): "Курбан-айт"},
@@ -79,13 +82,17 @@ def _apply_overrides(days: dict[date, str], year: int) -> None:
             days[day] = name
 
 
-def _add_transfers(days: dict[date, str]) -> None:
+def _add_transfers(days: dict[date, str], sources: dict[date, date] | None = None) -> None:
     """Перенести каждый праздник, попавший на сб/вс, на ближайший свободный
     рабочий день.
 
     Обход идёт по снимку (``sorted``), а занятость проверяется по живому
     словарю — благодаря этому цели накапливаются: 21 (сб) и 22 (вс) марта
     2026-го дают 24 и 25 марта, а не оба 24-е.
+
+    ``sources`` (если передан) получает «день переноса -> исходный праздник»:
+    по дню недели исходного дня банковский календарь отличает перенос с
+    субботы (банк работает) от переноса с воскресенья (нет).
     """
     for day in sorted(days):
         if day.weekday() < 5:
@@ -94,6 +101,13 @@ def _add_transfers(days: dict[date, str]) -> None:
         while target.weekday() >= 5 or target in days:
             target += timedelta(days=1)
         days[target] = days[day] + TRANSFER_SUFFIX
+        if sources is not None:
+            sources[target] = day
+
+
+# Год -> {день переноса: исходный праздник}. Заполняется вместе с
+# ``holidays_for_year`` (при пересчёте после ``cache_clear`` перезаписывается).
+_TRANSFER_SOURCES: dict[int, Mapping[date, date]] = {}
 
 
 @lru_cache(maxsize=64)
@@ -112,8 +126,13 @@ def holidays_for_year(year: int) -> Mapping[date, str]:
     days = {date(year, month, day): name
             for (month, day), name in KZ_FIXED_HOLIDAYS.items()}
     _apply_overrides(days, year)
-    _add_transfers(days)
+    sources: dict[date, date] = {}
+    _add_transfers(days, sources)
     _apply_overrides(days, year)
+    # Перенос, чей день затёрт словарём года, переносом больше не считается.
+    _TRANSFER_SOURCES[year] = MappingProxyType({
+        target: source for target, source in sources.items()
+        if days.get(target, "").endswith(TRANSFER_SUFFIX)})
     return MappingProxyType(dict(sorted(days.items())))
 
 
@@ -128,3 +147,14 @@ def holiday_note(day: date) -> str | None:
 
 def is_holiday(day: date) -> bool:
     return day in holidays_for_year(day.year)
+
+
+def transfer_source(day: date) -> date | None:
+    """Исходный праздник, перенесённый на ``day``, или ``None``.
+
+    Нужен банковскому календарю (D-S7-7): день переноса праздника, выпавшего на
+    субботу, — банковский, на воскресенье — нет, и различает их только день
+    недели исходной даты (``transfer_source(day).weekday()``).
+    """
+    holidays_for_year(day.year)
+    return _TRANSFER_SOURCES.get(day.year, {}).get(day)

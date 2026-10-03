@@ -16,7 +16,7 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.bpp.models import InvoiceStatus, PaymentMatchState, ReconStatus
-from apps.bpp.services.invoices.read import working_days_before
+from apps.bpp.services.invoices.read import bank_days_before
 from apps.bpp.tests import stage2 as s
 from apps.bpp.tests.test_dashboard import _inv, _mark, _Statement
 
@@ -112,11 +112,19 @@ def test_bank_wait_days_counts_working_days_from_last_mark(company_context):
     slug = company_context["slug"]
     today = timezone.localdate()
     stale = _inv(InvoiceStatus.PAID, 100)
-    _mark(stale, working_days_before(today, 4))
+    _mark(stale, bank_days_before(today, 4))
     edge = _inv(InvoiceStatus.PAID, 200)
-    _mark(edge, working_days_before(today, 3))
+    _mark(edge, bank_days_before(today, 3))
 
     assert _numbers(slug, tab="bank_unconfirmed", bank_wait_days=3) == [stale.number]
     assert _numbers(slug, tab="bank_unconfirmed", bank_wait_days=2) == sorted(
         [stale.number, edge.number])
     assert _numbers(slug, tab="bank_unconfirmed") == sorted([stale.number, edge.number])
+
+
+def test_bank_wait_days_upper_bound_is_422(company_context):
+    slug = company_context["slug"]
+    s.grant(slug, s.FD, "bpp-fd")
+    response = Client().get(URL, data={"bank_wait_days": 10**9}, **s.auth(slug, s.FD))
+    assert response.status_code == 422
+    assert response.json()["fields"][0]["field"] == "bank_wait_days"

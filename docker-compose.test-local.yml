@@ -45,6 +45,11 @@ x-django-env: &django-env
   DJANGO_SETTINGS_MODULE: htqweb.settings.dev
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-insecure}
   JWT_SECRET: ${JWT_SECRET:-change-me-to-django-secret-key}
+  # Блокировка входа по логину (D-S7-3): N неудач за SECONDS секунд закрывают вход
+  # на SECONDS секунд. 0 — выключено: выкатывается выключенной, включают после
+  # окна выкатки (docs/deploy/bpp-rollout-runbook.md).
+  AUTH_LOCKOUT_THRESHOLD: ${AUTH_LOCKOUT_THRESHOLD:-0}
+  AUTH_LOCKOUT_SECONDS: ${AUTH_LOCKOUT_SECONDS:-900}
   # Домены, с которых принимается форма входа в /django-admin/ (со схемой,
   # через запятую). За Cloudflare/nginx запрос доезжает до Django по http, а
   # Origin у браузера https — без этого списка админка отдаёт 403 CSRF.
@@ -96,6 +101,11 @@ x-django-env: &django-env
   # (clamav держит в памяти ~1,5 ГБ сигнатур и при первом запуске несколько
   # минут качает их из сети — всё это время документы получают 503).
   ANTIVIRUS_CLAMD_HOST: ${ANTIVIRUS_CLAMD_HOST:-}
+  ANTIVIRUS_CLAMD_PORT: ${ANTIVIRUS_CLAMD_PORT:-3310}
+  # Меньше самого короткого `proxy_read_timeout` путей загрузки в nginx (сейчас
+  # 45s у /api/ и /api/bpp/v1/bank/) и `gunicorn --timeout 60`: молчащий сканер
+  # должен успеть стать 503 E-SYS-01, а не 504 шлюза или обрывом воркера.
+  ANTIVIRUS_TIMEOUT: ${ANTIVIRUS_TIMEOUT:-30}
 
 services:
   # ─── PostgreSQL (локальная, одноразовая) ────────────────────────────────────
@@ -243,7 +253,26 @@ services:
     # 1,5 ГБ памяти, пока проверка выключена.
     profiles: ["antivirus"]
     restart: unless-stopped
+    # Порт clamd (:3310) наружу НЕ публикуется: сервис виден только backend-ам
+    # по имени в сети стека. Лимит — с запасом над ~1,5 ГБ сигнатур: при
+    # перезагрузке баз clamd на время держит две копии.
+    mem_limit: 3g
+    # Проверка встроена в образ (`clamdcheck.sh` — PING на :3310); здесь она
+    # объявлена явно, чтобы `docker inspect --format '{{.State.Health.Status}}'`
+    # и start_period были видны в репозитории. Окно запуска — 10 минут: первая
+    # закачка баз идёт минутами, и до неё clamd не отвечает (503 на загрузку).
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
     environment:
+      # Зеркало баз, если database.clamav.net отдаёт 403 (не во все страны).
+      # По умолчанию — штатный адрес образа: пустое значение образ записал бы
+      # в freshclam.conf пустой строкой DatabaseMirror, и freshclam бы не
+      # стартовал. Значение — только https. См. docs/deploy/antivirus-runbook.md.
+      FRESHCLAM_CONF_DatabaseMirror: ${CLAMAV_DATABASE_MIRROR:-database.clamav.net}
       # Предел потока: по умолчанию 25M, а документы бывают больше (шлюз
       # пускает в /api/media/ до 100M). Больше предела clamd отвечает ERROR,
       # и файл не принимается как непроверенный.
@@ -259,6 +288,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
       # Миграции на локальной базе — норма: она для того и заведена.
@@ -301,6 +334,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["uvicorn", "htqweb.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -323,6 +360,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "worker", "-l", "info"]
@@ -343,6 +384,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
+    env_file:
+      - path: secrets/onec.env
+        required: false
     environment:
       <<: *django-env
     command: ["celery", "-A", "htqweb", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]

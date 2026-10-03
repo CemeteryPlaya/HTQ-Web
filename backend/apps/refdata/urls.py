@@ -36,4 +36,8 @@ urlpatterns = [
     path("vat/", views.vat),
     path("mrp", views.mrp),
     path("mrp/", views.mrp),
+    path("production-calendar", views.production_calendar),
+    path("production-calendar/", views.production_calendar),
+    path("production-calendar/<str:target_date>", views.production_day_detail),
+    path("production-calendar/<str:target_date>/", views.production_day_detail),
 ]

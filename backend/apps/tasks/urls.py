@@ -100,6 +100,8 @@ urlpatterns = [
     path("contractors/<int:contractor_id>/workers/", views.contractor_workers),
     path("contractor-workers/<int:worker_id>", views.contractor_worker_detail),
     path("contractor-workers/<int:worker_id>/", views.contractor_worker_detail),
+    path("contractor-engagements/agreement-search", views.engagement_agreement_search),
+    path("contractor-engagements/agreement-search/", views.engagement_agreement_search),
     path("contractor-engagements/", views.engagements_collection),
     path("contractor-engagements", views.engagements_collection),
     path("contractor-engagements/<int:engagement_id>", views.engagement_detail),
@@ -177,8 +179,7 @@ urlpatterns = [
     path("resource-requirements/<int:requirement_id>/",
          views.requirement_detail),
 
-    # Calendar — frontend (api/calendar.ts) calls 'calendar/...' and
-    # 'production-calendar/...'. The fixed sub-paths (timeline, users-options,
+    # Calendar — frontend (api/calendar.ts) calls 'calendar/...'. The fixed sub-paths (timeline, users-options,
     # exceptions) are registered before '<int:event_id>' so no converter
     # change can let the id route swallow them.
     path("calendar/", views.events_collection),
@@ -192,10 +193,6 @@ urlpatterns = [
     path("calendar/<int:event_id>", views.event_detail),
     path("calendar/<int:event_id>/rsvp/", views.event_rsvp),
     path("calendar/<int:event_id>/exceptions/", views.event_exceptions),
-
-    path("production-calendar/", views.production_calendar),
-    path("production-calendar/<str:target_date>/", views.production_day_detail),
-    path("production-calendar/<str:target_date>", views.production_day_detail),
 
     # Gantt reports — FastAPI declared both without a trailing slash; the
     # frontend calls 'reports/resource-gantt' the same way.

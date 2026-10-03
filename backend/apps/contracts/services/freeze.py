@@ -117,7 +117,8 @@ def info() -> dict:
 
 
 def freeze(*, actor_id: int | None = None, comment: str = "",
-           revoke_pending: bool = False) -> bool:
+           revoke_pending: bool = False,
+           without_process: list[dict] | None = None) -> bool:
     """Заморозить. ``True`` — заморозили сейчас, ``False`` — уже было.
 
     Повтор ничего не переписывает: дата и автор первой заморозки — то, что
@@ -128,6 +129,11 @@ def freeze(*, actor_id: int | None = None, comment: str = "",
     ``PendingApprovals`` со списком, раздел остаётся открытым. С ним их
     отзывает движок (документы — в черновик), и всё это одной транзакцией с
     заморозкой.
+
+    ``without_process`` — необязательный список-приёмник: сюда попадают
+    документы «на согласовании», у которых процесса нет (отзывать нечем),
+    и заморозка оставляет их в этом состоянии. Команда печатает их в отчёте,
+    чтобы это не прошло молча.
     """
     with transaction.atomic():
         row, _ = FreezeState.objects.select_for_update().get_or_create(
@@ -141,9 +147,13 @@ def freeze(*, actor_id: int | None = None, comment: str = "",
             from apps.contracts.services import migration_export
 
             for subject_type in {doc["subject_type"] for doc in pending}:
-                migration_export.revoke(
+                revoked = set(migration_export.revoke(
                     subject_type,
-                    [d["id"] for d in pending if d["subject_type"] == subject_type])
+                    [d["id"] for d in pending if d["subject_type"] == subject_type]))
+                if without_process is not None:
+                    without_process.extend(
+                        d for d in pending
+                        if d["subject_type"] == subject_type and d["id"] not in revoked)
         row.frozen_at = timezone.now()
         row.frozen_by_id = actor_id
         row.comment = comment

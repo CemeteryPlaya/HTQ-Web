@@ -123,3 +123,74 @@ def test_malformed_project_id_is_404(company_context):
     slug = company_context["slug"]
     assign(slug, 7, "project", "full")
     assert Client().get(f"{BASE}/projects/not-a-uuid", **_auth(slug)).status_code == 404
+
+
+@pytest.mark.django_db
+def test_user_names_for_managers_and_members_only(company_context):
+    """ФИО руководителя и участников — из учёток ``users``, а не из кадров:
+    у ТД/ОД/ПМ кадровых прав нет. Чужие id (не руководитель и не участник
+    ни одного проекта) не раскрываются — это не справочник пользователей."""
+    from apps.users.models import User
+
+    slug = company_context["slug"]
+    # id явно: автоматический мог совпасть с создателем проекта (8) — и
+    # «чужой» стал бы участником.
+    boss = User.objects.create(id=9103, username="boss", email="boss@x.test",
+                               first_name="Айдар", last_name="Бек")
+    stranger = User.objects.create(id=9104, username="str", email="str@x.test",
+                                   first_name="Чужой", last_name="Человек")
+    assign(slug, 7, "project", "view")
+    assign(slug, 7, "project.all", "view")
+    assign(slug, 8, "project.projects", "full")
+    created = Client().post(
+        f"{BASE}/projects", content_type="application/json", **_auth(slug, 8),
+        data=json.dumps({"code": "П-016", "name": "Объект", "country_code": "KZ",
+                         "manager_user_id": boss.pk}))
+    assert created.status_code == 201, created.content
+
+    ids = f"{boss.pk},{stranger.pk},zzz"
+    response = Client().get(f"{BASE}/user-names", {"ids": ids}, **_auth(slug))
+    assert response.status_code == 200, response.content
+    names = response.json()
+    assert list(names) == [str(boss.pk)]
+    assert "Бек" in names[str(boss.pk)]
+    assert Client().get(f"{BASE}/user-names", **_auth(slug)).json() == {}
+
+
+@pytest.mark.django_db
+def test_user_names_do_not_open_foreign_projects_to_a_pm(company_context):
+    """ПМ без ``project.all`` видит имена только из проектов, где он участник:
+    состав чужого проекта перебором id не выяснить (A1.3)."""
+    from apps.project.models import Project, ProjectMember
+    from apps.users.models import User
+
+    slug = company_context["slug"]
+    # id явно: автоматический мог совпасть с ПМ (21), если до теста в этой БД
+    # уже заводили пользователей (последовательность не сбрасывается).
+    own_boss = User.objects.create(id=9101, username="ob", email="ob@x.test",
+                                   first_name="Свой", last_name="Руководитель")
+    foreign_boss = User.objects.create(id=9102, username="fb", email="fb@x.test",
+                                       first_name="Чужой", last_name="Руководитель")
+    own = Project.objects.create(code="П-1", name="Свой", country_code="KZ",
+                                 manager_user_id=own_boss.pk)
+    foreign = Project.objects.create(code="П-2", name="Чужой", country_code="KZ",
+                                     manager_user_id=foreign_boss.pk)
+    ProjectMember.objects.create(project=own, user_id=own_boss.pk)
+    ProjectMember.objects.create(project=own, user_id=21)
+    ProjectMember.objects.create(project=foreign, user_id=foreign_boss.pk)
+    _with_role(slug, 21, "bpp-pm")               # настоящий ПМ: без project.all
+
+    response = Client().get(f"{BASE}/user-names",
+                            {"ids": f"{own_boss.pk},{foreign_boss.pk}"}, **_auth(slug, 21))
+    assert list(response.json()) == [str(own_boss.pk)]
+
+
+@pytest.mark.django_db
+def test_user_names_survive_weird_ids(company_context):
+    slug = company_context["slug"]
+    assign(slug, 7, "project", "view")
+    assign(slug, 7, "project.all", "view")
+    for ids in ("²", "٣", "99999999999999999999", "1,²,9999999999", "-5", " "):
+        response = Client().get(f"{BASE}/user-names", {"ids": ids}, **_auth(slug))
+        assert response.status_code == 200, (ids, response.content)
+        assert response.json() == {}

@@ -2469,7 +2469,12 @@
         "speciality": "Speciality / Position",
         "specialityPlaceholder": "Grade 5 welder",
         "registryEmpty": "The partner registry is empty —",
-        "addFirst": "add a partner"
+        "addFirst": "add a partner",
+        "bppAgreement": "Purchasing & Payments contract",
+        "noBppAgreement": "Not selected",
+        "bppAgreementSearch": "Find a contract by number or name",
+        "bppAgreementNone": "No suitable agreements: only \"Active\" and \"Completed\" ones with the partner's counterparty fit —",
+        "bppAgreementRegistry": "agreement registry"
       },
       "roadmaps": {
         "title": "Roadmaps",
@@ -2749,6 +2754,9 @@
     "email": "Email",
     "emailOrPhone": "Email or Phone",
     "password": "Password",
+    "loginLocked": "Too many failed sign-in attempts. Try again in {{minutes}} min.",
+    "loginLockedLater": "Too many failed sign-in attempts. Try again later.",
+    "tooManyRequests": "Too many requests. Try again later.",
     "confirmPassword": "Confirm Password",
     "alreadyAccount": "Already have an account?",
     "noAccount": "Don't have an account?",
@@ -3646,7 +3654,15 @@
     "pickOrTypeNewM": "Pick one or type a new one",
     "createProject": "Create the project “{{input}}”",
     "createProgramme": "Create the programme “{{input}}”",
-    "applyStatus": "Apply"
+    "applyStatus": "Apply",
+    "frozen": {
+      "title": "This section has moved to Purchasing & Payments",
+      "text": "This is an archive: documents are read-only. New contracts, invoices and payments are created in Purchasing & Payments.",
+      "goToBpp": "Go to Purchasing & Payments",
+      "formClosed": "This section is read-only — documents can no longer be created or edited here.",
+      "migratedTo": "Moved to",
+      "migratedCard": "the card in Purchasing & Payments"
+    }
   },
   "signoff": {
     "nav": {
@@ -5144,6 +5160,21 @@
     "migration": {
       "badge": "migrated",
       "note": "Migrated from Contracts. Its history before the migration stays there, read-only."
+    },
+    "holding": {
+      "title": "Budget, procurement and payments by group",
+      "hint": "Approved budget limits in KZT, invoices and active agreements per company. \"Committed\" is not part of the summary.",
+      "company": "Company",
+      "budgets": "Approved budgets",
+      "limit": "Limit (KZT)",
+      "toPay": "To pay",
+      "paid": "Paid",
+      "agreements": "Active agreements",
+      "otherCurrency": "+ {{count}} in another currency (not summed)",
+      "totals": "Group total",
+      "unavailable": "The procurement summary is unavailable right now, try again later.",
+      "error": "Could not load the procurement summary.",
+      "count": "{{count}} pcs."
     }
   }
 }

@@ -19,12 +19,11 @@ import { ProjectCardPage } from './ProjectCardPage';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('@/api/client', () => ({ default: { get, post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }));
+// У ТД/ОД/ПМ кадровых прав нет: `hr` отвечает 403. Имена обязаны приходить из
+// учёток `users` (`project/v1/user-names`), а не из этого запроса.
 vi.mock('@/api/hr', () => ({
-  fetchEmployees: vi.fn(() => Promise.resolve([
-    { id: 1, user: 7, user_id: 7, full_name: 'Иванов Иван' },
-    { id: 2, user: 8, user_id: 8, full_name: 'Петров Пётр' },
-  ])),
-  fetchDepartments: vi.fn(() => Promise.resolve([])),
+  fetchEmployees: vi.fn(() => Promise.reject(new Error('403 Forbidden'))),
+  fetchDepartments: vi.fn(() => Promise.reject(new Error('403 Forbidden'))),
 }));
 
 function permissionsWith(depth: Record<string, DepthFlag[]>): Permissions {
@@ -60,6 +59,9 @@ const project = (over: Record<string, unknown> = {}) => ({
 function mockServer(members: number[] = [7, 8], boards: unknown[] = []) {
   get.mockImplementation((url: string, config?: { params?: Record<string, string> }) => {
     if (url === `project/v1/projects/${ID}/members`) return Promise.resolve({ data: members });
+    if (url === 'project/v1/user-names') {
+      return Promise.resolve({ data: { 7: 'Иванов Иван', 8: 'Петров Пётр' } });
+    }
     if (url === `project/v1/projects/${ID}`) return Promise.resolve({ data: project() });
     if (url === 'tasks/v1/projects/' && config?.params?.project_ref === ID) {
       return Promise.resolve({ data: boards });
@@ -98,6 +100,14 @@ describe('ProjectCardPage', () => {
     // Руководитель — и в реквизитах, и в списке участников с меткой.
     expect(screen.getAllByText('Иванов Иван').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('руководитель')).toBeInTheDocument();
+  });
+
+  it('имена приходят из учёток, даже когда кадровый список отвечает 403', async () => {
+    mockServer();
+    renderCard();
+    expect(await screen.findByText('Петров Пётр')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith('project/v1/user-names', { params: { ids: '7,8' } });
+    expect(screen.queryByText(/Пользователь №/)).not.toBeInTheDocument();
   });
 
   it('у руководителя нет кнопки «Убрать участника», у прочих — есть с правом edit', async () => {
