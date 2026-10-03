@@ -155,8 +155,10 @@ def test_new_agreement_by_voted_alternative_has_the_gd_stage_preapproved(company
     agreement_service.submit(author, new.id, expected_version=None)
 
     process = ApprovalProcess.objects.get(subject_type="bpp.agreement", subject_id=str(new.pk))
-    assert process.preapproved == [{"position_id": positions["gd"], "actor_id": GD,
-                                    "label": voting.PREAPPROVED_LABEL}]
+    # ``company`` пуст — должность ГД своей компании (B8.1: у дочерней это
+    # была бы должность холдинга со слагом холдинга).
+    assert process.preapproved == [{"position_id": positions["gd"], "company": "",
+                                    "actor_id": GD, "label": voting.PREAPPROVED_LABEL}]
     assert _vote(new, s.FD, lifecycle.ORIGINAL)["ok"]          # ГД уже согласовал
     new.refresh_from_db()
     assert new.status == AgreementStatus.ACTIVE
