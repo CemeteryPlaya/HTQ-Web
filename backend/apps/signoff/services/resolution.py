@@ -14,23 +14,29 @@
   должности эскалации (ГД); автор и есть ГД — группа пропускается
   (``skipped``), и об этом уведомляют (D-22).
 
-Группа — ключ кворума, как в движке: HR-должность, у видов без должностей —
-``None``. Ошибки НАСТРОЙКИ (этап без должностей, без названных сотрудников)
-остаются отказом и здесь: «Нет исполнителя» — про людей, а не про пустой
-маршрут.
+Группа — ключ кворума, как в движке: должность парой «компания + должность»
+(``positions.PositionRef``, БЗО B8.1: этап дочерней может стоять на
+должности холдинга), у видов без должностей — ``None``. Ошибки НАСТРОЙКИ
+(этап без должностей, без названных сотрудников) остаются отказом и здесь:
+«Нет исполнителя» — про людей, а не про пустой маршрут. Недоступная компания
+должности (архив, нет схемы, выключен ``hr``) — тоже «Нет исполнителя», с
+причиной в ``unavailable``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from apps.hr import interface as hr
 from apps.users import interface as users
 
 from apps.signoff.models import ApproverKind
-from apps.signoff.services import registry
+from apps.signoff.services import positions, registry
+from apps.signoff.services.positions import PositionRef
+from htqweb.fallback import fallback
 
 #: Флаги маршрута и их значения «выключено» — ровно столбцы ``ApprovalRoute``.
+#: ``allow_direct_decisions`` (B8.1) сюда НЕ входит намеренно: решение «прямо
+#: из холдинга» читается из маршрута в момент решения, а не из снимка.
 ROUTE_FLAG_DEFAULTS: dict = {
     "forbid_self_approval": False,
     "reject_comment_min": 0,
@@ -39,6 +45,10 @@ ROUTE_FLAG_DEFAULTS: dict = {
     "no_executor_notify_position_ids": [],
     "escalation_position_id": None,
     "self_skip_notify_position_ids": [],
+    # B8.1: должности вышестоящих компаний для тех же ролей.
+    "escalation_position_company": "",
+    "no_executor_notify_foreign": [],
+    "self_skip_notify_foreign": [],
 }
 
 
@@ -58,10 +68,34 @@ class StageNotConfigured(Exception):
 
 @dataclass
 class Resolution:
-    groups: dict[int | None, list[int]] = field(default_factory=dict)
-    missing: list[int | None] = field(default_factory=list)
-    skipped: list[int | None] = field(default_factory=list)
-    escalated: list[int | None] = field(default_factory=list)
+    groups: dict[PositionRef | None, list[int]] = field(default_factory=dict)
+    missing: list[PositionRef | None] = field(default_factory=list)
+    skipped: list[PositionRef | None] = field(default_factory=list)
+    escalated: list[PositionRef | None] = field(default_factory=list)
+    # Компании должностей, в которые сейчас не войти: ``{company: причина}``.
+    unavailable: dict[str, str] = field(default_factory=dict)
+
+
+def resolve_refs(refs, *, strict: bool) -> tuple[dict[PositionRef, list[int]], dict[str, str]]:
+    """Держатели должностей по компаниям — ``(resolved, unavailable)``.
+
+    ``strict`` — недоступная компания роняет вызов ``CompanyUnavailable``
+    (запуск без ленивого разрешения); иначе её должности остаются без
+    держателей, а причина — в ``unavailable`` (ленивое разрешение, «Нет
+    исполнителя»)."""
+    by_company: dict[str, list[PositionRef]] = {}
+    for ref in refs:
+        by_company.setdefault(ref.company, []).append(ref)
+    resolved: dict[PositionRef, list[int]] = {}
+    unavailable: dict[str, str] = {}
+    for company, group in by_company.items():
+        try:
+            resolved.update(positions.resolve_users(group))
+        except positions.CompanyUnavailable as exc:
+            if strict:
+                raise
+            unavailable[company] = exc.reason
+    return resolved, unavailable
 
 
 def resolve_process_stage(stage, *, initiator_id: int | None, subject_type: str,
@@ -89,16 +123,15 @@ def resolve_process_stage(stage, *, initiator_id: int | None, subject_type: str,
         raw = {None: list(registry.approvers_for(subject_type, subject_id,
                                                  stage.approver_key))}
     else:
-        position_ids = [int(pid) for pid in (stage.role_ids or [])]
-        if not position_ids:
+        refs = positions.process_stage_refs(stage)
+        if not refs:
             raise StageNotConfigured(f"На этапе «{stage.name}» не назначена ни одна должность")
-        excluded = {int(pid) for pid in exclude_positions}
-        position_ids = [pid for pid in position_ids if pid not in excluded]
-        if not position_ids:
+        excluded = set(positions.parse_many(exclude_positions))
+        refs = [ref for ref in refs if ref not in excluded]
+        if not refs:
             return result
-        resolved = hr.resolve_position_users(position_ids)
-        raw = {position_id: list(dict.fromkeys(resolved.get(position_id) or []))
-               for position_id in position_ids}
+        resolved, result.unavailable = resolve_refs(refs, strict=False)
+        raw = {ref: list(dict.fromkeys(resolved.get(ref) or [])) for ref in refs}
 
     if kind != ApproverKind.POSITION:
         # Должности HR уже отфильтровал по активным учёткам; у остальных видов
@@ -117,6 +150,15 @@ def resolve_process_stage(stage, *, initiator_id: int | None, subject_type: str,
     return result
 
 
+def escalation_ref(flags: dict) -> PositionRef | None:
+    """Должность эскалации снимка флагов — своя или вышестоящей компании (B8.1)."""
+    position_id = flags.get("escalation_position_id")
+    if not position_id:
+        return None
+    return PositionRef(positions.normalize(flags.get("escalation_position_company")),
+                       int(position_id))
+
+
 def apply_self_approval(result: Resolution, *, initiator_id: int | None,
                         flags: dict) -> None:
     """BR-061 поверх разрешённых групп (на месте). Без флага — ничего.
@@ -124,10 +166,14 @@ def apply_self_approval(result: Resolution, *, initiator_id: int | None,
     Временные исполнители должности уже в группе (``hr.resolve_position_users``),
     поэтому «держатель или его заместитель» получается сам собой: из группы
     уходит только автор.
+
+    Должность эскалации может быть в штате холдинга (B8.1). Холдинг сейчас
+    недоступен — группа не пропускается (пропуск без решения согласовал бы
+    документ за ГД), а становится «Нет исполнителя» с причиной.
     """
     if not flags.get("forbid_self_approval") or initiator_id is None:
         return
-    escalation = flags.get("escalation_position_id")
+    escalation = escalation_ref(flags)
     for key in list(result.groups):
         ids = result.groups[key]
         if initiator_id not in ids:
@@ -137,9 +183,15 @@ def apply_self_approval(result: Resolution, *, initiator_id: int | None,
             result.groups[key] = rest
             continue
         heads = []
-        if escalation:
-            heads = [uid for uid in hr.resolve_position_users([escalation]).get(escalation, [])
-                     if uid != initiator_id]
+        if escalation is not None:
+            try:
+                heads = [uid for uid in positions.resolve_users([escalation]).get(escalation, [])
+                         if uid != initiator_id]
+            except positions.CompanyUnavailable as exc:
+                del result.groups[key]
+                result.missing.append(key)
+                result.unavailable[exc.company] = exc.reason
+                continue
         if heads:
             result.groups[key] = heads
             result.escalated.append(key)
@@ -148,13 +200,31 @@ def apply_self_approval(result: Resolution, *, initiator_id: int | None,
             result.skipped.append(key)
 
 
-def position_user_ids(position_ids) -> list[int]:
-    """Держатели (и временные исполнители) должностей — для уведомлений."""
-    ids = [int(pid) for pid in (position_ids or [])]
-    if not ids:
+def notify_refs(flags: dict, own_key: str, foreign_key: str) -> list[PositionRef]:
+    """Получатели уведомления из снимка флагов: должности своей компании
+    (``own_key``) и вышестоящих (``foreign_key``, B8.1)."""
+    refs = [PositionRef("", int(pid)) for pid in (flags.get(own_key) or [])]
+    refs.extend(positions.parse_many(flags.get(foreign_key) or []))
+    return list(dict.fromkeys(refs))
+
+
+def position_user_ids(refs) -> list[int]:
+    """Держатели (и временные исполнители) должностей — для уведомлений.
+
+    ``refs`` — пары или голые id своей компании. Уведомление — не решение:
+    недоступная вышестоящая компания оставляет своих держателей без него,
+    и это видно в логе (``fallback``, ``expected=True``), а не роняет
+    согласование.
+    """
+    refs = positions.parse_many(refs)
+    if not refs:
         return []
-    resolved = hr.resolve_position_users(ids)
-    return list(dict.fromkeys(uid for pid in ids for uid in resolved.get(pid, [])))
+    resolved, unavailable = resolve_refs(refs, strict=False)
+    for company, reason in unavailable.items():
+        fallback("signoff.resolution.notify_company_unavailable", None,
+                 reason=f"уведомление не дойдёт до должностей компании: {reason}",
+                 expected=True, company=company)
+    return list(dict.fromkeys(uid for ref in refs for uid in resolved.get(ref, [])))
 
 
 def _active(user_ids) -> set[int]:

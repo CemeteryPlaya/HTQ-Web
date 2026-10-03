@@ -35,6 +35,12 @@ urlpatterns = [
     path("stages/<int:stage_id>", views.StageDetailView.as_view()),
     path("stages/<int:stage_id>/", views.StageDetailView.as_view()),
 
+    # ── Должности для этапов: своя компания и вышестоящие (B8.1) ──
+    path("positions/companies", views.PositionCompaniesView.as_view()),
+    path("positions/companies/", views.PositionCompaniesView.as_view()),
+    path("positions", views.PositionsView.as_view()),
+    path("positions/", views.PositionsView.as_view()),
+
     # ── Процессы ──
     path("processes/<int:process_id>/cancel", views.ProcessCancelView.as_view()),
     path("processes/<int:process_id>/cancel/", views.ProcessCancelView.as_view()),
@@ -52,6 +58,9 @@ urlpatterns = [
     # и дала 404 вместо маршрута.
     path("tasks/mine", views.InboxView.as_view()),
     path("tasks/mine/", views.InboxView.as_view()),
+    # Очередь по всем компаниям пользователя (B8.1).
+    path("tasks/mine/all", views.InboxAllView.as_view()),
+    path("tasks/mine/all/", views.InboxAllView.as_view()),
     path("tasks/batch-decision", views.TaskBatchDecisionView.as_view()),
     path("tasks/batch-decision/", views.TaskBatchDecisionView.as_view()),
     path("tasks/<int:task_id>/decision", views.TaskDecisionView.as_view()),
@@ -60,4 +69,15 @@ urlpatterns = [
     # services/attachments.py.
     path("tasks/<int:task_id>/attachment", views.TaskAttachmentView.as_view()),
     path("tasks/<int:task_id>/attachment/", views.TaskAttachmentView.as_view()),
+
+    # ── Решение задачи дочерней компании из холдинга (B8.1) ──
+    # Слаг — компания задачи, строго ниже текущей; см. services/direct.py.
+    path("companies/<str:company>/processes/<int:process_id>",
+         views.ForeignProcessView.as_view()),
+    path("companies/<str:company>/processes/<int:process_id>/",
+         views.ForeignProcessView.as_view()),
+    path("companies/<str:company>/tasks/<int:task_id>/decision",
+         views.ForeignDecisionView.as_view()),
+    path("companies/<str:company>/tasks/<int:task_id>/decision/",
+         views.ForeignDecisionView.as_view()),
 ]

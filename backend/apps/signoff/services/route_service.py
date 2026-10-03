@@ -19,8 +19,8 @@ from apps.signoff.models import (
     ApprovalRouteStageRole,
     ApproverKind,
 )
-from apps.signoff.services import conditions, registry
-from apps.hr import interface as hr
+from apps.signoff.services import conditions, positions, registry
+from apps.signoff.services.positions import PositionRef
 from apps.users import interface as users
 
 
@@ -68,27 +68,54 @@ def get_route_or_404(route_id: int) -> ApprovalRoute:
     return route
 
 
-#: Флаги маршрута, которые принимают ручки (мастер-план БЗО, D-21).
+#: Флаги маршрута, которые принимают ручки (мастер-план БЗО, D-21; должности
+#: вышестоящих компаний и решение из холдинга — B8.1).
 FLAG_FIELDS = ("forbid_self_approval", "reject_comment_min", "lazy_resolution",
                "skip_unmatched_groups",
                "no_executor_notify_position_ids", "escalation_position_id",
-               "self_skip_notify_position_ids")
+               "self_skip_notify_position_ids",
+               "escalation_position_company", "no_executor_notify_foreign",
+               "self_skip_notify_foreign", "allow_direct_decisions")
+
+_FOREIGN_LISTS = ("no_executor_notify_foreign", "self_skip_notify_foreign")
 
 
-def _check_flags(flags: dict) -> dict:
+def _check_flags(flags: dict, *, subject_type: str,
+                 escalation_id_now: int | None = None) -> dict:
     """Проверить флаги до записи: должности эскалации и уведомлений должны
     существовать — опечатка иначе всплыла бы только в разгар согласования,
-    когда этап уже ушёл «никому». Списки — без дублей."""
+    когда этап уже ушёл «никому». Списки — без дублей.
+
+    Должности из вышестоящих компаний (B8.1) — парами и только из своей
+    компании и вышестоящих. ``escalation_id_now`` — должность эскалации
+    маршрута, когда патч меняет только её компанию.
+    """
     clean = dict(flags)
     for key in ("no_executor_notify_position_ids", "self_skip_notify_position_ids"):
         if key in clean:
             clean[key] = [int(pid) for pid in dict.fromkeys(clean[key] or [])]
-    positions = [*clean.get("no_executor_notify_position_ids", []),
-                 *clean.get("self_skip_notify_position_ids", [])]
-    if clean.get("escalation_position_id") is not None:
-        positions.append(int(clean["escalation_position_id"]))
-    if positions:
-        _check_positions_exist(list(dict.fromkeys(positions)))
+    refs = [PositionRef("", pid) for pid in (*clean.get("no_executor_notify_position_ids", []),
+                                             *clean.get("self_skip_notify_position_ids", []))]
+    for key in _FOREIGN_LISTS:
+        if key in clean:
+            parsed = positions.parse_many(clean[key] or [])
+            clean[key] = positions.dump_many(parsed)
+            refs.extend(parsed)
+    if "escalation_position_id" in clean or "escalation_position_company" in clean:
+        position_id = clean.get("escalation_position_id", escalation_id_now)
+        company = positions.normalize(clean.get("escalation_position_company"))
+        # Нет должности эскалации — нет и её компании: «убрать» обнуляет обе.
+        clean["escalation_position_company"] = company if position_id is not None else ""
+        if position_id is not None:
+            refs.append(PositionRef(clean["escalation_position_company"], int(position_id)))
+    if refs:
+        _check_refs(list(dict.fromkeys(refs)))
+    if clean.get("allow_direct_decisions"):
+        subject = registry.get_subject(subject_type)
+        if not subject.cross_company_decisions:
+            raise RouteConflict(
+                f"Документы «{subject.label}» не решаются из вышестоящей компании — "
+                f"их согласуют на адресе своей компании")
     return clean
 
 
@@ -114,7 +141,8 @@ def create_route(*, subject_type: str, name: str,
         return ApprovalRoute.objects.create(
             subject_type=subject_type, scope=scope, name=name,
             is_active=is_active, **_check_flags(
-                {key: value for key, value in flags.items() if key in FLAG_FIELDS}))
+                {key: value for key, value in flags.items() if key in FLAG_FIELDS},
+                subject_type=subject_type))
 
 
 def update_route(route_id: int, **fields) -> ApprovalRoute:
@@ -122,7 +150,9 @@ def update_route(route_id: int, **fields) -> ApprovalRoute:
     эскалации — «убрать» (ручка передаёт только присланные поля)."""
     route = get_route_or_404(route_id)
     flags = _check_flags({key: value for key, value in fields.items()
-                          if key in FLAG_FIELDS})
+                          if key in FLAG_FIELDS},
+                         subject_type=route.subject_type,
+                         escalation_id_now=route.escalation_position_id)
     fields = {**fields, **flags}
     changed = [key for key, value in fields.items()
                if value is not None or key == "escalation_position_id"]
@@ -156,6 +186,15 @@ def get_stage_or_404(stage_id: int) -> ApprovalRouteStage:
     return stage
 
 
+def _stage_refs(position_ids, refs) -> list[PositionRef] | None:
+    """Должности этапа из запроса: ``position_ids`` — свои (как до B8.1),
+    ``positions`` — пары, в том числе вышестоящих компаний. ``None`` — не
+    прислано ни то ни другое («не трогать» у патча)."""
+    if position_ids is None and refs is None:
+        return None
+    return positions.parse_many([*(position_ids or []), *(refs or [])])
+
+
 @transaction.atomic
 def add_stage(route_id: int, *, order: int, name: str, quorum: str,
               position_ids: list[int], condition=None,
@@ -166,10 +205,14 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
               requires_attachment: bool = False,
               requires_comment: bool = False,
               votes_option: bool = False,
-              requirement_key: str = "") -> ApprovalRouteStage:
+              requirement_key: str = "",
+              positions: list | None = None) -> ApprovalRouteStage:
+    """``positions`` — должности парами ``{company, position_id}`` (B8.1);
+    складываются с ``position_ids`` своей компании."""
     route = get_route_or_404(route_id)
     picked = _check_approver_kind(
-        approver_kind, position_ids, user_ids or [], approver_key or "",
+        approver_kind, _stage_refs(position_ids, positions) or [], user_ids or [],
+        approver_key or "",
         subject_type=route.subject_type, scope=route.scope, stage_name=name)
     condition = _check_condition(route.subject_type, condition, is_fallback,
                                  scope=route.scope)
@@ -186,15 +229,19 @@ def add_stage(route_id: int, *, order: int, name: str, quorum: str,
         requires_comment=requires_comment,
         votes_option=votes_option,
         requirement_key=requirement_key)
-    _set_roles(stage, picked["position_ids"])
+    _set_roles(stage, picked["positions"])
     return stage
 
 
 @transaction.atomic
 def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
+    """Патч этапа. Список должностей заменяется ЦЕЛИКОМ тем, что прислано:
+    ``position_ids`` (свои) и ``positions`` (пары, B8.1) складываются; не
+    прислано ни то ни другое — должности не трогаются."""
     stage = get_stage_or_404(stage_id)
 
-    position_ids = fields.pop("position_ids", None)
+    position_refs = _stage_refs(fields.pop("position_ids", None),
+                                fields.pop("positions", None))
     user_ids = fields.pop("user_ids", None)
     approver_key = fields.pop("approver_key", None)
 
@@ -203,16 +250,16 @@ def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
     # пришла только часть (тот же случай, что у condition/is_fallback ниже).
     # Иначе переключение этапа на инициатора оставило бы в нём названных
     # поимённо людей, которых движок игнорирует, а редактор не показывает.
-    touched = (any(value is not None for value in (position_ids, user_ids, approver_key))
+    touched = (any(value is not None for value in (position_refs, user_ids, approver_key))
                or "approver_kind" in fields)
     if touched:
         kind = fields.get("approver_kind") or stage.approver_kind
         kind_changed = kind != stage.approver_kind
         # Не присланное поле берём из этапа только если вид не менялся:
         # при смене вида прежняя настройка к новому виду не относится.
-        effective_positions = (position_ids if position_ids is not None
+        effective_positions = (position_refs if position_refs is not None
                                else ([] if kind_changed
-                                     else [row.position_id for row in stage.roles.all()]))
+                                     else positions.route_stage_refs(stage)))
         effective_users = (user_ids if user_ids is not None
                            else ([] if kind_changed else list(stage.user_ids or [])))
         effective_key = (approver_key if approver_key is not None
@@ -221,7 +268,7 @@ def update_stage(stage_id: int, **fields) -> ApprovalRouteStage:
             kind, effective_positions, effective_users, effective_key,
             subject_type=stage.route.subject_type, scope=stage.route.scope,
             stage_name=stage.name)
-        _set_roles(stage, picked["position_ids"])
+        _set_roles(stage, picked["positions"])
         fields["user_ids"] = picked["user_ids"]
         fields["approver_key"] = picked["approver_key"]
 
@@ -271,16 +318,18 @@ def delete_protected_last_stage(stage: ApprovalRouteStage) -> None:
     stage.delete()
 
 
-def _set_roles(stage: ApprovalRouteStage, position_ids: list[int]) -> None:
+def _set_roles(stage: ApprovalRouteStage, refs: list[PositionRef]) -> None:
     """Заменить список HR-должностей согласующих этапа.
 
     Полная замена, а не вычисление разницы: список короткий, а разностная
     правка здесь означала бы лишний код ради экономии двух запросов.
+    Должность — пара «компания + должность» (B8.1).
     """
     stage.roles.all().delete()
     ApprovalRouteStageRole.objects.bulk_create([
-        ApprovalRouteStageRole(stage=stage, position_id=position_id)
-        for position_id in dict.fromkeys(position_ids)
+        ApprovalRouteStageRole(stage=stage, position_id=ref.position_id,
+                               position_company=ref.company)
+        for ref in dict.fromkeys(refs)
     ])
 
 
@@ -306,12 +355,12 @@ def _check_requirement_key(key: str, *, subject_type: str, scope: str,
     return key
 
 
-def _check_approver_kind(approver_kind: str, position_ids: list[int],
+def _check_approver_kind(approver_kind: str, position_refs: list[PositionRef],
                          user_ids: list[int], approver_key: str, *,
                          subject_type: str, scope: str, stage_name: str) -> dict:
     """Совместимость вида согласующих с его настройкой.
 
-    Возвращает, что сохранить: ``{position_ids, user_ids, approver_key}`` —
+    Возвращает, что сохранить: ``{positions, user_ids, approver_key}`` —
     у каждого вида заполнено ровно своё, остальное пусто. Настройка чужого
     вида (должности у инициатора, люди у этапа «по должности») — то, что
     движок исполнил бы не так, как оно читается (``engine._approver_ids``);
@@ -320,7 +369,7 @@ def _check_approver_kind(approver_kind: str, position_ids: list[int],
     kind = approver_kind
     label = dict(ApproverKind.choices).get(kind, kind)
     foreign = []
-    if kind != ApproverKind.POSITION and position_ids:
+    if kind != ApproverKind.POSITION and position_refs:
         foreign.append("должности")
     if kind != ApproverKind.USERS and user_ids:
         foreign.append("список сотрудников")
@@ -332,20 +381,19 @@ def _check_approver_kind(approver_kind: str, position_ids: list[int],
             + " и ".join(foreign) + " к нему не относятся, уберите их")
 
     if kind == ApproverKind.POSITION:
-        if not position_ids:
+        if not position_refs:
             # Этап без должностей не исполнится (engine._approver_ids) —
             # отказываем здесь, а не через час на отправке заявки.
             raise RouteConflict(
                 f"В этапе «{stage_name}» должна остаться хотя бы одна должность")
-        _check_positions_exist(position_ids)
-        return {"position_ids": list(dict.fromkeys(position_ids)),
+        return {"positions": _check_refs(position_refs),
                 "user_ids": [], "approver_key": ""}
     if kind == ApproverKind.USERS:
         if not user_ids:
             raise RouteConflict(
                 f"На этапе «{stage_name}» не назван ни один согласующий")
         _check_users_active(user_ids, stage_name=stage_name)
-        return {"position_ids": [], "user_ids": [int(x) for x in dict.fromkeys(user_ids)],
+        return {"positions": [], "user_ids": [int(x) for x in dict.fromkeys(user_ids)],
                 "approver_key": ""}
     if kind == ApproverKind.SUBJECT:
         allowed = {row["key"]: row["label"]
@@ -358,9 +406,9 @@ def _check_approver_kind(approver_kind: str, position_ids: list[int],
             raise RouteConflict(
                 f"На этапе «{stage_name}» ключ согласующих «{approver_key}» "
                 f"неизвестен; доступны: " + ", ".join(sorted(allowed)))
-        return {"position_ids": [], "user_ids": [], "approver_key": approver_key}
+        return {"positions": [], "user_ids": [], "approver_key": approver_key}
     # INITIATOR: настройки нет по определению.
-    return {"position_ids": [], "user_ids": [], "approver_key": ""}
+    return {"positions": [], "user_ids": [], "approver_key": ""}
 
 
 def _check_users_active(user_ids: list[int], *, stage_name: str) -> None:
@@ -453,18 +501,18 @@ def initiator_stage_not_last(route: ApprovalRoute) -> bool:
                for stage in route.stages.all())
 
 
-def _check_positions_exist(position_ids: list[int]) -> None:
-    """Все ли перечисленные id — существующие HR-должности.
+def _check_refs(refs: list[PositionRef]) -> list[PositionRef]:
+    """Все ли перечисленные должности существуют — и в допустимых компаниях:
+    своей и вышестоящих (B8.1, ``positions.check_refs``).
 
     Проверяется на настройке: несуществующий id иначе дожил бы до запуска
     процесса и превратился в «на этапе не осталось активных согласующих» —
     сообщение, по которому не догадаться, что в маршруте просто опечатка.
     """
-    known = {row["id"] for row in hr.get_positions_brief(position_ids)}
-    unknown = [position_id for position_id in position_ids if position_id not in known]
-    if unknown:
-        raise RouteConflict(
-            "Не найдены должности: " + ", ".join(str(x) for x in unknown))
+    try:
+        return positions.check_refs(refs)
+    except positions.PositionRefError as exc:
+        raise RouteConflict(str(exc)) from exc
 
 
 # ── Представление ───────────────────────────────────────────────────────
@@ -480,9 +528,8 @@ def serialize_route(route: ApprovalRoute, *,
     """
     stages = list(route.stages.all())
     if roles is None:
-        roles = _role_map([role.position_id
-                           for stage in stages
-                           for role in stage.roles.all()])
+        roles = _role_map([ref for stage in stages
+                           for ref in positions.route_stage_refs(stage)])
     people = _user_map([uid for stage in stages for uid in (stage.user_ids or [])])
     keys = _approver_key_labels(route)
     requirements = _requirement_key_labels(route)
@@ -516,27 +563,48 @@ def serialize_route(route: ApprovalRoute, *,
 
 def _flags_card(route: ApprovalRoute) -> dict:
     """Флаги маршрута и названия их должностей — редактор показывает подписи,
-    а не номера."""
+    а не номера. Должности вышестоящих компаний (B8.1) — с её названием."""
     notify = list(route.no_executor_notify_position_ids or [])
     skip = list(route.self_skip_notify_position_ids or [])
-    escalation = route.escalation_position_id
-    ids = [*notify, *skip, *([escalation] if escalation else [])]
-    titles = {row["id"]: row.get("title", "") for row in hr.get_positions_brief(ids)} if ids else {}
+    notify_foreign = positions.parse_many(route.no_executor_notify_foreign or [])
+    skip_foreign = positions.parse_many(route.self_skip_notify_foreign or [])
+    escalation = (PositionRef(positions.normalize(route.escalation_position_company),
+                              route.escalation_position_id)
+                  if route.escalation_position_id else None)
+    refs = [*(PositionRef("", pid) for pid in (*notify, *skip)), *notify_foreign,
+            *skip_foreign, *([escalation] if escalation else [])]
+    labels = positions.briefs(refs) if refs else {}
 
-    def brief(position_id):
-        return {"id": position_id, "title": titles.get(position_id, f"#{position_id}")}
+    def brief(ref: PositionRef) -> dict:
+        row = labels.get(ref, {})
+        return {"id": ref.position_id, "company": ref.company,
+                "company_name": row.get("company_name"),
+                "title": row.get("label") or f"#{ref.position_id}"}
 
+    try:
+        cross_company = registry.get_subject(route.subject_type).cross_company_decisions
+    except registry.UnknownSubject:
+        cross_company = False
     return {
         "forbid_self_approval": route.forbid_self_approval,
         "reject_comment_min": route.reject_comment_min,
         "lazy_resolution": route.lazy_resolution,
         "skip_unmatched_groups": route.skip_unmatched_groups,
         "no_executor_notify_position_ids": notify,
-        "escalation_position_id": escalation,
+        "escalation_position_id": route.escalation_position_id,
+        "escalation_position_company": escalation.company if escalation else "",
         "self_skip_notify_position_ids": skip,
-        "no_executor_notify_positions": [brief(pid) for pid in notify],
+        "no_executor_notify_foreign": positions.dump_many(notify_foreign),
+        "self_skip_notify_foreign": positions.dump_many(skip_foreign),
+        "no_executor_notify_positions": [brief(PositionRef("", pid)) for pid in notify]
+                                        + [brief(ref) for ref in notify_foreign],
         "escalation_position": brief(escalation) if escalation else None,
-        "self_skip_notify_positions": [brief(pid) for pid in skip],
+        "self_skip_notify_positions": [brief(PositionRef("", pid)) for pid in skip]
+                                      + [brief(ref) for ref in skip_foreign],
+        "allow_direct_decisions": route.allow_direct_decisions,
+        # Тип вообще допускает решение из вышестоящей компании — редактор
+        # показывает переключатель только тогда (``register_subject``).
+        "cross_company_decisions": cross_company,
     }
 
 
@@ -569,13 +637,13 @@ def _requirement_key_labels(route: ApprovalRoute) -> dict[str, str]:
 
 
 def serialize_stage(stage: ApprovalRouteStage, *,
-                    roles: dict[int, dict] | None = None,
+                    roles: dict[PositionRef, dict] | None = None,
                     people: dict[int, dict] | None = None,
                     keys: dict[str, str] | None = None,
                     requirements: dict[str, str] | None = None) -> dict:
-    position_ids = [role.position_id for role in stage.roles.all()]
+    refs = positions.route_stage_refs(stage)
     if roles is None:
-        roles = _role_map(position_ids)
+        roles = _role_map(refs)
     user_ids = [int(uid) for uid in (stage.user_ids or [])]
     if people is None:
         people = _user_map(user_ids)
@@ -609,12 +677,15 @@ def serialize_stage(stage: ApprovalRouteStage, *,
         "requirement_label": requirements.get(stage.requirement_key or "", None),
         "roles": [
             {
-                "position_id": position_id,
-                "title": roles.get(position_id, {}).get("title", ""),
-                "department_name": roles.get(position_id, {}).get("department_name"),
-                "is_active": roles.get(position_id, {}).get("is_active", False),
+                "position_id": ref.position_id,
+                # Компания должности (B8.1): пусто — своя.
+                "company": ref.company,
+                "company_name": roles.get(ref, {}).get("company_name"),
+                "title": roles.get(ref, {}).get("title", ""),
+                "department_name": roles.get(ref, {}).get("department_name"),
+                "is_active": roles.get(ref, {}).get("is_active", False),
             }
-            for position_id in position_ids
+            for ref in refs
         ],
     }
 
@@ -632,13 +703,14 @@ def _user_map(user_ids) -> dict[int, dict]:
         return {}
 
 
-def _role_map(position_ids) -> dict[int, dict]:
-    """``{position_id: brief}`` одним запросом в HR.
+def _role_map(refs) -> dict[PositionRef, dict]:
+    """``{должность: brief}`` одним запросом в HR на компанию.
 
     Имена разворачиваются пачкой на весь маршрут, а не по согласующему:
     маршрут из пяти этапов иначе дал бы пять походов в apps.users.
+    Должности вышестоящих компаний (B8.1) — из их схем, с названием компании.
     """
-    ids = list(dict.fromkeys(position_ids))
-    if not ids:
+    refs = list(dict.fromkeys(refs))
+    if not refs:
         return {}
-    return {row["id"]: row for row in hr.get_positions_brief(ids)}
+    return positions.briefs(refs)

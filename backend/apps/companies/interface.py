@@ -151,6 +151,61 @@ def is_holding(slug: str) -> bool:
     return bool(company and company["kind"] == CompanyKind.HOLDING)
 
 
+def ancestor_slugs(slug: str) -> list[str]:
+    """Действующие компании ВЫШЕ ``slug`` по дереву владения, ближайшая первой.
+
+    Архивная компания в ответ не попадает, но обход идёт через неё дальше —
+    то же правило, что у наследования ролей (``apps/access/services/
+    inheritance.py``): выше архивной ступени может стоять действующий
+    холдинг. Цикл в данных (``Company.parent`` — self-FK без проверки
+    ацикличности) обрывается на уже пройденном слаге.
+
+    Нужна согласованию между компаниями (БЗО, B8.1): этап маршрута дочерней
+    вправе ссылаться на должность своей или вышестоящей компании.
+    """
+    out: list[str] = []
+    seen = {slug}
+    row = get_company(slug)
+    cursor = row.get("parent_slug") if row else None
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        row = get_company(cursor)
+        if row is None:
+            break
+        if row["is_active"]:
+            out.append(cursor)
+        cursor = row.get("parent_slug")
+    return out
+
+
+def descendant_slugs(slug: str) -> list[str]:
+    """Действующие компании НИЖЕ ``slug`` по дереву владения, по алфавиту.
+
+    Обратная сторона ``ancestor_slugs`` и то же правило архива: архивная
+    дочерняя в ответ не попадает, её дочерние — попадают. Без кэша: список
+    нужен очереди «Ждёт меня» по всем компаниям (B8.1) и решению из
+    холдинга, а не каждому запросу.
+    """
+    children: dict[str, list[tuple[str, bool]]] = {}
+    for child, parent, status in Company.objects.values_list(
+            "slug", "parent__slug", "status"):
+        if parent:
+            children.setdefault(parent, []).append(
+                (child, status == CompanyStatus.ACTIVE))
+    out: list[str] = []
+    seen = {slug}
+    stack = [slug]
+    while stack:
+        for child, active in children.get(stack.pop(), []):
+            if child in seen:
+                continue
+            seen.add(child)
+            if active:
+                out.append(child)
+            stack.append(child)
+    return sorted(out)
+
+
 def active_company_slugs(*, fresh: bool = False) -> list[str]:
     """Slug'и всех действующих компаний, в алфавитном порядке.
 
