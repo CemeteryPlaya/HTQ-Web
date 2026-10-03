@@ -65,6 +65,9 @@ _KZ_BIN = re.compile(r"\d{12}")
 #: Тип связи переноса B6.1 «контрагент ``contracts`` → контрагент ``bpp``».
 MIGRATED_COUNTERPARTY = ("contracts.counterparty", "bpp.counterparty")
 
+#: Статусы договора модуля, годные для привлечения (``bpp.AgreementStatus``).
+_BPP_USABLE = ("active", "fulfilled")
+
 #: Модуль, где живут контрагенты, — для текстов.
 _MODULE = "«Закупки и оплаты»"
 
@@ -73,6 +76,12 @@ class CounterpartyLinkConflict(Exception):
     """Связь с контрагентом противоречит данным: контрагент уже у другого
     партнёра, БИН/ИИН пары расходится, контрагент не действует, договор
     заключён с другим контрагентом. Вьюха отдаёт 409 с этим текстом."""
+
+
+class AgreementLinkInvalid(Exception):
+    """Договор модуля не годится для привлечения: ключ не UUID, договора нет,
+    он другого контрагента или не в статусе «Действует»/«Исполнен». Вьюха
+    отдаёт 422 с этим текстом."""
 
 
 class ContractorInUse(Exception):
@@ -158,9 +167,9 @@ def update_contractor(contractor_id: int, changes: dict) -> Contractor:
             # Договор привлечения — договор С КОНТРАГЕНТОМ этого партнёра.
             # Сменился контрагент — старые ссылки больше не про него. Номер
             # в ``contract_no`` остаётся: история привлечения не теряется.
-            ContractorEngagement.objects.filter(
-                contractor=row, agreement_id__isnull=False,
-            ).update(agreement_id=None)
+            ContractorEngagement.objects.filter(contractor=row).filter(
+                Q(agreement_id__isnull=False) | ~Q(bpp_agreement_id=""),
+            ).update(agreement_id=None, bpp_agreement_id="")
     return row
 
 
@@ -343,7 +352,9 @@ def get_engagement(engagement_id: int) -> ContractorEngagement:
     return row
 
 
-def create_engagement(payload: dict) -> ContractorEngagement:
+def create_engagement(payload: dict, *, token=None,
+                      company: str | None = None) -> ContractorEngagement:
+    payload = _normalized_agreement(payload)
     contractor = get_contractor(payload["contractor_id"])
     if not (payload.get("project_id") or payload.get("site_id")
             or payload.get("roadmap_id")):
@@ -352,13 +363,16 @@ def create_engagement(payload: dict) -> ContractorEngagement:
         raise ValueError("Укажите проект, объект или роудмап (хотя бы одно)")
     row = ContractorEngagement(**payload)
     row.contractor = contractor
-    _check_agreement_link(row)
+    _check_agreement_links(row, {"agreement_id", "bpp_agreement_id"},
+                           token=token, company=company)
     row.save(force_insert=True)
     return row
 
 
-def update_engagement(engagement_id: int, changes: dict) -> ContractorEngagement:
+def update_engagement(engagement_id: int, changes: dict, *, token=None,
+                      company: str | None = None) -> ContractorEngagement:
     row = get_engagement(engagement_id)
+    changes = _normalized_agreement(changes)
     changed = _changed_fields(row, changes)
     for field, value in changes.items():
         setattr(row, field, value)
@@ -370,10 +384,99 @@ def update_engagement(engagement_id: int, changes: dict) -> ContractorEngagement
     date_rules.assert_instance_ordered(row)
     # И при правке одного ``contract_no``: у привязанного договора номер —
     # его, иначе в списке показывался бы один номер, а ссылка вела на другой.
-    if {"agreement_id", "contract_no"} & changed:
-        _check_agreement_link(row)
+    if {"agreement_id", "bpp_agreement_id", "contract_no"} & changed:
+        _check_agreement_links(row, changed, token=token, company=company)
     row.save()
     return row
+
+
+def _normalized_agreement(payload: dict) -> dict:
+    """Ключ договора модуля — в каноническом виде (UUID строкой); пусто —
+    «не выбран». Не UUID — 422: из формы такой ключ прислать нельзя."""
+    if "bpp_agreement_id" not in payload:
+        return payload
+    value = payload["bpp_agreement_id"]
+    if value is None or not str(value).strip():
+        return {**payload, "bpp_agreement_id": ""}
+    try:
+        return {**payload, "bpp_agreement_id": str(uuid.UUID(str(value).strip()))}
+    except ValueError:
+        raise AgreementLinkInvalid(
+            f"Договор не найден в модуле {_MODULE}: ключ не UUID") from None
+
+
+def _check_agreement_links(row: ContractorEngagement, changed: set[str], *,
+                           token=None, company: str | None = None) -> None:
+    """Договор привлечения — из «Договоров» (``agreement_id``) или из модуля
+    (``bpp_agreement_id``), не оба сразу: выбор нового снимает другой.
+
+    Новая привязка к договору «Договоров» у замороженной компании закрыта
+    (A6.2): договоры теперь заводятся в модуле. Старая связь читается и при
+    правке других полей не перепроверяется.
+    """
+    if "bpp_agreement_id" in changed and row.bpp_agreement_id:
+        if row.agreement_id is not None and "agreement_id" in changed:
+            raise AgreementLinkInvalid(
+                "Выберите один договор: из модуля или из «Договоров», не оба")
+        row.agreement_id = None
+    elif "agreement_id" in changed and row.agreement_id is not None:
+        row.bpp_agreement_id = ""
+    if (row.agreement_id is not None and "agreement_id" in changed
+            and contracts.is_frozen()):
+        raise CounterpartyLinkConflict(
+            "Раздел «Договоры» перенесён в «Закупки и оплаты» — выберите "
+            "договор модуля, а не договор «Договоров»")
+    if row.bpp_agreement_id:
+        _check_bpp_agreement_link(row, full="bpp_agreement_id" in changed,
+                                  token=token, company=company)
+    elif row.agreement_id is not None:
+        _check_agreement_link(row)
+
+
+def _check_bpp_agreement_link(row: ContractorEngagement, *, full: bool, token=None,
+                              company: str | None = None) -> None:
+    """Договор модуля — того же контрагента, что и партнёр, в статусе
+    «Действует»/«Исполнен»; компания та же — договор читается в схеме
+    компании запроса. Номер — из ``bpp.interface.agreement_brief``, не из
+    запроса. Без смены ключа (правка ``contract_no``) статус не
+    перепроверяется: договор мог стать «Исполнен»/«Расторгнут» уже после
+    привлечения, и это не повод запретить правку соседнего поля.
+
+    НОВУЮ привязку делает только тот, кто вправе видеть договор (тот же круг,
+    что у поиска): невидимый отвечает как несуществующий — иначе по 422 можно
+    было бы выяснять, какие договоры есть у чужих проектов. Подмодуль
+    ``bpp_agreements`` выключен — привязка закрыта понятной ошибкой."""
+    key = row.bpp_agreement_id
+    try:
+        if full:
+            if token is None:
+                raise AgreementLinkInvalid("Договор можно привязать только от имени пользователя")
+            brief = bpp.visible_agreement_brief([key], token=token, company=company).get(key)
+        else:
+            brief = bpp.agreement_brief([key]).get(key)
+    except ServiceDisabled as exc:
+        if not full:
+            return   # старая привязка читается и без модуля; номер остаётся как был
+        raise AgreementLinkInvalid(
+            f"Подмодуль «Договоры» модуля {_MODULE} выключен у компании — "
+            f"привязать договор модуля нельзя") from exc
+    if brief is None:
+        raise AgreementLinkInvalid(f"Договор не найден в модуле {_MODULE}")
+    if full:
+        partner_key = row.contractor.bpp_counterparty_id
+        if not partner_key:
+            raise AgreementLinkInvalid(
+                f"Партнёр «{row.contractor.name}» не связан с контрагентом модуля "
+                f"{_MODULE} — сначала укажите контрагента в карточке партнёра")
+        if brief["counterparty_id"] != partner_key:
+            raise AgreementLinkInvalid(
+                f"Договор {brief['number']} заключён с другим контрагентом, "
+                f"не с «{row.contractor.name}»")
+        if brief["status"] not in _BPP_USABLE:
+            raise AgreementLinkInvalid(
+                f"Договор {brief['number']} ещё или уже не действует — "
+                f"привлечь по нему нельзя (годятся «Действует» и «Исполнен»)")
+    row.contract_no = brief["number"]
 
 
 def _check_agreement_link(row: ContractorEngagement) -> None:
@@ -533,6 +636,30 @@ def _counterparty_cards(keys: set[str]) -> dict[str, dict]:
                                f"контрагента", expected=True, exc=exc)
 
 
+def _bpp_agreement_briefs(keys: set[str]) -> dict[str, dict]:
+    """Договоры модуля для подписи в ответе — батчем, с деградацией."""
+    if not keys:
+        return {}
+    try:
+        return bpp.agreement_brief(keys)
+    except ServiceDisabled as exc:
+        return fallback("tasks.contractors.bpp_agreement_brief", {},
+                        reason=f"модуль {_MODULE} выключен — привлечения без карточки "
+                               f"договора модуля", expected=True, exc=exc)
+
+
+def search_agreements(contractor_id: int, query: str | None, *, token,
+                      company: str | None, limit: int = 20) -> list[dict]:
+    """Договоры модуля для выбора в привлечении партнёра: контрагента этого
+    партнёра, годные по статусу, с учётом прав пользователя на договоры.
+    Партнёр без контрагента — пусто."""
+    row = get_contractor(contractor_id)
+    if not row.bpp_counterparty_id:
+        return []
+    return bpp.search_agreements(query, partner_key=row.bpp_counterparty_id,
+                                 token=token, company=company, limit=limit)
+
+
 def _counterparty_ref(card: dict | None) -> dict | None:
     if card is None:
         return None
@@ -600,6 +727,8 @@ def build_engagements(rows) -> list[dict]:
         {row.agreement_id for row in rows if row.agreement_id},
         site="tasks.contractors.agreement_brief",
         what="привлечения без карточки договора")
+    bpp_agreements = _bpp_agreement_briefs(
+        {row.bpp_agreement_id for row in rows if row.bpp_agreement_id})
     out = []
     for row in rows:
         agreement = agreements.get(row.agreement_id)
@@ -619,6 +748,8 @@ def build_engagements(rows) -> list[dict]:
                 {key: agreement[key] for key in
                  ("id", "number", "name", "status", "approval_state")}
                 if agreement is not None else None),
+            "bpp_agreement_id": row.bpp_agreement_id or None,
+            "bpp_agreement": bpp_agreements.get(row.bpp_agreement_id),
             "scope": row.scope,
             "start_date": str(row.start_date) if row.start_date else None,
             "end_date": str(row.end_date) if row.end_date else None,
@@ -634,7 +765,8 @@ def build_engagement(row: ContractorEngagement) -> dict:
 
 
 __all__ = [
-    "ContractorInUse", "CounterpartyLinkConflict",
+    "ContractorInUse", "CounterpartyLinkConflict", "AgreementLinkInvalid",
+    "search_agreements",
     "list_contractors", "get_contractor", "create_contractor",
     "update_contractor", "delete_contractor",
     "link_counterparty", "contractors_by_counterparty", "normalize_counterparty_key",

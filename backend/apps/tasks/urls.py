@@ -100,6 +100,8 @@ urlpatterns = [
     path("contractors/<int:contractor_id>/workers/", views.contractor_workers),
     path("contractor-workers/<int:worker_id>", views.contractor_worker_detail),
     path("contractor-workers/<int:worker_id>/", views.contractor_worker_detail),
+    path("contractor-engagements/agreement-search", views.engagement_agreement_search),
+    path("contractor-engagements/agreement-search/", views.engagement_agreement_search),
     path("contractor-engagements/", views.engagements_collection),
     path("contractor-engagements", views.engagements_collection),
     path("contractor-engagements/<int:engagement_id>", views.engagement_detail),

@@ -69,3 +69,48 @@ def upsert_counterparty_from_1c(record: dict):
     from apps.bpp.services.counterparties import onec
 
     return onec.upsert_counterparty(record)
+
+
+def agreement_brief(ids) -> dict[str, dict]:
+    """Договоры батчем — для привлечения партнёра ``tasks`` (хвост этапа 6,
+    M-5): ``{id строкой: {id, number, status, counterparty_id}}``, и только
+    это. Невозможные и несуществующие ключи в ответ не попадают. Зовётся в
+    контексте компании. Подмодуль ``bpp_agreements`` выключен — ``ServiceDisabled``."""
+    require_service("bpp")
+    require_service("bpp_agreements")
+    from apps.bpp.services.agreements import neighbour
+
+    return neighbour.brief(ids)
+
+
+def visible_agreement_brief(ids, *, token, company: str | None) -> dict[str, dict]:
+    """``agreement_brief`` только по договорам, которые ``token`` вправе видеть
+    (как в реестре договоров); невидимый — как несуществующий. Для проверки
+    при привязке в чужой форме. Подмодуль ``bpp_agreements`` выключен —
+    ``ServiceDisabled``."""
+    require_service("bpp")
+    require_service("bpp_agreements")
+    from apps.bpp.services.agreements import neighbour
+
+    return neighbour.visible_brief(ids, token=token, company=company)
+
+
+def search_agreements(query: str | None, *, partner_key, token,
+                      company: str | None, limit: int = 20) -> list[dict]:
+    """Поиск договоров контрагента для выбора в чужой форме (привлечение
+    партнёра ``tasks``): только «Действует»/«Исполнен», основные (не
+    допсоглашения), с учётом прав ``token`` на договоры — как в реестре;
+    без права — пусто. Строки: ``{id, number, status, counterparty_id, name,
+    ext_number, ext_date}``. Подмодуль ``bpp_agreements`` выключен у компании —
+    пустой список. Зовётся в контексте компании."""
+    require_service("bpp")
+    from apps.core.services import ServiceDisabled
+
+    try:
+        require_service("bpp_agreements")
+    except ServiceDisabled:
+        return []
+    from apps.bpp.services.agreements import neighbour
+
+    return neighbour.search(query, counterparty_id=partner_key, token=token,
+                            company=company, limit=limit)

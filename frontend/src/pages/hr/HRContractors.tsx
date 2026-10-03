@@ -34,7 +34,8 @@ import {
   createContractor, createContractorWorker, createEngagement,
   deactivateContractorWorker, deleteContractor, deleteEngagement,
   fetchContractors, fetchContractorWorkers, fetchEngagements,
-  fetchProjects, fetchSites, searchContractorCounterparties, updateContractor,
+  fetchProjects, fetchSites, searchContractorCounterparties, searchEngagementAgreements,
+  updateContractor,
   updateContractorWorker,
 } from '@/api/tasks';
 import { COUNTERPARTIES_BASE } from '@/features/bpp/counterparties/api';
@@ -112,7 +113,7 @@ const emptyWorker = {
 };
 
 const emptyEngagement = {
-  project_id: '', site_id: '', contract_no: '', scope: '',
+  project_id: '', site_id: '', contract_no: '', bpp_agreement_id: '', scope: '',
   start_date: '', end_date: '',
 };
 
@@ -147,6 +148,8 @@ const HRContractors: React.FC = () => {
   const [workerForm, setWorkerForm] = useState(emptyWorker);
 
   const [engagementDialog, setEngagementDialog] = useState(false);
+  const [agreementQuery, setAgreementQuery] = useState('');
+  const [pickedAgreement, setPickedAgreement] = useState<{ id: string; label: string } | null>(null);
   const [engagementForm, setEngagementForm] = useState(emptyEngagement);
 
   const { data: contractors = [], isLoading, error } = useQuery({
@@ -163,6 +166,16 @@ const HRContractors: React.FC = () => {
     queryKey: ['contractor-workers', selectedId],
     queryFn: () => fetchContractorWorkers(selectedId!, false),
     enabled: selectedId !== null,
+  });
+
+  // Договоры модуля — только у партнёра, связанного с контрагентом, и пока
+  // открыт диалог привлечения. Права на договоры решает сервер: нет права —
+  // пустой список, и остаётся ввод номера текстом.
+  const { data: agreementOptions = [] } = useQuery({
+    queryKey: ['contractor-engagement-agreements', selectedId, agreementQuery.trim()],
+    queryFn: () => searchEngagementAgreements(selectedId!, agreementQuery.trim() || undefined),
+    enabled: engagementDialog && selectedId !== null && Boolean(selected?.bpp_counterparty_id),
+    retry: false,
   });
 
   const { data: engagements = [] } = useQuery({
@@ -314,7 +327,8 @@ const HRContractors: React.FC = () => {
       contractor_id: selectedId!,
       project_id: payload.project_id ? Number(payload.project_id) : null,
       site_id: payload.site_id ? Number(payload.site_id) : null,
-      contract_no: payload.contract_no.trim() || null,
+      contract_no: payload.bpp_agreement_id ? null : payload.contract_no.trim() || null,
+      bpp_agreement_id: payload.bpp_agreement_id || null,
       scope: payload.scope,
       start_date: payload.start_date || null,
       end_date: payload.end_date || null,
@@ -649,7 +663,7 @@ const HRContractors: React.FC = () => {
                   </h3>
                   <Button
                     size="sm"
-                    onClick={() => { setEngagementForm(emptyEngagement); setEngagementDialog(true); }}
+                    onClick={() => { setEngagementForm(emptyEngagement); setAgreementQuery(''); setPickedAgreement(null); setEngagementDialog(true); }}
                     className="h-8 gap-1 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-semibold"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -678,7 +692,14 @@ const HRContractors: React.FC = () => {
                               {e.site_name || e.project_name || '—'}
                             </TableCell>
                             <TableCell className="font-mono text-muted-foreground">
-                              {e.agreement ? (
+                              {e.bpp_agreement ? (
+                                <Link
+                                  to={`/bpp/agreements/${e.bpp_agreement.id}`}
+                                  className="text-foreground hover:underline underline-offset-2"
+                                >
+                                  {e.bpp_agreement.number}
+                                </Link>
+                              ) : e.agreement ? (
                                 <Link
                                   to={`/contracts/agreements/${e.agreement.id}`}
                                   title={e.agreement.name}
@@ -998,14 +1019,60 @@ const HRContractors: React.FC = () => {
               />
             </div>
 
-            {/* Номер договора — свободным текстом. Выбор договора из
-                «Договоров» снят (A6.1): раздел переведён в «Закупки и оплаты»
-                и замораживается, а уже привязанные договоры привлечений
-                остаются ссылками в списке. */}
+            {/* Договор модуля «Закупки и оплаты» (M-5): выбор из договоров
+                контрагента партнёра, номер ДГ-… ставит сервер. Выбор договора
+                из «Договоров» снят (A6.1), старые привязки остаются ссылками
+                в списке. Без выбора номер — свободным текстом. */}
+            {(agreementOptions.length > 0 || agreementQuery.trim() !== ''
+              || engagementForm.bpp_agreement_id !== '') && (
+              <div>
+                <Label className="text-xs">
+                  {t('tasks.pages.contractors.bppAgreement', 'Договор модуля «Закупки и оплаты»')}
+                </Label>
+                {/* Поиск по номеру, номеру по документу и наименованию (от 2 символов) —
+                    список сервера не ограничен последними договорами. */}
+                <Input
+                  value={agreementQuery}
+                  onChange={(e) => setAgreementQuery(e.target.value)}
+                  placeholder={t('tasks.pages.contractors.bppAgreementSearch', 'Найти договор по номеру или названию')}
+                  aria-label={t('tasks.pages.contractors.bppAgreementSearch', 'Найти договор по номеру или названию')}
+                  className="h-8 rounded-xl bg-muted/30 mt-1"
+                />
+                <Select
+                  value={engagementForm.bpp_agreement_id || 'none'}
+                  onValueChange={(val) => {
+                    const option = agreementOptions.find((o) => o.id === val);
+                    setPickedAgreement(option ? { id: option.id, label: option.number } : null);
+                    setEngagementForm({
+                      ...engagementForm, bpp_agreement_id: val === 'none' ? '' : val,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-8 rounded-xl bg-muted/30 mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      {t('tasks.pages.contractors.noBppAgreement', 'Не выбран')}
+                    </SelectItem>
+                    {pickedAgreement && !agreementOptions.some((o) => o.id === pickedAgreement.id) && (
+                      <SelectItem value={pickedAgreement.id}>{pickedAgreement.label}</SelectItem>
+                    )}
+                    {agreementOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>
+                        {[option.number, option.ext_number && `№${option.ext_number}`, option.name]
+                          .filter(Boolean).join(' · ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div>
               <Label className="text-xs">{t('tasks.pages.contractors.contractNumber')}</Label>
               <Input
                 value={engagementForm.contract_no}
+                disabled={Boolean(engagementForm.bpp_agreement_id)}
                 onChange={(e) => setEngagementForm({ ...engagementForm, contract_no: e.target.value })}
                 placeholder={t('tasks.pages.contractors.contractPlaceholder')}
                 className="h-8 rounded-xl bg-muted/30 mt-1 font-mono"

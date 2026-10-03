@@ -91,6 +91,22 @@ class AgreementRef(BaseModel):
     approval_state: str
 
 
+class BppAgreementRef(BaseModel):
+    """Договор модуля «Закупки и оплаты» в строке привлечения — номер и статус."""
+
+    id: str
+    number: str
+    status: str
+
+
+class BppAgreementOption(BppAgreementRef):
+    """Строка поиска договора для привлечения: плюс то, что помогает выбрать."""
+
+    name: str = ""
+    ext_number: str = ""
+    ext_date: date | None = None
+
+
 # ── labels ──────────────────────────────────────────────────────────────
 
 class LabelCreate(BaseModel):
@@ -363,6 +379,8 @@ class ContractorEngagementCreate(OrderedDates):
     # Договор из «Договоров» с контрагентом этого партнёра; при выборе его
     # номер перекрывает ``contract_no`` (см. ``contractor_service``).
     agreement_id: int | None = None
+    # Договор модуля «Закупки и оплаты» (UUID); номер ``ДГ-…`` берётся у модуля.
+    bpp_agreement_id: str | None = Field(None, max_length=36)
     scope: str = Field(default="", max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -382,6 +400,7 @@ class ContractorEngagementUpdate(OrderedDates):
     roadmap_id: int | None = None
     contract_no: str | None = Field(None, max_length=100)
     agreement_id: int | None = None
+    bpp_agreement_id: str | None = Field(None, max_length=36)
     scope: str | None = Field(None, max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -401,6 +420,9 @@ class ContractorEngagementResponse(BaseModel):
     contract_no: str | None = None
     agreement_id: int | None = None
     agreement: AgreementRef | None = None
+    bpp_agreement_id: str | None = None
+    # ``None`` при заполненном ``bpp_agreement_id`` — модуль выключен.
+    bpp_agreement: BppAgreementRef | None = None
     scope: str
     start_date: date | None = None
     end_date: date | None = None
