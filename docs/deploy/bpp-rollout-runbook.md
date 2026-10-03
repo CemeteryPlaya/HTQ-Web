@@ -299,7 +299,14 @@ docker compose up -d backend-worker backend-beat
    Команда сбрасывает счётчик и блокировку по обоим логинам учётки (имя и e-mail). Блокировку снимает и смена пароля — самим пользователем или администратором (`admin/users/<id>/set-password`). Блокировка сама проходит через 15 минут.
 5. **Откат.** `AUTH_LOCKOUT_THRESHOLD=0` и перезапуск `backend-web` — блокировка перестаёт действовать сразу; счётчики в Redis доживают свои 15 минут и ни на что не влияют.
 
+На тестовом стенде то же самое проверяет Playwright-спека `frontend/tests/e2e/36_login_lockout.spec.ts` (по умолчанию пропускается — порог 0): `AUTH_LOCKOUT_THRESHOLD=5 docker compose -f docker-compose.test-local.yml up -d --no-deps backend-web`, затем `E2E_LOCKOUT=1 npx playwright test tests/e2e/36_login_lockout.spec.ts --project=chromium`; спека сама снимает блокировку `auth_unlock`, а стенд после неё возвращают к порогу 0 той же командой без переменной.
+
 Лимит 300 запросов в минуту на пользователя в этот шаг не входит (D-S7-4, позже).
+
+### Шаги по необходимости (не в окне): антивирус и доступы 1С
+
+- **Антивирус ClamAV** (A7.4, D-S7-6) — включается отдельным решением по своему ранбуку [antivirus-runbook.md](antivirus-runbook.md): `ANTIVIRUS_CLAMD_HOST=clamav` и `--profile antivirus`, ожидание `healthy` (базы качаются минуты), проверка EICAR → 422 `E-FIL-08`. Пока сканер включён, а clamd молчит, загрузка документов отвечает 503 — так задумано.
+- **Доступы 1С** (A7.3, D-S7-5) — синхронизации в этом выпуске нет, шаг нужен только для диагностики: файл `secrets/onec.env` на хосте (`ONEC_ODATA_URL`, `ONEC_USER`, `ONEC_PASSWORD`, `ONEC_TIMEOUT`; каталог `secrets/` не в репозитории и не в образе), перезапуск четырёх backend-сервисов, затем `manage.py onec_check` (пароль не печатает, ничего не пишет). Файла нет — сервисы стартуют как обычно (`required: false`, нужен compose ≥ 2.24). `ONEC_*` в `environment:` compose не объявлять — перекроют файл.
 
 ## 3. Откат
 
