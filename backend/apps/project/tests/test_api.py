@@ -133,10 +133,12 @@ def test_user_names_for_managers_and_members_only(company_context):
     from apps.users.models import User
 
     slug = company_context["slug"]
-    boss = User.objects.create(username="boss", email="boss@x.test", first_name="Айдар",
-                               last_name="Бек")
-    stranger = User.objects.create(username="str", email="str@x.test", first_name="Чужой",
-                                   last_name="Человек")
+    # id явно: автоматический мог совпасть с создателем проекта (8) — и
+    # «чужой» стал бы участником.
+    boss = User.objects.create(id=9103, username="boss", email="boss@x.test",
+                               first_name="Айдар", last_name="Бек")
+    stranger = User.objects.create(id=9104, username="str", email="str@x.test",
+                                   first_name="Чужой", last_name="Человек")
     assign(slug, 7, "project", "view")
     assign(slug, 7, "project.all", "view")
     assign(slug, 8, "project.projects", "full")
@@ -163,10 +165,12 @@ def test_user_names_do_not_open_foreign_projects_to_a_pm(company_context):
     from apps.users.models import User
 
     slug = company_context["slug"]
-    own_boss = User.objects.create(username="ob", email="ob@x.test", first_name="Свой",
-                                   last_name="Руководитель")
-    foreign_boss = User.objects.create(username="fb", email="fb@x.test", first_name="Чужой",
-                                       last_name="Руководитель")
+    # id явно: автоматический мог совпасть с ПМ (21), если до теста в этой БД
+    # уже заводили пользователей (последовательность не сбрасывается).
+    own_boss = User.objects.create(id=9101, username="ob", email="ob@x.test",
+                                   first_name="Свой", last_name="Руководитель")
+    foreign_boss = User.objects.create(id=9102, username="fb", email="fb@x.test",
+                                       first_name="Чужой", last_name="Руководитель")
     own = Project.objects.create(code="П-1", name="Свой", country_code="KZ",
                                  manager_user_id=own_boss.pk)
     foreign = Project.objects.create(code="П-2", name="Чужой", country_code="KZ",

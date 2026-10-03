@@ -49,6 +49,20 @@ auth_lockout_total = Counter(
     ["reason"],
 )
 
+_series_ready = False
+
+
+def _ensure_series() -> None:
+    """Обе серии счётчика — с нуля при первом обращении включённой блокировки:
+    без этого первая блокировка после старта процесса не видна ``increase()``
+    правила ``htqweb-auth-lockout-burst`` (как ``_init_verdict_labels`` антивируса)."""
+    global _series_ready
+    if not _series_ready:
+        for reason in ("locked", "rejected"):
+            auth_lockout_total.labels(reason=reason)
+        _series_ready = True
+
+
 _MAX_LOGIN_LEN = 254
 _PREFIX = "ratelimit:login:"
 
@@ -106,6 +120,7 @@ def login_locked(login: str) -> int | None:
     """Сколько секунд вход по логину закрыт; ``None`` — не заблокирован."""
     if _threshold() <= 0:
         return None
+    _ensure_series()
     until = cache.get(f"{_PREFIX}{login_digest(login)}:lock")
     if not until:
         return None
@@ -121,6 +136,7 @@ def register_login_failure(login: str) -> None:
     threshold = _threshold()
     if threshold <= 0:
         return
+    _ensure_series()
     base = f"{_PREFIX}{login_digest(login)}"
     seconds = _seconds()
     count = _incr(f"{base}:n", seconds)

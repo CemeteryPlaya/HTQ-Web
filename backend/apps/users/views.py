@@ -157,7 +157,9 @@ def obtain_token(request, data: schemas.TokenObtainRequest):
         _log_login_failure(request, "invalid_credentials", login)
         return json_error("Invalid credentials", 401)
 
-    ratelimit.reset_login(login)
+    # Обе формы логина учётки (имя и e-mail): иначе неудачи под другой формой
+    # пережили бы успешный вход.
+    auth_service.reset_lockout(user)
 
     company_slug, error = _company_slug_for_token(request, user.id)
     if error is not None:

@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from django.db import DatabaseError, IntegrityError, transaction
+from django.db import DataError, IntegrityError, transaction
 
 from apps.bpp.models.counterparties import Counterparty, CounterpartyKind
 from htqweb.errors import DomainError
@@ -86,7 +86,7 @@ def upsert_counterparty(record: dict) -> Outcome:
         return _rejected(_reason(exc))
     except IntegrityError:
         return Outcome(CONFLICT, "Запись 1С конкурирует с другой карточкой за уникальный ключ.")
-    except DatabaseError:
+    except DataError:  # обрыв соединения и прочие сбои БД — не «длинное значение», пробрасываются
         return _rejected("Запись 1С не помещается в поля карточки (слишком длинное значение).")
 
 
@@ -97,7 +97,7 @@ def _upsert(record: dict, ref: str) -> Outcome:
     sent_country = _get(record, "country_code").upper()  # пусто — «не прислали»
     number = validation.normalize_reg_number(_get(record, "reg_number"))
 
-    linked = Counterparty.objects.filter(ext_1c_ref=ref).first()
+    linked = Counterparty.objects.filter(ext_1c_ref__iexact=ref).first()  # GUID, введённый руками в верхнем регистре, — тот же
     if linked is not None:
         return _update_linked(linked, record, sent_country or linked.country_code, number)
 
@@ -109,7 +109,7 @@ def _upsert(record: dict, ref: str) -> Outcome:
 
     same = Counterparty.objects.filter(country_code=country, reg_number=number).first()
     if same is not None:
-        if same.ext_1c_ref and same.ext_1c_ref != ref:
+        if same.ext_1c_ref and same.ext_1c_ref.lower() != ref:
             return Outcome(CONFLICT, "Карточка с этим номером уже связана с другой записью 1С "
                                      f"({same.ext_1c_ref}); данные не тронуты.", str(same.pk))
         service.update(same.pk, {"ext_1c_ref": ref}, expected_version=None, actor_id=None,

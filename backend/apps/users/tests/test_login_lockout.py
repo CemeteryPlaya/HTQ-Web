@@ -126,6 +126,15 @@ def test_success_resets_counter(alice):
     assert _login("alice", GOOD).status_code == 200
 
 
+def test_success_under_one_login_resets_the_other(alice):
+    """Неудачи под почтой не переживают успешный вход под именем: сброс —
+    по обеим формам логина учётки."""
+    _fail_n("alice@htq.test", 4)
+    assert _login("alice", GOOD).status_code == 200
+    _fail_n("alice@htq.test", 4)
+    assert _login("alice@htq.test", GOOD).status_code == 200
+
+
 def test_window_expires(alice, monkeypatch):
     now = {"t": 1_800_000_000.0}
     monkeypatch.setattr("time.time", lambda: now["t"])

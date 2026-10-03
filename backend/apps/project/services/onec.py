@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from django.db import DatabaseError, IntegrityError, transaction
+from django.db import DataError, IntegrityError, transaction
 
 from apps.project.models import Project
 from apps.refdata import interface as refdata
@@ -55,12 +55,12 @@ def upsert_project(record: dict) -> Outcome:
             return _upsert(ref, code, name, (_get(record, "country_code") or DEFAULT_COUNTRY).upper())
     except (IntegrityError, projects.ProjectError):
         return Outcome(CONFLICT, "Запись 1С конкурирует с другим проектом за уникальный ключ.")
-    except DatabaseError:
+    except DataError:  # обрыв соединения и прочие сбои БД — не «длинное значение», пробрасываются
         return Outcome(REJECTED, "Запись 1С не помещается в поля проекта (слишком длинное значение).")
 
 
 def _upsert(ref: str, code: str, name: str, country: str) -> Outcome:
-    linked = Project.objects.filter(ext_1c_ref=ref).first()
+    linked = Project.objects.filter(ext_1c_ref__iexact=ref).first()  # GUID, введённый руками в верхнем регистре, — тот же
     if linked is not None:
         if linked.code != code:
             return Outcome(REJECTED, "Код связанного проекта меняется только в «Проектах», "
@@ -72,7 +72,7 @@ def _upsert(ref: str, code: str, name: str, country: str) -> Outcome:
 
     same = Project.objects.filter(code=code).first()
     if same is not None:
-        if same.ext_1c_ref and same.ext_1c_ref != ref:
+        if same.ext_1c_ref and same.ext_1c_ref.lower() != ref:
             return Outcome(CONFLICT, "Проект с этим кодом уже связан с другой записью 1С "
                                      f"({same.ext_1c_ref}); данные не тронуты.", str(same.pk))
         projects.update(same, actor_id=None, ext_1c_ref=ref)
