@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 
 import { EmployeePicker } from '@/components/common/EmployeePicker';
 import { PositionPicker } from '@/components/signoff/PositionPicker';
+import { refKey } from '@/components/signoff/crossCompany';
 import { RouteFlagsCard } from '@/components/signoff/RouteFlagsCard';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
@@ -91,9 +92,17 @@ import { signoffApi } from '@/api/signoff';
 import type {
   ApproverKind,
   Condition,
+  PositionRef,
   Quorum,
+  RouteRole,
   RouteStage,
 } from '@/types/signoff';
+
+/** Подпись должности этапа; должность вышестоящей компании (B8.1) — с её
+ *  названием: «Финансовый директор · Hi-Tech Group». */
+const roleLabel = (role: RouteRole): string =>
+  [role.title, role.department_name, role.company ? role.company_name || role.company : null]
+    .filter(Boolean).join(' · ') || `Должность #${role.position_id}`;
 
 /** Черновик этапа в диалоге. `id === null` — этап ещё не создан. */
 interface StageDraft {
@@ -101,7 +110,8 @@ interface StageDraft {
   order: number;
   name: string;
   quorum: Quorum;
-  positionIds: number[];
+  /** Должности парами — своей компании и вышестоящих (B8.1). */
+  positions: PositionRef[];
   /** `users` — согласующие поимённо; `subject` — ключ, по которому их
    *  назовёт сам объект (`approver_fields` его типа). */
   userIds: number[];
@@ -123,7 +133,7 @@ const emptyDraft = (order: number): StageDraft => ({
   order,
   name: '',
   quorum: 'all',
-  positionIds: [],
+  positions: [],
   userIds: [],
   approverKey: '',
   condition: [],
@@ -214,7 +224,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         quorum: stage.quorum,
         // У каждого вида согласующих — своя настройка, и чужую бэкенд
         // отвергнет как противоречие, а не «поймёт, что имелось в виду».
-        position_ids: stage.approverKind === 'position' ? stage.positionIds : [],
+        // Должности — парами (B8.1): своей компании с пустым `company`.
+        position_ids: [],
+        positions: stage.approverKind === 'position' ? stage.positions : [],
         user_ids: stage.approverKind === 'users' ? stage.userIds : [],
         approver_key: stage.approverKind === 'subject' ? stage.approverKey : '',
         // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
@@ -254,7 +266,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
       order: stage.order,
       name: stage.name,
       quorum: stage.quorum,
-      positionIds: stage.roles.map((role) => role.position_id),
+      positions: stage.roles.map((role) => ({
+        company: role.company ?? '', position_id: role.position_id,
+      })),
       userIds: stage.user_ids ?? [],
       approverKey: stage.approver_key ?? '',
       condition: stage.condition ?? [],
@@ -267,11 +281,11 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
     });
 
   const knownNames = useMemo(() => {
-    const names: Record<number, string> = {};
+    const names: Record<string, string> = {};
     for (const stage of route?.stages ?? []) {
       for (const role of stage.roles) {
-        if (role.title) names[role.position_id] = [role.title, role.department_name]
-          .filter(Boolean).join(' · ');
+        if (role.title) names[refKey({ company: role.company ?? '', position_id: role.position_id })] =
+          roleLabel(role);
       }
     }
     return names;
@@ -284,7 +298,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         + 'ролей у платформы нет.');
       return;
     }
-    if (draft.approverKind === 'position' && draft.positionIds.length === 0) {
+    if (draft.approverKind === 'position' && draft.positions.length === 0) {
       setDraftError('Нужна хотя бы одна должность: этап без неё движок не '
         + 'запустит.');
       return;
@@ -603,12 +617,11 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                           ) : (
                             stage.roles.map((role) => (
                               <Badge
-                                key={role.position_id}
+                                key={refKey({ company: role.company ?? '', position_id: role.position_id })}
                                 variant="secondary"
                                 className={role.is_active ? '' : 'opacity-60'}
                               >
-                                {[role.title, role.department_name].filter(Boolean).join(' · ')
-                                  || `Должность #${role.position_id}`}
+                                {roleLabel(role)}
                                 {!role.is_active && ' (неактивна)'}
                               </Badge>
                             ))
@@ -714,7 +727,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                         setDraft({
                           ...draft,
                           approverKind: value as ApproverKind,
-                          positionIds: value === 'position' ? draft.positionIds : [],
+                          positions: value === 'position' ? draft.positions : [],
                           userIds: value === 'users' ? draft.userIds : [],
                           approverKey: value === 'subject' ? draft.approverKey : '',
                         })
@@ -849,9 +862,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                     <div className="space-y-1.5">
                       <Label>Должности согласующих</Label>
                       <PositionPicker
-                        value={draft.positionIds}
+                        value={draft.positions}
                         knownNames={knownNames}
-                        onChange={(ids) => setDraft({ ...draft, positionIds: ids })}
+                        onChange={(refs) => setDraft({ ...draft, positions: refs })}
                       />
                       {draft.id !== null && (
                         <p className="text-xs text-muted-foreground">

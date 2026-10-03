@@ -4,7 +4,12 @@
  * Все выключены по умолчанию: маршрут без них работает как раньше. Флаги
  * снимком уходят в процесс при отправке — правка здесь не меняет уже идущие
  * согласования. «Роли» в согласовании — HR-должности, поэтому получатели
- * уведомлений и эскалация выбираются должностями.
+ * уведомлений и эскалация выбираются должностями — своей компании или
+ * вышестоящей (B8.1: ГД и ФД дочерней — в штате холдинга).
+ *
+ * Исключение из «снимком при отправке» — «Решение из вышестоящей компании»:
+ * его движок читает из маршрута в момент решения, поэтому оно действует
+ * сразу, в том числе на идущие согласования.
  */
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -13,40 +18,58 @@ import { toast } from 'sonner';
 
 import { signoffApi } from '@/api/signoff';
 import { PositionPicker } from '@/components/signoff/PositionPicker';
+import { refKey } from '@/components/signoff/crossCompany';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { reportApiError } from '@/lib/apiError';
-import type { ApprovalRoute, RouteFlagsInput } from '@/types/signoff';
+import type { ApprovalRoute, PositionBrief, PositionRef, RouteFlagsInput } from '@/types/signoff';
 
 interface Flags {
   forbid_self_approval: boolean;
   reject_comment_min: number;
   lazy_resolution: boolean;
   skip_unmatched_groups: boolean;
-  no_executor_notify_position_ids: number[];
-  escalation_position_id: number | null;
-  self_skip_notify_position_ids: number[];
+  /** Должности парами: свои и вышестоящих компаний вместе (B8.1). */
+  no_executor_notify: PositionRef[];
+  escalation: PositionRef | null;
+  self_skip_notify: PositionRef[];
+  allow_direct_decisions: boolean;
 }
+
+const own = (ids: number[] | undefined): PositionRef[] =>
+  (ids ?? []).map((id) => ({ company: '', position_id: id }));
 
 const flagsOf = (route: ApprovalRoute): Flags => ({
   forbid_self_approval: route.forbid_self_approval,
   reject_comment_min: route.reject_comment_min,
   lazy_resolution: route.lazy_resolution,
   skip_unmatched_groups: route.skip_unmatched_groups ?? false,
-  no_executor_notify_position_ids: route.no_executor_notify_position_ids ?? [],
-  escalation_position_id: route.escalation_position_id,
-  self_skip_notify_position_ids: route.self_skip_notify_position_ids ?? [],
+  no_executor_notify: [...own(route.no_executor_notify_position_ids),
+    ...(route.no_executor_notify_foreign ?? [])],
+  escalation: route.escalation_position_id
+    ? { company: route.escalation_position_company ?? '', position_id: route.escalation_position_id }
+    : null,
+  self_skip_notify: [...own(route.self_skip_notify_position_ids),
+    ...(route.self_skip_notify_foreign ?? [])],
+  allow_direct_decisions: route.allow_direct_decisions ?? false,
 });
 
-const namesOf = (route: ApprovalRoute): Record<number, string> => {
-  const names: Record<number, string> = {};
-  for (const row of [
+/** Пары обратно в поля ручки: свои — id, вышестоящих компаний — парами. */
+const split = (refs: PositionRef[]) => ({
+  own: refs.filter((ref) => !ref.company).map((ref) => ref.position_id),
+  foreign: refs.filter((ref) => ref.company),
+});
+
+const namesOf = (route: ApprovalRoute): Record<string, string> => {
+  const names: Record<string, string> = {};
+  const rows: PositionBrief[] = [
     ...(route.no_executor_notify_positions ?? []),
     ...(route.self_skip_notify_positions ?? []),
     ...(route.escalation_position ? [route.escalation_position] : []),
-  ]) names[row.id] = row.title;
+  ];
+  for (const row of rows) names[refKey({ company: row.company ?? '', position_id: row.id })] = row.title;
   return names;
 };
 
@@ -78,7 +101,22 @@ export function RouteFlagsCard({ route }: { route: ApprovalRoute }) {
       return;
     }
     setError('');
-    save.mutate({ ...flags, reject_comment_min: min });
+    const notify = split(flags.no_executor_notify);
+    const skip = split(flags.self_skip_notify);
+    save.mutate({
+      forbid_self_approval: flags.forbid_self_approval,
+      reject_comment_min: min,
+      lazy_resolution: flags.lazy_resolution,
+      skip_unmatched_groups: flags.skip_unmatched_groups,
+      no_executor_notify_position_ids: notify.own,
+      no_executor_notify_foreign: notify.foreign,
+      escalation_position_id: flags.escalation?.position_id ?? null,
+      escalation_position_company: flags.escalation?.company ?? '',
+      self_skip_notify_position_ids: skip.own,
+      self_skip_notify_foreign: skip.foreign,
+      ...(route.cross_company_decisions
+        ? { allow_direct_decisions: flags.allow_direct_decisions } : {}),
+    });
   };
 
   return (
@@ -110,9 +148,10 @@ export function RouteFlagsCard({ route }: { route: ApprovalRoute }) {
           <div className="space-y-1.5">
             <Label>Должность эскалации</Label>
             <PositionPicker
-              value={flags.escalation_position_id ? [flags.escalation_position_id] : []}
+              single
+              value={flags.escalation ? [flags.escalation] : []}
               knownNames={names}
-              onChange={(ids) => set({ escalation_position_id: ids.length ? ids[ids.length - 1] : null })}
+              onChange={(refs) => set({ escalation: refs.length ? refs[refs.length - 1] : null })}
             />
             <p className="text-xs text-muted-foreground">
               Кому уходит шаг автора, если заменить его некем (генеральный директор).
@@ -121,9 +160,9 @@ export function RouteFlagsCard({ route }: { route: ApprovalRoute }) {
           <div className="space-y-1.5">
             <Label>Кого уведомить, если автор — сама эскалация</Label>
             <PositionPicker
-              value={flags.self_skip_notify_position_ids}
+              value={flags.self_skip_notify}
               knownNames={names}
-              onChange={(ids) => set({ self_skip_notify_position_ids: ids })}
+              onChange={(refs) => set({ self_skip_notify: refs })}
             />
             <p className="text-xs text-muted-foreground">
               Шаг пропускается с записью в журнале (финансовый директор).
@@ -164,13 +203,29 @@ export function RouteFlagsCard({ route }: { route: ApprovalRoute }) {
         <div className="space-y-1.5">
           <Label>Кого уведомить о «Нет исполнителя»</Label>
           <PositionPicker
-            value={flags.no_executor_notify_position_ids}
+            value={flags.no_executor_notify}
             knownNames={names}
-            onChange={(ids) => set({ no_executor_notify_position_ids: ids })}
+            onChange={(refs) => set({ no_executor_notify: refs })}
           />
           <p className="text-xs text-muted-foreground">
             Тех, кто может назначить исполнителя (администратор, генеральный директор).
           </p>
+        </div>
+      )}
+
+      {route.cross_company_decisions && (
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <Label htmlFor="flag-direct">Решение из вышестоящей компании</Label>
+            <p className="text-xs text-muted-foreground">
+              Согласующий из холдинга решает задачу прямо из своей очереди, не
+              переходя на адрес этой компании. Этап с документом согласующего или
+              выбором варианта всё равно откроется здесь. Действует сразу, в том
+              числе на идущие согласования.
+            </p>
+          </div>
+          <Switch id="flag-direct" checked={flags.allow_direct_decisions}
+            onCheckedChange={(checked) => set({ allow_direct_decisions: checked })} />
         </div>
       )}
 

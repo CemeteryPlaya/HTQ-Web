@@ -3825,7 +3825,8 @@
       "finished": "Finished",
       "stage": "Stage",
       "submitted": "Submitted",
-      "decision": "Decision"
+      "decision": "Decision",
+      "company": "Company"
     },
     "routes": {
       "created": "The route was created — add stages",
@@ -3860,7 +3861,10 @@
       "pdfNeeded": "PDF required",
       "stepOf": "Step {{n}} of {{total}}",
       "needs": "needs: {{what}}",
-      "open": "Open"
+      "open": "Open",
+      "decideHere": "Decide here",
+      "openIn": "Open in {{company}}",
+      "noAccess": "No access to «{{company}}» — ask an administrator to grant it."
     },
     "userNumberLower": "user #{{id}}",
     "editor": {
@@ -3923,6 +3927,13 @@
       "whenNeeded": "When this stage is needed",
       "otherwise": "otherwise",
       "otherwiseHint": "The stage runs only when no condition in its step matched. An “otherwise” stage cannot have a condition of its own."
+    },
+    "foreign": {
+      "back": "Back to “Waiting for me”",
+      "notFound": "The approval was not found or is not yours.",
+      "openInCompany": "Open the document in {{company}}",
+      "note": "A document of «{{company}}». Its files and full card are on the company's address.",
+      "noSummary": "No document summary — open it on the company's address."
     }
   },
   "messenger": {
