@@ -73,8 +73,8 @@ def upsert_counterparty_from_1c(record: dict):
 
 def agreement_brief(ids) -> dict[str, dict]:
     """Договоры батчем — для привлечения партнёра ``tasks`` (хвост этапа 6,
-    M-5): ``{id строкой: {id, number, status, counterparty_id}}``, и только
-    это. Невозможные и несуществующие ключи в ответ не попадают. Зовётся в
+    M-5): ``{id строкой: {id, number, status, counterparty_id, is_annex}}``,
+    и только это (``is_annex`` — допсоглашение, к нему не привлекают). Невозможные и несуществующие ключи в ответ не попадают. Зовётся в
     контексте компании. Подмодуль ``bpp_agreements`` выключен — ``ServiceDisabled``."""
     require_service("bpp")
     require_service("bpp_agreements")

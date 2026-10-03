@@ -103,6 +103,18 @@ def test_agreement_of_another_counterparty_is_422():
 
 
 @pytest.mark.django_db
+def test_annex_is_422_even_by_direct_id():
+    """Поиск допсоглашения не предлагает — и прямой id в теле их не пропускает."""
+    cp = _cp()
+    main = _agreement(cp)
+    annex = _agreement(cp, number="ДГ-2026-000002", parent_agreement=main)
+    resp = _post(_partner(cp), bpp_agreement_id=str(annex.pk))
+    assert resp.status_code == 422, resp.content
+    assert "допсоглашение" in resp.json()["detail"]
+    assert not ContractorEngagement.objects.exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("status", ["draft", "on_review", "rework", "rejected",
                                     "terminated", "replaced"])
 def test_unsuitable_status_is_422(status):
@@ -228,13 +240,13 @@ def test_search_is_empty_for_unlinked_partner_and_needs_edit_level():
 # ─────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
-def test_agreement_brief_exposes_only_four_keys_and_skips_garbage():
+def test_agreement_brief_exposes_only_five_keys_and_skips_garbage():
     cp = _cp()
     agreement = _agreement(cp)
     brief = bpp.agreement_brief([str(agreement.pk), "мусор", str(uuid.uuid4())])
     assert brief == {str(agreement.pk): {
         "id": str(agreement.pk), "number": agreement.number, "status": "active",
-        "counterparty_id": str(cp.pk)}}
+        "counterparty_id": str(cp.pk), "is_annex": False}}
 
 
 # ─────────────────────────────────────────────────────────────────────────

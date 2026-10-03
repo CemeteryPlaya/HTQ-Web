@@ -472,6 +472,10 @@ def _check_bpp_agreement_link(row: ContractorEngagement, *, full: bool, token=No
             raise AgreementLinkInvalid(
                 f"Договор {brief['number']} заключён с другим контрагентом, "
                 f"не с «{row.contractor.name}»")
+        if brief.get("is_annex"):
+            raise AgreementLinkInvalid(
+                f"{brief['number']} — допсоглашение; привлечение оформляют по "
+                f"основному договору")
         if brief["status"] not in _BPP_USABLE:
             raise AgreementLinkInvalid(
                 f"Договор {brief['number']} ещё или уже не действует — "

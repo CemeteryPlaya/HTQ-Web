@@ -27,11 +27,12 @@ USABLE_STATUSES = (AgreementStatus.ACTIVE, AgreementStatus.FULFILLED)
 
 def _card(agr: Agreement) -> dict:
     return {"id": str(agr.pk), "number": agr.number, "status": agr.status,
-            "counterparty_id": str(agr.counterparty_id) if agr.counterparty_id else None}
+            "counterparty_id": str(agr.counterparty_id) if agr.counterparty_id else None,
+            "is_annex": agr.parent_agreement_id is not None}
 
 
 def brief(ids) -> dict[str, dict]:
-    """``{id строкой: {id, number, status, counterparty_id}}``; невозможные
+    """``{id строкой: {id, number, status, counterparty_id, is_annex}}``; невозможные
     и несуществующие ключи в ответ не попадают."""
     keys = set()
     for raw in ids:
