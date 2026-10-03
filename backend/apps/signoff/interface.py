@@ -103,6 +103,7 @@ __all__ = [
     "pending_step",
     "decision_stats",
     "is_participant",
+    "participant_subject_ids",
     "purge_processes",
 ]
 
@@ -505,14 +506,38 @@ def is_participant(user_id: int, subject_type: str, subject_id: int | str) -> bo
     которому сам signoff показывает процессы (``views._visible_processes``).
     """
     require_service("signoff")
+    return bool(participant_subject_ids(user_id, subject_type, [subject_id]))
+
+
+def participant_subject_ids(user_id: int, subject_type: str, subject_ids) -> set:
+    """Какие из ``subject_ids`` человек согласовывал — правило
+    ``is_participant`` пачкой, одной выборкой (поиск договоров БЗО для
+    соседа, D-S8-3: без запроса на строку).
+
+    Возвращает подмножество ВХОДНЫХ ключей в том виде, в каком их передали
+    (``"ABC…"`` вернётся ``"ABC…"``, хотя хранится в нижнем регистре); ключ,
+    которым объект этого типа быть не может, — просто не участник, а не
+    ошибка всего ответа. Пустой вход — без запроса.
+    """
+    require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
 
-    return ApprovalTask.objects.filter(
+    by_key: dict[str, list] = {}
+    for raw in subject_ids:
+        try:
+            key = registry.storage_key(subject_type, raw)
+        except registry.BadSubjectId:
+            continue
+        by_key.setdefault(key, []).append(raw)
+    if not by_key:
+        return set()
+    found = ApprovalTask.objects.filter(
         user_id=user_id,
         stage__process__subject_type=subject_type,
-        stage__process__subject_id=registry.storage_key(subject_type, subject_id),
-    ).exists()
+        stage__process__subject_id__in=list(by_key),
+    ).values_list("stage__process__subject_id", flat=True).distinct()
+    return {raw for key in found for raw in by_key[key]}
 
 
 def decision_stats(subject_type: str, *, limit: int = 20) -> list[dict]:
