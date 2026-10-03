@@ -551,7 +551,9 @@ business logic).
 | `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
 | `/api/tasks/v1/contractors/`, `contractors/{id}/` | GET, POST, PATCH, DELETE | Партнёры (подрядные организации). Связь с контрагентом модуля «Закупки и оплаты» (A6.1): ввод `bpp_counterparty_id` (UUID строкой; `null`/`""` — снять), в ответе `bpp_counterparty_id` и `bpp_counterparty {id, name, reg_number, status}` (`null` при заполненном ключе — модуль выключен). Новая связь — только с «Активен» (иначе 409), неизвестный ключ — 404, контрагент у другого партнёра или расходится БИН/ИИН — 409, выключенный модуль на записи связи — 503. Смена контрагента снимает договоры привлечений (номер в `contract_no` остаётся). Прежних `counterparty_id`/`counterparty` («Договоры») в API нет |
 | `/api/tasks/v1/contractors/counterparty-search`   | GET    | `?q=&limit=` (по умолчанию 20, до 100) — выбор контрагента в карточке партнёра: только «Активен», по наименованию или БИН/ИИН; строки `{id, name, short_name, reg_number, country_code, status, contact_person, phone, email, legal_address}`. Гейт — как у правки партнёра (`tasks:admin`, `admin=True`): ролей модуля закупок не требует; модуль выключен — 503 |
-| `/api/tasks/v1/contractor-engagements/`, `{id}/`  | GET, POST, PATCH, DELETE | Привлечения партнёра. `agreement_id` — договор «Договоров»: принимается, только если контрагент договора перенесён (B6.1) в контрагента модуля, с которым связан партнёр (иначе 409); номер ложится в `contract_no` |
+| `/api/tasks/v1/contractor-engagements/`, `{id}/`  | GET, POST, PATCH, DELETE | Привлечения партнёра. `agreement_id` — договор «Договоров»: принимается, только если контрагент договора перенесён (B6.1) в контрагента модуля, с которым связан партнёр (иначе 409); номер ложится в `contract_no`. `bpp_agreement_id` — договор модуля «Закупки и оплаты» (UUID): тот же контрагент, что у партнёра (`bpp_counterparty_id`), статус «Действует» или «Исполнен»; ключ не UUID, договора нет, чужой контрагент, партнёр без контрагента или неподходящий статус — 422; номер `ДГ-…` берётся у модуля (`bpp.interface.agreement_brief`) и ложится в `contract_no` (из запроса не принимается). Выбор одного договора снимает другой; смена контрагента партнёра обнуляет оба ключа, номер остаётся. В ответе — `bpp_agreement {id, number, status}`. У замороженной компании (`contracts_freeze`) новая привязка `agreement_id` — 409, старая читается |
+| `/api/tasks/v1/contractor-engagements/agreement-search` | GET | `?contractor_id=&q=&limit=` (по умолчанию 20, до 100) — выбор договора модуля для привлечения: договоры контрагента партнёра в статусах «Действует»/«Исполнен» (без допсоглашений), номер / номер по документу / наименование от 2 символов. Права — как в реестре договоров (`bpp.agreements`, `bpp.agreements.all`, СН/ПМ — свои проекты): нет права — `[]`; партнёр без контрагента — `[]`. Гейт — как у правки привлечения (`tasks:admin`, `admin=True`); модуль выключен — 503. Строки `{id, number, status, name, ext_number, ext_date}` |
+
 | `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
@@ -1098,7 +1100,7 @@ Every path is registered in **both** the slashed and bare spelling
 доработку — тоже 403 `contracts_frozen` (колбэки предметов, `approval_hooks._guard`).
 `contracts_freeze` не морозит раздел, пока есть идущие согласования его документов
 (ошибка со списком); `--revoke-pending` отзывает их (документы — в черновик) и
-замораживает одной транзакцией. Пока в схеме компании нет таблицы заморозки
+замораживает одной транзакцией; документы «на согласовании» без процесса (отзывать нечем) замораживаются как есть и печатаются в отчёте команды. Пока в схеме компании нет таблицы заморозки
 (код выкачен, `migrate_companies` не прогнан) раздел считается незамороженным
 (`fallback contracts.freeze.table_missing`, expected). Фоновых задач у `contracts` нет.
 
@@ -1543,6 +1545,7 @@ schema the platform can run on.
 | `GET` / `PATCH projects/<id>` | Карточка (со сроками `date_start`/`date_end` и кодом записи в 1С `ext_1c_ref` — тот же ключ принимают `POST` и `PATCH`; уникален среди непустых в компании, занятый — 422 `E-PRJ-01`) / правка (смена руководителя добавляет его в участники). Название, статус, сроки и руководителя повторяет доска задач проекта и принимает любую правку (D-02, решение 01.10: «Проект» главный) — название, занятое другой доской, она получает с кодом проекта. Конец раньше начала — 422 `E-VAL-01` (поле `date_end`). `409 E-PRJ-04` — отказ соседа, повторяющего поля «Проекта»; доска задач так не отказывает |
 | `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
 | `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
+| `GET user-names` (`?ids=1,2,3`, до 200) | ФИО из учёток `users` — `{id строкой: ФИО}` — только для руководителей и участников проектов, ВИДИМЫХ вызывающему (без `project.all` — где он участник; не справочник пользователей); id не из цифр ASCII или больше int4 пропускаются; чужие и невозможные id в ответ не попадают. Подписи карточки «Проекта» у ролей без кадровых прав (`hr/v1/employees` им — 403) |
 
 ---
 
@@ -1740,7 +1743,7 @@ D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `
 Для соседних аппок (`bpp.interface`): `find_by_number(number)` — счёт по
 `СЧ-ГГГГ-NNNNNN` для сверки выписки (A4.2); `closing_docs_pending_for_user
 (user_id)` — счета автора в «Ждёт закрывающих» для ежедневной сводки (A3.2).
-Для партнёров `tasks` (A6.1): `counterparty_brief(ids)` — `{id: {id, name,
+Для привлечений `tasks` (хвост этапа 6, M-5): `agreement_brief(ids)` — `{id: {id, number, status, counterparty_id}}` батчем и ничего больше; `search_agreements(query, *, partner_key, token, company, limit=20)` — договоры контрагента в статусах «Действует»/«Исполнен» с учётом прав `token` на договоры (как реестр; нет права или выключен подмодуль `bpp_agreements` — `[]`); `visible_agreement_brief(ids, *, token, company)` — `agreement_brief` только по видимым `token` договорам (привязка в `tasks`: невидимый — как несуществующий, 422). `agreement_brief` при выключенном `bpp_agreements` — `ServiceDisabled`. Для партнёров `tasks` (A6.1): `counterparty_brief(ids)` — `{id: {id, name,
 short_name, reg_number, country_code, status, contact_person, phone, email,
 legal_address}}` батчем (неизвестные и невозможные ключи пропускаются) и
 `search_counterparties(query, *, limit=20)` — те же карточки, только
@@ -1890,6 +1893,17 @@ POST идемпотентны (`Idempotency-Key`: повтор отдаёт пе
 | Метод и путь | Что делает |
 |---|---|
 | `GET overview` | `{shows_money, approvals, budgets?, requests?, plan?, agreements?, invoices?, accountable?, bank?, dashboard?, alternatives?, kpi?, admin?}`. `approvals` — `{pending}`: задачи signoff по документам `bpp.*`, ждущие решения пользователя (`signoff.pending_for_user`). `budgets` (`bpp.budgets` view, `bpp_budget`) — `{total, approved, draft, can_create, projects?}`, `projects` — бюджет каждого проекта отдельно (решение 01.10: суммы разных проектов не складываются): `[{budget_id, project: {id, code, name}, currency_code, limit_amount, committed, available}]` по утверждённым бюджетам, итоги — по видимым строкам (как реестр L-01: СН и ПМ — свои группы статей); проект без строк пользователя не показывается; по коду проекта. `requests` (`bpp.requests` view, `bpp_requests`) — `{total, draft, in_approval, rework, approved, can_create}`. `plan` (`bpp.plan` или `bpp.plan.all` view, `bpp_requests`) — `{open}`: открытые позиции; у СН и ПМ — свои по всем ролям инициатора (реестр показывает одну роль за раз). `agreements` (`bpp_agreements`) — `{total, draft, on_review, rework, active}`. `invoices` (`bpp_invoices`) — `{total, draft, returned, tabs}`; `tabs` — счётчики вкладок реестра L-06 по правам: `fd` (`bpp.invoices.decision` edit), `to_pay` и `docs_provided` (`bpp.invoices.payment` edit), `awaiting_docs` (`bpp.invoices` create или `bpp.invoices.closing_docs` edit), `bank_unconfirmed` (`bpp.bank` view, `bpp_bank`); число = `total` ответа `GET invoices?tab=<вкладка>`. `accountable` (`bpp_accountable`) — `{total, awaiting_report, can_create, awaiting_accounting?}` (последнее — при `bpp.accountable.payment` edit). `bank` (`bpp.bank` view, `bpp_bank`) и `dashboard` (`bpp.dashboard` view) — `{}`: раздел открыт. `alternatives` (`bpp_alternatives`) — `{feed, submitted?, mine_submitted?}`: документы ленты L-09, поданные АП в ожидании решения (ФД, ТД, ОД, ГД — `alternatives.read.sees_all`), свои поданные (с правом подавать). `kpi` (`bpp.kpi` view, `bpp_alternatives`) — `{preliminary, confirmed, saving_confirmed?}`, видимость как у отчёта R-01 (СН — свои). `admin` (`bpp.settings` или `bpp.routes` edit) — `{no_executor, routes, settings, refdata, projects}`: идущие процессы документов модуля с этапом «Нет исполнителя» (`signoff.interface.count_no_executor`) и какие разделы администрирования открыты. |
+
+**Сводка группы по БЗО (A8.1, D-S7-8)** — `GET /api/bpp/v1/holding/summary` (`views_holding.py`, `services/holding/summary.py`).
+Три замка: гейт модуля `bpp:read` → узел `bpp.holding` view (ФД и ГД; `EXPLICIT_ONLY`, `access/0023`) → поддомен
+компании вида «холдинг» (`companies.is_holding`; платформенный администратор проходит вид компании). На поддомене
+дочерней — 403 даже у директора с унаследованными ролями; во время `migrate_companies` — 503 «пересобираются».
+Ответ `{companies: [{company_slug, company_name, budgets, budgets_other_currency, limit_kzt, invoices_to_pay:
+{count, amount_kzt}, invoices_paid: {count, amount_kzt}, agreements_active}], totals}` — агрегаты SQL по
+представлениям `holding.bpp_*` (читатели `apps/bpp/holding_models.py`): `limit_kzt` — Σ строк действующей версии
+утверждённых бюджетов в KZT (бюджеты в другой валюте — отдельным счётчиком), «к оплате» — статусы «К оплате» и
+«Оплачено частично» (вкладка реестра), «оплачено» — «Оплачено», «Ждёт закрывающих», «Документы предоставлены»,
+«Закрыт»; «Задействовано» не входит. Суммы совпадают с `total`/`totals` реестров компаний.
 
 **Альтернативы (A5.1)** — подмодуль `bpp_alternatives`, префикс `/api/bpp/v1/alternatives/…` (ТЗ §12.1, §12.3,
 §12.7, BR-090…092; этап 5 A, задачи 2 и 4). Альтернативное предложение (АП, `АП-ГГГГ-NNNNNN`) — другой контрагент на часть
