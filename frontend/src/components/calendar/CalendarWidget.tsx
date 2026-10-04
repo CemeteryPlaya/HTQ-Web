@@ -18,6 +18,7 @@ import { CalendarEvent } from '@/types/calendar';
 import { cn } from '@/lib/utils';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { canEditCalendarEvent, canEditProductionDay } from './calendarAccess';
 import { EventForm } from './EventForm';
 
 
@@ -54,8 +55,9 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     });
     const permissions = usePermissions();
     
-    // Check if the current user has permission to edit holidays
-    const isAuthorized = permissions.atLeast('hr', 'read');
+    // Правка дня производственного календаря — узел refdata.production_calendar
+    // (ОД и HR управляющей компании, A7.1); читать календарь может любой
+    // сотрудник. Вычисляется после загрузки дней (признак компании — с сервера).
 
     const dateLocale = i18n.language === 'ru' ? ru : enUS;
     const startDate = startOfMonth(currentDate);
@@ -78,6 +80,8 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
         queryFn: () => fetchProductionCalendar(format(startDate, 'yyyy-MM-dd'), format(endDate, 'yyyy-MM-dd')),
     });
     const safeProdDays = Array.isArray(prodDays) ? prodDays : [];
+    const isAuthorized = canEditProductionDay(
+        permissions.can('refdata.production_calendar', 'edit'), safeProdDays);
     const hasHolidayData = safeProdDays.some((day) => day.note);
     const hasTimelineData = safeTasks.length > 0 || safeEvents.length > 0 || hasHolidayData;
 
@@ -178,8 +182,7 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     // Author-or-admin rule for edit/delete + RSVP-as-author gating.
     const currentUserId = activeProfile?.id ? Number(activeProfile.id) : null;
     const canEditEvent = (ev: CalendarEvent): boolean => {
-        if (currentUserId && (ev.creator_id ?? ev.creator) === currentUserId) return true;
-        return isAuthorized;
+        return canEditCalendarEvent(ev, currentUserId, activeProfile?.roles);
     };
     const myRsvpStatus = (ev: CalendarEvent): 'pending' | 'accepted' | 'declined' | null => {
         if (!currentUserId) return null;

@@ -10,12 +10,17 @@ from __future__ import annotations
 from django.http import Http404
 
 from apps.access import interface as access
+from apps.users import interface as users
 from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error, uuid_or_404
 
 from . import schemas
-from .models import Project
+from .models import Project, ProjectMember
 from .services import projects
+
+
+#: Потолок ``user_id`` (int4).
+_MAX_USER_ID = 2**31 - 1
 
 
 def _need(request, node: str, flag: str) -> None:
@@ -88,6 +93,8 @@ def _patch(request, project_id: str, data: schemas.ProjectPatch):
     except projects.ProjectChangeRejected as exc:
         # Правку не принял сосед, повторяющий поля «Проекта» (доска задач).
         raise DomainError("E-PRJ-04", str(exc), status=409) from exc
+    except projects.ProjectError as exc:
+        raise DomainError("E-PRJ-01", str(exc)) from exc
     return projects.brief(project)
 
 
@@ -134,3 +141,31 @@ def project_member(request, project_id: str, user_id: int):
     if request.method == "DELETE":
         return _remove_member(request, project_id=project_id, user_id=user_id)
     return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("GET",), module="project", level="read")
+def user_names(request):
+    """ФИО по ``?ids=1,2,3`` (до 200) — подписи руководителя и участников в
+    карточке «Проекта». Берутся из учёток ``users``: кадровый список
+    сотрудников закрыт ТД/ОД/ПМ. Раскрываются только руководители и
+    участники ВИДИМЫХ вызывающему проектов — это не справочник пользователей. Ответ
+    ``{id строкой: ФИО}``; чужие и невозможные id в него не попадают."""
+    wanted: set[int] = set()
+    for raw in request.GET.get("ids", "").split(",")[:200]:
+        raw = raw.strip()
+        # ``isdecimal``, а не ``isdigit``: «²» — «цифра», но не число для int();
+        # потолок — int4 колонки ``user_id``, иначе запрос отвечал бы 500.
+        if raw.isascii() and raw.isdecimal() and int(raw) <= _MAX_USER_ID:
+            wanted.add(int(raw))
+    if not wanted:
+        return {}
+    # Видимость — как у списка проектов: без ``project.all`` (у ПМ) только
+    # проекты, где вызывающий участник; чужой состав не раскрывается (A1.3).
+    visible = Project.objects.all()
+    if not _sees_all(request):
+        visible = visible.filter(members__user_id=request.token.user_id)
+    known = (set(visible.filter(manager_user_id__in=wanted)
+                 .values_list("manager_user_id", flat=True))
+             | set(ProjectMember.objects.filter(project__in=visible, user_id__in=wanted)
+                   .values_list("user_id", flat=True)))
+    return {str(row["id"]): row["full_name"] for row in users.get_users_brief(known)}

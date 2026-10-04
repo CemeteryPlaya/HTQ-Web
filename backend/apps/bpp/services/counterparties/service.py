@@ -31,6 +31,7 @@ from apps.bpp.services.core import audit
 from apps.bpp.services.core.errors import check_version
 from apps.refdata import interface as refdata
 from htqweb.errors import DomainError
+from htqweb.integrations.onec import is_guid
 
 from . import lookup, validation
 
@@ -142,8 +143,13 @@ def _save_unique(cp: Counterparty, save) -> None:
             save()
     except IntegrityError as exc:
         existing = _existing(cp.country_code, cp.reg_number, exclude_id=cp.pk)
-        if existing is None:  # нарушен другой ключ — не наш случай
-            raise
+        if existing is None:
+            if cp.ext_1c_ref and Counterparty.objects.filter(
+                    ext_1c_ref=cp.ext_1c_ref).exclude(pk=cp.pk).exists():
+                message = "Этот «Код в 1С» уже занят другим контрагентом."
+                raise DomainError("E-VAL-01", message, fields=[
+                    {"field": "ext_1c_ref", "message": message}]) from exc
+            raise  # нарушен другой ключ — не наш случай
         raise _duplicate_error(cp.country_code, cp.reg_number, existing) from exc
 
 
@@ -160,6 +166,12 @@ def _clean(data: dict, current: Counterparty | None = None) -> dict:
                 "contact_person", "phone", "ext_1c_ref"):
         if key in clean:
             clean[key] = (clean[key] or "").strip()
+    if clean.get("ext_1c_ref"):
+        clean["ext_1c_ref"] = clean["ext_1c_ref"].lower()
+        if not is_guid(clean["ext_1c_ref"]):
+            message = "«Код в 1С» — GUID записи 1С вида xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx."
+            raise DomainError("E-VAL-01", message,
+                              fields=[{"field": "ext_1c_ref", "message": message}])
     if "name" in clean and not clean["name"]:
         message = "Укажите наименование контрагента."
         raise DomainError("E-VAL-01", message, fields=[{"field": "name", "message": message}])
@@ -311,19 +323,19 @@ def export_rows(*, q: str | None = None, countries=(), statuses=(), sort: str | 
 # ── создание и правка ──────────────────────────────────────────────────
 
 @transaction.atomic
-def create(data: dict, *, actor_id: int | None) -> Counterparty:
+def create(data: dict, *, actor_id: int | None, audit_comment: str = "") -> Counterparty:
     clean = _clean(data)
     _raise_if_duplicate(clean["country_code"], clean["reg_number"])
     cp = Counterparty(**clean, created_by=actor_id, updated_by=actor_id)
     _save_unique(cp, lambda: cp.save(force_insert=True))
-    audit.record(cp, "created", actor_id=actor_id,
+    audit.record(cp, "created", actor_id=actor_id, comment=audit_comment,
                  changes={key: _plain(getattr(cp, key)) for key in EDITABLE_FIELDS})
     return cp
 
 
 @transaction.atomic
 def update(counterparty_id, data: dict, *, expected_version: int | None,
-           actor_id: int | None) -> Counterparty:
+           actor_id: int | None, audit_comment: str = "") -> Counterparty:
     cp = _lock(counterparty_id)
     check_version(cp, expected_version)
     if cp.status == CounterpartyStatus.ARCHIVED:
@@ -338,7 +350,7 @@ def update(counterparty_id, data: dict, *, expected_version: int | None,
     for key in changed:
         setattr(cp, key, clean[key])
     _save_unique(cp, lambda: _touch(cp, actor_id, *changed))
-    audit.record(cp, "updated", actor_id=actor_id, changes=changed)
+    audit.record(cp, "updated", actor_id=actor_id, changes=changed, comment=audit_comment)
     return cp
 
 

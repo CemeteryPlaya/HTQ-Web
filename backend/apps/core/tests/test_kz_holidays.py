@@ -101,3 +101,37 @@ def test_point_lookups_pick_the_year_from_the_date():
     assert kz_holidays.holiday_note(date(2029, 1, 1)) == "Новый год"
     assert not kz_holidays.is_holiday(date(2027, 2, 11))
     assert kz_holidays.holiday_note(date(2027, 2, 11)) is None
+
+
+# ── исходный день переноса (D-S7-7: банковские дни) ──────────────────────
+
+def test_transfer_source_remembers_the_original_holiday_day():
+    # Наурыз 2026: 21.03 (сб) и 22.03 (вс) переносятся на 24.03 и 25.03.
+    assert kz_holidays.transfer_source(date(2026, 3, 24)) == date(2026, 3, 21)
+    assert kz_holidays.transfer_source(date(2026, 3, 25)) == date(2026, 3, 22)
+    assert kz_holidays.transfer_source(date(2026, 3, 21)) is None   # сам праздник
+    assert kz_holidays.transfer_source(date(2026, 3, 26)) is None   # обычный день
+    assert kz_holidays.transfer_source(date(2026, 3, 23)) is None   # праздник в будний день
+
+
+def test_transfer_source_weekday_tells_saturday_from_sunday():
+    assert kz_holidays.transfer_source(date(2026, 3, 24)).weekday() == 5
+    assert kz_holidays.transfer_source(date(2026, 3, 25)).weekday() == 6
+
+
+def test_transfer_source_is_consistent_with_holiday_note():
+    for year in (2025, 2026, 2027):
+        for day, name in kz_holidays.holidays_for_year(year).items():
+            is_transfer = name.endswith(kz_holidays.TRANSFER_SUFFIX)
+            assert (kz_holidays.transfer_source(day) is not None) == is_transfer, day
+
+
+def test_transfer_source_dropped_when_year_override_replaces_the_target(monkeypatch):
+    monkeypatch.setitem(kz_holidays.KZ_YEAR_OVERRIDES, 2026,
+                        {**kz_holidays.KZ_YEAR_OVERRIDES[2026], date(2026, 3, 24): None})
+    kz_holidays.holidays_for_year.cache_clear()
+    try:
+        assert kz_holidays.transfer_source(date(2026, 3, 24)) is None
+        assert kz_holidays.transfer_source(date(2026, 3, 25)) == date(2026, 3, 22)
+    finally:
+        kz_holidays.holidays_for_year.cache_clear()

@@ -14,7 +14,9 @@ class BppConfig(AppConfig):
 
     def ready(self):
         # Документы модуля в движке согласования и доступ к их журналу (B).
-        from . import approval_hooks, file_owners
+        # holding_models — читатели сводок холдинга: файл не из models/, и без
+        # явного импорта makemigrations их не увидит (как в apps/hr/apps.py).
+        from . import approval_hooks, file_owners, holding_models  # noqa: F401
 
         approval_hooks.register()
         # Документы модуля — владельцы файлов платформенной apps.files (A).

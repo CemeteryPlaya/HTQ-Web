@@ -413,3 +413,26 @@ def test_migrated_to_empty_when_bpp_disabled(frozen, monkeypatch):
     body = Client().get(f"{BASE}/agreements/{frozen['agreement']}",
                         **_headers(frozen["alpha"])).json()
     assert body["migrated_to"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revoke_pending_reports_documents_pending_without_a_process(two_company_schemas):
+    """Документ «на согласовании» без процесса (после неудачного отзыва или
+    ручной правки) отзывать нечем: движок его не знает, и заморозка запирала
+    его в этом состоянии молча. Команда обязана назвать такие документы."""
+    from io import StringIO
+
+    from apps.contracts.models import Agreement
+
+    slug, _ = two_company_schemas
+    with use_company(slug):
+        agreement = make_agreement(line=make_line(), counterparty=make_counterparty(),
+                                   status="draft")
+        Agreement.objects.filter(pk=agreement.pk).update(approval_state="pending")
+    out = StringIO()
+    call_command("contracts_freeze", company=slug, revoke_pending=True, stdout=out)
+    text = out.getvalue()
+    assert "без процесса" in text
+    assert f"contracts.agreement #{agreement.pk}" in text
+    with use_company(slug):
+        assert freeze.is_frozen()

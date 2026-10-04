@@ -248,14 +248,6 @@ def test_calendar_responses_match_the_fastapi_schemas():
     assert_each(listing[0]["exceptions"], "EventExceptionResponse")
 
 
-@pytest.mark.django_db
-def test_production_day_response_matches_the_fastapi_schema():
-    resp = Client().get(
-        f"{BASE}/production-calendar/?date__gte=2026-01-01&date__lte=2026-01-05",
-        **auth())
-    assert_each(resp.json(), "ProductionDayResponse")
-
-
 # ── gantt ───────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db

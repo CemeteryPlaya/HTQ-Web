@@ -548,3 +548,22 @@ def positions_by_title(titles: list[str]) -> dict[str, int]:
                 .order_by("id").values("id", "title")):
         found.setdefault(row["title"], row["id"])
     return found
+
+
+def mark_serving_subsidiaries(position_ids: list[int], *, dry_run: bool = False) -> dict[int, bool]:
+    """Выставить должностям признак ``serves_subsidiaries`` (роли должности
+    действуют во всех дочерних компаниях — блок C, ``bpp_group_directors``).
+
+    Идемпотентна: ``{id должности: True}`` — признак выставлен сейчас,
+    ``False`` — уже был. Неизвестные и неактивные должности в ответ не
+    попадают. ``dry_run`` — тот же ответ без записи. Работает в схеме
+    текущей компании (``use_company``)."""
+    require_service("hr")
+    ids = list(dict.fromkeys(position_ids))
+    rows = dict(Position.objects.filter(id__in=ids, is_active=True)
+                .values_list("id", "serves_subsidiaries"))
+    to_set = [pk for pk, already in rows.items() if not already]
+    if to_set and not dry_run:
+        Position.objects.filter(id__in=to_set).update(
+            serves_subsidiaries=True, updated_at=timezone.now())
+    return {pk: pk in set(to_set) for pk in rows}

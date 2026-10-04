@@ -643,3 +643,14 @@ def test_bank_tabs_and_recon_column_follow_real_reconciliation(company_context):
     rows = client.get(f"{BASE}/invoices", **s.auth(slug, s.FD)).json()["items"]
     assert {row["number"]: row["recon_status"] for row in rows} == {
         inv.number: recon for inv, recon in expected.items()}
+
+
+def test_default_due_date_is_five_bank_days_after_the_invoice_date():
+    """ТЗ §10.2 + D-S7-7: 20.03.2026 + 5 банковских дней — 31.03 (23.03 — праздник,
+    24.03 — перенос с субботы, банк работает, 25.03 — перенос с воскресенья, нет)."""
+    from datetime import date
+
+    from apps.bpp.services.invoices import invoices as invoice_service
+
+    assert invoice_service.default_due_date(date(2026, 3, 20)) == date(2026, 3, 31)
+    assert invoice_service.default_due_date(date(2026, 9, 25)) == date(2026, 10, 2)

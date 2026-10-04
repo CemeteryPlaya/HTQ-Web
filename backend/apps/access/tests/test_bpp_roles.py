@@ -10,7 +10,8 @@ OPERATIONS = ("bpp.budgets.approve", "bpp.requests.cancel_approved",
               "bpp.counterparties.block", "bpp.alternatives.select",
               "bpp.accountable.payment", "bpp.invoices.closing_docs",
               "project.all", "bpp.requests.all", "bpp.plan.reassign", "bpp.routes",
-              "project.board", "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all")
+              "project.board", "bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all",
+              "bpp.holding")
 
 
 def _flags(code: str, node: str) -> set[str]:
@@ -111,6 +112,14 @@ def test_only_fd_and_gd_see_all_plan_items():
 
 
 @pytest.mark.django_db
+def test_only_fd_and_gd_see_the_group_summary():
+    """A8.1 (D-S7-8, access/0023): сводка группы по БЗО — ФД и ГД, только просмотр."""
+    assert [c for c in ROLES if "view" in _flags(c, "bpp.holding")] == ["bpp-fd", "bpp-gd"]
+    for code in ROLES:
+        assert _flags(code, "bpp.holding") <= {"view"}, code
+
+
+@pytest.mark.django_db
 def test_who_sees_all_invoices_agreements_and_accountable():
     """D-S6-5 (access/0021): круг ролей прежней формулы «просмотр без
     создания», но узлом — СН, совмещающий ФД, не теряет чужие счета."""
@@ -121,7 +130,8 @@ def test_who_sees_all_invoices_agreements_and_accountable():
     assert [c for c in ROLES if "view" in _flags(c, "bpp.accountable.all")] == [
         "bpp-fd", "bpp-buh"]
     for code in ROLES:
-        for node in ("bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all"):
+        for node in ("bpp.invoices.all", "bpp.agreements.all", "bpp.accountable.all",
+              "bpp.holding"):
             assert _flags(code, node) <= {"view"}, (code, node)
 
 

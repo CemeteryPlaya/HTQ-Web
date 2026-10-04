@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from django.db import IntegrityError, transaction
 from django.forms.models import model_to_dict
 from django.http import Http404
@@ -17,6 +19,7 @@ from htqweb.http import api_view, json_error, uuid_or_404
 from . import models, schemas
 from .services import articles as article_rules
 from .services import editing
+from .services import production_calendar as calendar
 
 READ_ONLY_FIELDS = {"id", "created_at", "updated_at"}
 
@@ -131,3 +134,70 @@ article_groups = _collection(models.ArticleGroup, schemas.ArticleGroupIn, "name"
 article_group_item = _item(models.ArticleGroup, schemas.ArticleGroupPatch)
 articles = _collection(models.Article, schemas.ArticleIn, "code")
 article_item = _item(models.Article, schemas.ArticlePatch)
+
+
+# ── производственный календарь РК (A7.1, D-S7-1) ────────────────────────
+# Чтение — самообслуживание (access/self_service.py, причина ``open``): виджет
+# календаря нужен каждому сотруднику, а у ``employee-basic`` модуля refdata нет.
+# Правка — гейт модуля ``write`` + узел ``refdata.production_calendar`` строго
+# ``edit`` (без наследования от модуля) + управляющая компания.
+
+MAX_RANGE_DAYS = 370
+CALENDAR_NODE = "refdata.production_calendar"
+
+
+def _bad_param(name: str, message: str):
+    return json_error([{"type": "value_error", "loc": ["query", name], "msg": message}], 422)
+
+
+def _date_query(request, name: str):
+    raw = request.GET.get(name)
+    if raw in (None, ""):
+        return None, None
+    try:
+        return date.fromisoformat(raw), None
+    except ValueError:
+        return None, _bad_param(name, "Input should be a valid date in YYYY-MM-DD format")
+
+
+@api_view(methods=("GET",))
+def production_calendar(request):
+    from django.utils import timezone
+
+    from apps.core.services import require_service
+
+    require_service("refdata")
+    start, err = _date_query(request, "date__gte")
+    if err:
+        return err
+    end, err = _date_query(request, "date__lte")
+    if err:
+        return err
+    start = start or timezone.localdate().replace(day=1)
+    end = end or (start + timedelta(days=31))
+    if start > end:
+        return json_error("date__gte must be before date__lte", 400)
+    if (end - start).days > MAX_RANGE_DAYS:
+        return json_error("Date range is too large", 400)
+    company = getattr(request, "company", None) or {}
+    can_edit = editing.can_edit(request.token, company.get("slug"), CALENDAR_NODE, flags=("edit",))
+    return [schemas.ProductionDayResponse.model_validate({**row, "can_edit": can_edit})
+            for row in calendar.list_production_days(start, end)]
+
+
+@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate, module="refdata", level="write")
+def production_day_detail(request, target_date: str, data: schemas.ProductionDayUpdate):
+    company = getattr(request, "company", None) or {}
+    if not editing.can_edit(request.token, company.get("slug"), CALENDAR_NODE, flags=("edit",)):
+        raise DomainError(
+            "E-REF-03",
+            "Производственный календарь правят операционный директор и HR "
+            "управляющей компании на её поддомене.",
+            status=403)
+    try:
+        parsed = date.fromisoformat(target_date)
+    except ValueError:
+        return _bad_param("target_date", "Input should be a valid date in YYYY-MM-DD format")
+    day = calendar.update_production_day(parsed, day_type=data.day_type, note=data.note)
+    return {**schemas.ProductionDayResponse.model_validate(day).model_dump(mode="json"),
+            "can_edit": True}

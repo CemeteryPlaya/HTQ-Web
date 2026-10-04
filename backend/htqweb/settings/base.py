@@ -286,6 +286,12 @@ JWT_SECRET = env("JWT_SECRET", "change-me")
 JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "htqweb-auth"
 JWT_ACCESS_TTL_MIN = int(env("JWT_ACCESS_TTL_MIN", "60"))
+
+# Блокировка входа (D-S7-3, htqweb/ratelimit.py): столько неудач по одному
+# логину за AUTH_LOCKOUT_SECONDS закрывают вход на те же секунды. 0 — выключено;
+# в compose по умолчанию 0, включают после окна выкатки (ранбук).
+AUTH_LOCKOUT_THRESHOLD = int(env("AUTH_LOCKOUT_THRESHOLD", "0") or 0)
+AUTH_LOCKOUT_SECONDS = int(env("AUTH_LOCKOUT_SECONDS", "900") or 900)
 JWT_REFRESH_TTL_DAYS = int(env("JWT_REFRESH_TTL_DAYS", "7"))
 
 LANGUAGE_CODE = "ru"
@@ -717,7 +723,21 @@ FILES_UPLOAD_CEILING_MB = 20
 ANTIVIRUS_CLAMD_HOST = env("ANTIVIRUS_CLAMD_HOST", "")
 ANTIVIRUS_CLAMD_PORT = int(env("ANTIVIRUS_CLAMD_PORT", "3310"))
 # 20 МБ на локальной сети clamd проверяет за секунды; таймаут — на зависание.
-ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "60"))
+# Меньше самого короткого ``proxy_read_timeout`` путей загрузки в nginx (45s у
+# /api/ и /api/bpp/v1/bank/) и ``gunicorn --timeout 60``: иначе шлюз или
+# gunicorn оборвут запрос раньше, чем сканер «не ответит», и пользователь
+# получит 504/обрыв вместо 503 E-SYS-01 (A7.4).
+ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "30"))
+# ── 1С (заготовка, A7.3, D-38, D-S7-5) ──────────────────────────────────
+# Адрес публикации OData, учётная запись и пароль живут в файле секретов
+# (secrets/onec.env, подключается через env_file compose), а не в репозитории
+# и не в ``environment:`` compose. Пустой ONEC_ODATA_URL — интеграция выключена.
+ONEC_ODATA_URL = env("ONEC_ODATA_URL", "")
+ONEC_USER = env("ONEC_USER", "")
+ONEC_PASSWORD = env("ONEC_PASSWORD", "")
+ONEC_TIMEOUT = float(env("ONEC_TIMEOUT", "20"))
+# http (не https) — только для стенда: клиент иначе отказывается.
+ONEC_ALLOW_HTTP = env("ONEC_ALLOW_HTTP", "").lower() in ("1", "true", "yes")
 ALLOWED_MIME_TYPES = env("ALLOWED_MIME_TYPES", "")  # comma-separated, "" = allow all
 IMAGE_JPEG_QUALITY = int(env("IMAGE_JPEG_QUALITY", "85"))
 THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png

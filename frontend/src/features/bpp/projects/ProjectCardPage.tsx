@@ -50,7 +50,6 @@ export function ProjectCardPage() {
   const { id = '' } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const permissions = usePermissions();
-  const nameOf = useUserNames();
   const [editing, setEditing] = useState(false);
   const [busyMember, setBusyMember] = useState<number | null>(null);
 
@@ -64,6 +63,8 @@ export function ProjectCardPage() {
     queryFn: () => projectApi.members(id),
     enabled: project.isSuccess,
   });
+
+  const nameOf = useUserNames([project.data?.manager_user_id, ...(members.data ?? [])]);
 
   const canEdit = permissions.can('project.projects', 'edit');
   const canMembers = permissions.can('project.members', 'edit');
@@ -141,6 +142,7 @@ export function ProjectCardPage() {
         <Detail label={t('bpp.projects.customer', 'Заказчик')} value={data.customer_name} />
         <Detail label={t('bpp.projects.dateStart', 'Начало')} value={data.date_start ? formatDate(data.date_start) : ''} />
         <Detail label={t('bpp.projects.dateEnd', 'Окончание')} value={data.date_end ? formatDate(data.date_end) : ''} />
+        <Detail label={t('bpp.projects.ext1c', 'Код в 1С')} value={data.ext_1c_ref ?? ''} />
         {canBoard && (
           <div data-testid="project-board">
             <dt className="text-xs text-muted-foreground">{t('bpp.projects.board', 'Доска задач')}</dt>

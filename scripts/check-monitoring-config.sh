@@ -60,6 +60,16 @@ for file in docker-compose.yml docker-compose.test-local.yml docker-compose.test
         docker compose -f "$file" config >/dev/null 2>&1 \
         || fail "$file не разбирается"
     ok "$file"
+    # Второй разбор — с профилем antivirus: сервис clamav (healthcheck, лимит
+    # памяти, зеркало баз) без профиля в `config` не попадает, и его поломка
+    # осталась бы незамеченной до включения сканера на бою (A7.4).
+    DB_HOST=ci-placeholder \
+    GRAFANA_ADMIN_PASSWORD=ci-placeholder \
+    GF_TELEGRAM_BOT_TOKEN="000000:CI-PLACEHOLDER" \
+    ALERT_EMAIL_TO="ci@example.invalid" \
+        docker compose -f "$file" --profile antivirus config >/dev/null 2>&1 \
+        || fail "$file не разбирается с профилем antivirus"
+    ok "$file --profile antivirus"
 done
 
 # ─── 3. дашборды — валидный JSON ─────────────────────────────────────────────

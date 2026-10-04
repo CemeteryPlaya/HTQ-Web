@@ -858,6 +858,11 @@ class ContractorEngagement(models.Model):
     ложится его номер (ширина колонки — как у ``Agreement.number``), а у
     привлечений, чьего договора в системе нет, это по-прежнему свободный
     текст. Так номер виден и тогда, когда модуль «Договоры» выключен.
+
+    ``bpp_agreement_id`` — то же для договора модуля «Закупки и оплаты»
+    (хвост этапа 6, M-5): договор того же контрагента, «Действует» или
+    «Исполнен»; номер ``ДГ-…`` берётся у модуля и ложится в ``contract_no``.
+    Одновременно с ``agreement_id`` не живёт — выбор одного снимает другой.
     """
 
     contractor = models.ForeignKey(Contractor, on_delete=models.PROTECT,
@@ -875,6 +880,10 @@ class ContractorEngagement(models.Model):
                                 related_name="contractor_engagements")
     contract_no = models.CharField(max_length=100, null=True, blank=True)
     agreement_id = models.IntegerField(null=True, blank=True, db_index=True)
+    # Договор модуля «Закупки и оплаты» (``bpp.Agreement``, UUID строкой; пусто —
+    # «не выбран»): у замороженной компании новые договоры живут там.
+    bpp_agreement_id = models.CharField(max_length=36, default="", blank=True,
+                                        db_default="")
     scope = models.TextField(default="", blank=True, db_default="")
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)

@@ -40,6 +40,20 @@ export interface ContractorCounterpartyOption extends ContractorCounterpartyRef 
   legal_address: string;
 }
 
+/** Договор модуля «Закупки и оплаты» в строке привлечения. */
+export interface EngagementBppAgreementRef {
+  id: string;
+  number: string;
+  status: string;
+}
+
+/** Строка поиска договора модуля для выбора в привлечении. */
+export interface EngagementAgreementOption extends EngagementBppAgreementRef {
+  name: string;
+  ext_number: string;
+  ext_date: string | null;
+}
+
 /** Договор из «Договоров», по которому партнёр привлечён. */
 export interface EngagementAgreementRef {
   id: number;
@@ -107,6 +121,9 @@ export interface ContractorEngagement {
   contract_no: string | null;
   agreement_id: number | null;
   agreement: EngagementAgreementRef | null;
+  /** Договор модуля «Закупки и оплаты» (UUID); номер `ДГ-…` ставит бэкенд. */
+  bpp_agreement_id: string | null;
+  bpp_agreement: EngagementBppAgreementRef | null;
   scope: string;
   start_date: string | null;
   end_date: string | null;

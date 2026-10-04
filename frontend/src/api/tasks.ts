@@ -7,7 +7,7 @@ import type {
   Label, Project, Task, TaskComment, TaskAttachment, TaskStats, TaskStatus,
   TaskLink, Notification, TaskAssigneeRef, AssigneeRole, TaskTypeRef,
   Equipment, ResourceGanttResponse, Assignment, Site, ProjectSiteRef,
-  Contractor, ContractorCounterpartyOption, ContractorWorker, ContractorEngagement,
+  Contractor, ContractorCounterpartyOption, EngagementAgreementOption, ContractorWorker, ContractorEngagement,
   Roadmap, RoadmapStatus, RoadmapMetrics, SiteBlock, BlockStatus, BlockVolume,
   BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
@@ -625,6 +625,18 @@ export const fetchEngagements = async (params?: {
 }): Promise<ContractorEngagement[]> => {
   const res = await api.get(`${BASE}contractor-engagements/`, { params });
   return unwrap<ContractorEngagement>(res.data);
+};
+
+/** Договоры модуля для выбора в привлечении партнёра: контрагента этого
+ *  партнёра, «Действует»/«Исполнен», с учётом прав пользователя на договоры. */
+export const searchEngagementAgreements = async (
+  contractorId: number,
+  q?: string,
+): Promise<EngagementAgreementOption[]> => {
+  const res = await api.get(`${BASE}contractor-engagements/agreement-search`, {
+    params: { contractor_id: contractorId, ...(q ? { q } : {}) },
+  });
+  return Array.isArray(res.data) ? res.data : [];
 };
 
 export const createEngagement = async (

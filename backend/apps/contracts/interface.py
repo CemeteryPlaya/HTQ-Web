@@ -343,3 +343,13 @@ def revoke_for_migration(subject_type: str, ids) -> list[int]:
     from apps.contracts.services import migration_export
 
     return migration_export.revoke(subject_type, ids)
+
+
+def is_frozen() -> bool:
+    """Заморожен ли раздел у компании в текущем контексте (A6.2): новые связи
+    других аппок с документами «Договоров» (привлечение партнёра ``tasks``)
+    закрыты, старые читаются. Нет таблицы заморозки — «не заморожен»."""
+    require_service("contracts")
+    from apps.contracts.services import freeze
+
+    return freeze.is_frozen()

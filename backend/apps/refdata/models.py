@@ -187,3 +187,25 @@ class Article(_Base):
         problem = self.parent_problem(self.parent)
         if problem is not None:
             raise ValidationError({"parent": problem[0]})
+
+
+class ProductionDay(_Base):
+    """Ручное переопределение дня производственного календаря РК (D-S7-1).
+
+    Одна таблица на группу (``public``): базовый календарь считает
+    ``apps.core.kz_holidays``, строка здесь — правка поверх него. Раньше такие
+    строки жили в схеме каждой компании (``tasks.ProductionDay``).
+    ``working_days_since_epoch`` — бегущий счёт рабочих дней с 1 января года
+    строки (имя историческое, счётчик сбрасывается каждый год).
+    """
+
+    date = models.DateField(unique=True)
+    # working | weekend | holiday | short
+    day_type = models.CharField(max_length=20, default="working", db_default="working")
+    note = models.CharField(max_length=255, null=True, blank=True)
+    working_days_since_epoch = models.IntegerField(db_index=True)
+
+    class Meta:
+        ordering = ("date",)
+        verbose_name = "Производственный день"
+        verbose_name_plural = "Производственные дни"

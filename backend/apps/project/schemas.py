@@ -16,6 +16,7 @@ class ProjectIn(BaseModel):
     customer_counterparty_id: str = Field("", max_length=64)
     date_start: Optional[date] = None
     date_end: Optional[date] = None
+    ext_1c_ref: str = Field("", max_length=64)
 
 
 class ProjectPatch(BaseModel):
@@ -26,6 +27,7 @@ class ProjectPatch(BaseModel):
     customer_counterparty_id: Optional[str] = Field(None, max_length=64)
     date_start: Optional[date] = None
     date_end: Optional[date] = None
+    ext_1c_ref: Optional[str] = Field(None, max_length=64)
 
 
 class MemberIn(BaseModel):
