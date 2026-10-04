@@ -36,7 +36,7 @@
 
 Предупреждает, но не останавливается: держатели должностей холдинга без
 членства в компании не смогут перейти к её документам (членство и права —
-A8.1), а выключенный у компании модуль ``bpp`` маршрутами не пользуется.
+A8.1, команда ``bpp_group_directors``), а выключенный у компании модуль ``bpp`` маршрутами не пользуется.
 """
 
 from django.core.management.base import BaseCommand, CommandError
@@ -124,7 +124,8 @@ class Command(BaseCommand):
     def _warn(self, company: str, positions: dict) -> None:
         """Держатели должностей вышестоящих компаний без членства здесь не
         смогут перейти к документам этой компании — только решать из своей
-        очереди, если маршрут это разрешит (членство и права — A8.1)."""
+        очереди, если маршрут это разрешит. Членство выдаёт ``bpp_group_directors``
+        (A8.1)."""
         members = set(companies.active_member_ids(company))
         for key, ref in positions.items():
             if ref is None or not ref["company"]:
@@ -138,7 +139,7 @@ class Command(BaseCommand):
                     f"внимание: у держателей должности «{TITLES[key]}» компании "
                     f"{ref['company']} нет членства в {company} (учётки "
                     f"{', '.join(map(str, outsiders))}) — перейти к документам компании они "
-                    f"не смогут; членство и права — задача A8.1")
+                    f"не смогут; выдайте его: manage.py bpp_group_directors --holding <холдинг>")
         enabled, _ = companies.module_enabled(company, "bpp")
         if not enabled:
             self.stdout.write(f"внимание: модуль bpp у компании {company} выключен — "
