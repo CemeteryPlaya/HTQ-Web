@@ -95,7 +95,7 @@
 | D-28 | Формат ошибки `{"detail": "<текст из ТЗ §26.1>", "code": "E-…", "fields": […]}` | Q-C21 |
 | D-29 | Idempotency-Key (Redis, 24 ч) и оптимистическая блокировка `version` → 409 E-CON-01 | Q-C18 |
 | D-30 | Аудит append-only: триггер БД + запрет в коде; журнал скачиваний; хранение 5 лет | Q-C20, Q-B32 |
-| D-31 | Файлы документа — таблица версий поверх `media_files`; xml разрешён (отдаётся вложением); задел под ClamAV (интерфейс сканера, по умолчанию без проверки) | Q-C28, Q-B25 |
+| D-31 | Файлы документа — таблица версий поверх `media_files`; xml разрешён (отдаётся вложением); задел под ClamAV (интерфейс сканера, по умолчанию без проверки). **Обновлено 28.09:** одна файловая подсистема платформы `apps.files` (`file_object`, справочник «Типы файлов»), своя таблица `bpp` снята (`bpp/0007`); ClamAV сделан в A7.4 (выключен по умолчанию, D-S7-6), срок — на всю проверку (D-S8-1) | Q-C28, Q-B25 |
 | D-32 | Экспорт xlsx: синхронно до 10 000 строк, больше — фоном со ссылкой в уведомлении. Печать — HTML + WeasyPrint, бланк из `docs` (колонтитулы пришлют) | Q-C24, Q-C25, Q-B31 |
 | D-33 | Пилот — управляющая компания (холдинг). Директора и документы — в её схеме. Должность «Руководитель проекта» (ПМ) завести в структуре холдинга. Кросс-компанейское согласование — отдельный этап после пилота | Q-A08, Q-B15; решение 26.09 (Q-E02) |
 | D-34 | Навигация — новый раздел «Закупки и оплаты» (`/bpp`). «Мои согласования» — фильтр общего инбокса signoff по типам БЗО | Q-A06 |
@@ -117,7 +117,7 @@
 | Q-E07 — документы не пришли | статус с днями, фильтр и метрика, раздел в сводке автора, без запретов | D-13 |
 | Q-E08 — источник ставки НДС | справочник «страна × дата», правка в аудит | D-14 |
 | Q-E09 — исходный документ при частичной альтернативе | «Заменён», два черновика | D-25 |
-| Q-E10 — сколько АП | лимит 3 на документ, СН поднимает; ПМ — до 3 | D-25 |
+| Q-E10 — сколько АП | лимит 3 на документ, СН поднимает; ПМ — до 3 (снято: по матрице ролей ПМ АП не подаёт, D-S5-1) | D-25 |
 | Q-E11 — прочие показатели KPI | справочно | D-25 |
 | Q-E13 — «открытый» бюджет компании | служебный проект вида «Общие расходы компании» со своим бюджетом по тем же правилам | D-06, A1.3 |
 | Q-E15 — закрытые документы | остаются в `contracts`, она не удаляется | D-35 |
@@ -195,7 +195,7 @@ backend/apps/bpp/
   approval_hooks.py       # регистрация предметов в signoff (B)
   admin.py                # ModelAdmin с ServiceGatedAdminMixin
   models/__init__.py      # импорт всех подмодулей моделей (правит A по заявкам B)
-  models/core.py          # A: BppModel, NumberSequence, AuditLog, DocumentFile
+  models/core.py          # A: BppModel, NumberSequence, AuditLog (DocumentFile снят 28.09 — файлы в apps.files)
   models/counterparties.py# A: Counterparty, CounterpartyBankAccount, OrgBankAccount, StatementTemplate
   models/budget.py        # B: Budget, BudgetVersion, BudgetLine
   models/requests.py      # B: PurchaseRequest, PurchaseRequestItem
@@ -308,20 +308,32 @@ def article_brief(ids: list[str]) -> dict[str, dict]: ...    # {id: {id, code, n
 def article_groups() -> list[dict]: ...                      # [{id, code, name, node_key, is_active}]
 def uom_brief(ids: list[str]) -> dict[str, dict]: ...        # {id: {id, code, short_name, is_active}}
 def country_brief(codes: list[str]) -> dict[str, dict]: ...  # {code: {code, name, is_active}}
-def can_edit(user, company_slug: str | None) -> bool: ...    # роль управляющей компании
+def can_edit(user, company_slug: str | None, node: str = "refdata", *, flags=...) -> bool: ...  # роль управляющей компании
+# этап 7 (A7.1, D-S7-1, D-S7-7): производственный календарь и банковские дни
+def working_days_between(start: date | None, end: date | None) -> int | None: ...  # + days_between, add_working_days, day_type, is_working_day, production_days
+def is_bank_day(day: date) -> bool: ...                      # + add_bank_days(day, n), bank_days_before(day, n)
+def active_articles(group_code: str) -> list[dict]: ...
 
 # apps/project/interface.py  (A1.3)
 def project_brief(ids: list[str]) -> dict[str, dict]: ...    # {id: {id, code, name, kind, status, country_code, manager_user_id, customer_name, customer_counterparty_id}}
 def is_member(project_id: str, user_id: int) -> bool: ...
 def member_project_ids(user_id: int) -> list[str]: ...
 def search_projects(query: str, *, user_id: int, only_member: bool, limit: int = 20) -> list[dict]: ...
+def member_user_ids(project_id: str) -> list[int]: ...      # участники (уведомление СН/ПМ об утверждении бюджета, B2.1)
+def register_change_listener(fn) -> None: ...               # доска задач повторяет «Проект» (D-02, этап 6)
+def upsert_project_from_1c(record: dict): ...                # заготовка 1С (A7.3)
 
 # apps/notifications/interface.py  (A1.5)
 def notify(*, recipients: list[int], event: str, title: str, text: str = "", url: str = "",
            company_slug: str | None, target_type: str = "", target_id: str = "",
            actor_id: int | None = None, actor_avatar_url: str | None = None,
-           dedupe_window_seconds: int | None = None) -> list[str]: ...  # запись + outbox после коммита
-def register_digest_source(key: str, fn, *, tenant: bool) -> None: ...  # fn(user_id) -> [{title, url, since}]; signoff регистрирует pending_for_user (B1.3)
+           dedupe_window_seconds: int | None = None, deliver: bool = True) -> list[str]: ...  # запись + outbox после коммита; deliver=False — только колокольчик
+def register_digest_source(key: str, fn, *, tenant: bool, section: str | None = None, landing_url: str = "") -> None: ...  # fn(user_id) -> [{title, url, since}]; signoff регистрирует pending_for_user (B1.3)
+
+# apps/companies/interface.py  (платформа; A8.1, этап 8 — для B8.1)
+def descendant_slugs(slug: str) -> list[str]: ...           # действующие компании ниже по дереву (через архивных предков)
+def ancestor_slugs(slug: str, *, include_archived: bool = False) -> list[str]: ...  # компании выше, от родителя вверх; по умолчанию только действующие (B8.1), include_archived=True — для наследования ролей
+def grant_membership(slug: str, user_id: int) -> bool: ...   # + missing_member_ids, is_holding, use_company — htqweb.tenancy.db
 
 # apps/hr/interface.py  (B1.1)
 def resolve_position_users(position_ids, *, on_date: date | None = None) -> dict[int, list[int]]: ...  # + временные исполнители
@@ -333,12 +345,16 @@ def start_process(*, subject_type: str, subject_id: str | int, initiator_id: int
 def decide_many(*, actor_id: int, items: list[dict]) -> list[dict]: ...   # [{task_id, decision, comment, option_key?}] → [{task_id, ok, error?}]
 def current_holders(subject_type: str, subject_ids: list[str]) -> dict[str, dict]: ...  # {sid: {stage, users:[{id,name}], position, since}}
 def pending_for_user(user_id: int) -> list[dict]: ...        # [{task_id, subject_type, subject_id, title, url, since}]
+def final_option(subject_type: str, subject_id: int | str) -> dict | None: ...   # решающий голос (B5.1)
+def count_no_executor(subject_type_prefix: str) -> int: ...  # «Обзор» БЗО
+def participant_subject_ids(user_id: int, subject_type: str, subject_ids) -> set: ...  # этап 8 (D-S8-3): пакетная «был согласующим»; is_participant — через неё
 # register_subject(..., options=fn(subject_id)->list[{key,label}], on_option=fn(subject_id, stage_order, user_id, option_key))
 
 # apps/bpp — внутри аппки, между подмодулями A и B
 # services/core/numbering.py (A1.1): next_number(prefix: str, *, width: int = 6, year: int | None = None) -> str
 # services/core/audit.py     (A1.1): record(obj, action: str, *, actor_id: int | None, changes: dict | None = None, comment: str = "") -> None
-# services/core/files.py     (A1.1): attach(owner, file_type: str, *, data: bytes, filename: str, actor_id: int) -> dict; list_files(owner) -> list[dict]
+# services/core/files.py     (A1.1 → apps.files, решение 28.09): attach(owner, file_type: str, *, data: bytes, filename: str, mime: str, actor_id: int, request=None) -> dict;
+#                              replace, list_files(owner), require_files, count_files, owner_deleted, download_url, register_owner_type(Model, owner)
 # services/<подмодуль>/file_owner.py (контракт этапа 3 A, задача 1, D-S3-1): register() -> None — подключается сам
 #     (file_owners.register() из BppConfig.ready(), по алфавиту подмодуля); нет register() или у папки нет __init__.py → ImproperlyConfigured.
 #     register() зовёт:
@@ -360,7 +376,8 @@ def pending_for_user(user_id: int) -> list[dict]: ...        # [{task_id, subjec
 #     Типы справочника — files/0004_bpp_stage3_file_types: bpp.agreement — agreement, agreement_annex; bpp.invoice — invoice, act, waybill,
 #     vat_invoice; bpp.bank_import — bank_statement. Количество («до 30», «1 + версии») — FileTypeSpec владельца, формат и размер — справочник.
 # services/core/errors.py    (A1.1): DomainError(code: str, message: str, *, fields: list[dict] | None = None, status: int = 422)
-# services/core/permissions.py(A1.4): allowed_actions(request, obj) -> list[str]; article_groups_for(request) -> list[str]
+# services/core/permissions.py(A1.4): article_groups_for(request) -> list[str]; общего allowed_actions нет — у каждого документа свой
+#                              allowed_actions(actor, obj) поверх permissions.can (план этапа 1 A)
 # services/budget/balance.py (B2.1): balance(project_id: str, article_id: str, *, exclude_request_id: str | None = None) -> dict  # {limit, committed, available, as_of}
 # services/bank/matching.py  (A4.2): recalc_invoice(invoice_id: str) -> None   # пишет Invoice.paid_bank_amount / recon_status; matching.recalc_invoice, не recon (recon импортируется matching — реэкспорт дал бы цикл; решение финального ревью этапа 4)
 # apps/bpp/interface.py      (B3.2): find_by_number(number: str) -> dict | None  # services/invoices/read.py; {id, number, status, amount, currency_code, counterparty_reg_number, paid_bank_amount, recon_status}; номер — уже чистый «СЧ-ГГГГ-NNNNNN»: нормализацию назначения (латиница C/X, пробелы, регистр) делает сверка A4.2 до вызова
@@ -461,6 +478,20 @@ def sync_for_document(doc_type: str, doc_id) -> None: ...    # D-S5-8, идем�
 
 Решения, помеченные в §1 как «умолчание», в задачах записаны как решения; менять их — правкой строки реестра и задачи.
 
+**Статус на 04.10.2026** (сверка с кодом; подробности — планы этапов):
+
+| Этап | A (Санжар) | B (Руслан) |
+|---|---|---|
+| 0 | A0.1–A0.3 — сделано | B0.1, B0.2 — сделано |
+| 1 | A1.1 (файлы — `apps.files`), A1.2, A1.3, A1.4 (`allowed_actions` у документов), A1.5 — сделано | B1.1–B1.3 — сделано |
+| 2 | A2.1–A2.4 — сделано | B2.1–B2.5 — сделано |
+| 3 | A3.1, A3.2 — сделано (срабатывание правил Grafana — тест 9.3) | B3.1 — сделано, кроме печати договора; B3.2, B3.3 — сделано |
+| 4 | A4.1 (в этапе 3, D-S3-2; нагрузка 5 000 строк — тест 9.2), A4.2, A4.3 — сделано | B4.1, B4.2 — сделано |
+| 5 | A5.1, A5.2 — сделано (D-S5-*) | B5.1 — сделано |
+| 6 | A6.1, A6.2 — сделано; A6.3 — сделано, репетиция на дампе — в окне выкатки (D-S6-8) | B6.1–B6.3 — сделано |
+| 7 | A7.1 — календарь сделан, события отложены (D-S7-2); A7.2 — блокировка сделана (выключена), лимит 300/мин отложен (D-S7-4); A7.3, A7.4 — сделано | — |
+| 8 | A8.1 — сделано на этапе 7 (D-S7-8); хвосты ревью этапа 7 — этап 8 A (PR #47) | B8.1 — впереди |
+
 ### Этап 0 — Каркас (параллельно, файлы не пересекаются)
 
 Детальные планы: [A](2026-09-26-bpp-stage0-executor-a.md), [B](2026-09-26-bpp-stage0-executor-b.md).
@@ -483,7 +514,7 @@ def sync_for_document(doc_type: str, doc_id) -> None: ...    # D-S5-8, идем�
 
 | ID | Владелец | Задача | Интерфейсы | ТЗ | Тесты приёмки | Зависит от |
 |---|---|---|---|---|---|---|
-| A1.1 | A | **Ядро `bpp`**: абстрактная `BppModel` (UUID, created/updated, `version`); `NumberSequence` + `next_number`; `AuditLog` (append-only: триггер `BEFORE UPDATE OR DELETE` → исключение) + `record`/`history` + ручка `GET history/<type>/<id>`; `DocumentFile` (владелец, тип, версия, «заменён», SHA-256, кто и когда) + `attach`/`replace`/`list_files`/`download` (журнал скачиваний) + scope-политика `bpp` в `media_files` (форматы и размеры §21, xml) + интерфейс сканера (ClamAV — заглушка); `DomainError` и конверт ошибок в `htqweb/http.py`; `Idempotency-Key` (`api_view(idempotent=True)`, Redis 24 ч) и `check_version` → 409 E-CON-01. `bpp` → `TENANT_APPS` с первой миграцией | выпускает `numbering`, `audit`, `files`, `errors`, `check_version` | §13.3–13.4, §21, §24, §25.2, BR-070, BR-080 | номера без повторов при параллельной выдаче; год сбрасывает счётчик; UPDATE/DELETE аудита падает на уровне БД; повтор с тем же ключом возвращает первый ответ без второго эффекта; устаревший `version` → 409 с текстом E-CON-01; недопустимый формат или размер → 415/413 с текстом §13.2 | A0.2 |
+| A1.1 | A | **Ядро `bpp`** (`DocumentFile` и scope `bpp` ниже сняты 28.09 — одна подсистема файлов `apps.files`): абстрактная `BppModel` (UUID, created/updated, `version`); `NumberSequence` + `next_number`; `AuditLog` (append-only: триггер `BEFORE UPDATE OR DELETE` → исключение) + `record`/`history` + ручка `GET history/<type>/<id>`; `DocumentFile` (владелец, тип, версия, «заменён», SHA-256, кто и когда) + `attach`/`replace`/`list_files`/`download` (журнал скачиваний) + scope-политика `bpp` в `media_files` (форматы и размеры §21, xml) + интерфейс сканера (ClamAV — заглушка); `DomainError` и конверт ошибок в `htqweb/http.py`; `Idempotency-Key` (`api_view(idempotent=True)`, Redis 24 ч) и `check_version` → 409 E-CON-01. `bpp` → `TENANT_APPS` с первой миграцией | выпускает `numbering`, `audit`, `files`, `errors`, `check_version` | §13.3–13.4, §21, §24, §25.2, BR-070, BR-080 | номера без повторов при параллельной выдаче; год сбрасывает счётчик; UPDATE/DELETE аудита падает на уровне БД; повтор с тем же ключом возвращает первый ответ без второго эффекта; устаревший `version` → 409 с текстом E-CON-01; недопустимый формат или размер → 415/413 с текстом §13.2 | A0.2 |
 | A1.2 | A | **`refdata`**: модели `Country`, `Currency`, `ExchangeRate` (источник `nbrk`/`manual`), `VatRate` (страна, ставка, с/по), `MrpValue`, `Uom`, `ArticleGroup` (`node_key`), `Article` (уникальный `code`, группа, родитель — задел, `is_active`, `ext_1c_ref`); сиды (страны KZ/RU/KG/UZ; НДС KZ 12% → 16% с 01.01.2026, RU 20% → 22% с 01.01.2026, KG 12%, UZ 12% — «сверить с законодательством» [У]; МРП 2025 = 3 932, 2026 = 4 325; валюты KZT, USD, EUR, RUB, CNY, KGS, UZS; ед. изм. из §18; группы «Снабжение» / «Проектное управление»); CRUD-ручки (правка — `can_edit`: роль с правом правки справочников **в управляющей компании**); Celery-задача ежедневного курса НБРК (`fallback` при недоступности); архив вместо удаления | выпускает `refdata.interface` (§2.6) | §18, BR-031, BR-040, CALC-011, CALC-012 | ставка на дату (граница `date_from`); МРП на дату; порог = 1000 × МРП; курс KZT = 1; нет ставки → `None`; правка из дочерней компании → 403; архивная статья не в выборке «активные», но в `article_brief` с `is_active=False`; отказ API НБРК не роняет задачу | A0.2 |
 | A1.3 | A | **`project`**: `Project` (UUID, `code` уникален в компании, `name`, `kind` = `project`/`company_overhead` для «открытого» бюджета компании (D-06; служебный проект «Общие расходы компании», умолчание Q-E13), `status` Активен / Закрыт / Архив, `country_code`, `manager_user_id`, `customer_name`, `customer_counterparty_id`, даты, `ext_1c_ref`), `ProjectMember` (руководитель — участник автоматически, Q-E26); ручки (создают ГД/ФД/ТД/ОД и администраторы сайта; участников ведут ПМ и HR); `tasks.Project.project_ref` (строка) + команда связывания существующих проектов; экран проектов (фронт) | выпускает `project.interface` (§2.6) | §04, §18 «Проекты», BR-014, В-03 | ПМ видит только проекты-участия, СН — все активные; руководитель — участник автоматически; архивный проект не находится поиском; `tasks.Project` показывает поля нового Проекта | A0.2 |
 | A1.4 | A | **Роли** (узлы `bpp.*`, `project.*`, `refdata.*` объявлены в A0.2): матрица ролей по §17 — документом `docs/plans/<дата>-bpp-roles-matrix.md` **на утверждение Алгазы**; миграция `access/0014_seed_bpp_roles.py` (образец — `0005`, явные строки на узлах-операциях — `0008`); должность «Руководитель проекта» в структуре холдинга (`apps/hr/management/group_structures.py`); команда `bpp_assign_roles --company <slug>` (должности холдинга → роли, §2.4); `services/core/permissions.py`: `allowed_actions(request, obj)`, `article_groups_for(request)` | выпускает `allowed_actions`, `article_groups_for` | §02, §17, BR-010, REQ-003, REQ-021 | у СН только группа «Снабжение», у ПМ — «Проектное управление», у совмещающего — обе; у каждой роли уровни модуля `bpp` по матрице; `allowed_actions` зависит от роли, принадлежности и статуса | A0.2 |
@@ -569,7 +600,7 @@ def sync_for_document(doc_type: str, doc_id) -> None: ...    # D-S5-8, идем�
 
 | ID | Задача |
 |---|---|
-| A7.1 | Календарь отдельной аппкой: производственный календарь — `public`, события — в схеме компании; перенос из `tasks` с сохранением API (Q-C11, Q-E19) |
+| A7.1 | Календарь отдельной аппкой: производственный календарь — `public` (**сделано: `refdata.ProductionDay`, D-S7-1**), события — в схеме компании (**отложено D-S7-2**, остаются в `tasks`); перенос из `tasks` с сохранением API (Q-C11, Q-E19) |
 | A7.2 | Блокировка входа после 5 неудач на 15 минут + лимит 300 запросов/мин на пользователя (Redis) (D-37) |
 | A7.3 | Заготовки 1С: клиент OData, сопоставление по `ext_1c_ref`, идемпотентный upsert контрагентов и проектов — без запуска синхронизации (D-38) |
 | A7.4 | ClamAV: реализация интерфейса сканера из A1.1 + контейнер в `docker-compose*.yml` (D-31) |
@@ -614,7 +645,7 @@ def sync_for_document(doc_type: str, doc_id) -> None: ...    # D-S5-8, идем�
 - BR-051, AC-009, E-INV-04 — закрывающие документы после оплаты (D-13);
 - В-10 «только полная оплата» — частичная оплата и транши отметками по одному счёту, предоплата разрешена (D-11);
 - BR-047 — окно дробления расширено: одна заявка или контрагент за 30 дней (D-17);
-- §12 — выбирают ФД и ГД; альтернатива на часть позиций; лимит АП на документ поднимает СН, ПМ подаёт до 3 своих; автор нового документа — автор заявки; KPI — экономия (D-25);
+- §12 — выбирают ФД и ГД; альтернатива на часть позиций; лимит АП на документ поднимает СН (ПМ по матрице ролей АП не подаёт — D-S5-1); автор нового документа — автор заявки; KPI — экономия (D-25);
 - §16 п.7 — сроков пока нет, ежедневная сводка (D-23);
 - §12.4 п.5 — у нового договора по альтернативе предсогласован только этап ГД, ТД и ОД согласуют обычным порядком (D-26);
 - §16.1 п.6 и таблица `substitution` §24 — вместо заместителя пользователя временный исполнитель должности на период (D-22);

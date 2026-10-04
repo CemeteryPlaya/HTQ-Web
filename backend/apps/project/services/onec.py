@@ -60,7 +60,7 @@ def upsert_project(record: dict) -> Outcome:
 
 
 def _upsert(ref: str, code: str, name: str, country: str) -> Outcome:
-    linked = Project.objects.filter(ext_1c_ref__iexact=ref).first()  # GUID, введённый руками в верхнем регистре, — тот же
+    linked = Project.objects.filter(ext_1c_ref=ref).first()  # хранится только нижний регистр (D-S8-4)
     if linked is not None:
         if linked.code != code:
             return Outcome(REJECTED, "Код связанного проекта меняется только в «Проектах», "
@@ -72,7 +72,7 @@ def _upsert(ref: str, code: str, name: str, country: str) -> Outcome:
 
     same = Project.objects.filter(code=code).first()
     if same is not None:
-        if same.ext_1c_ref and same.ext_1c_ref.lower() != ref:
+        if same.ext_1c_ref and same.ext_1c_ref != ref:
             return Outcome(CONFLICT, "Проект с этим кодом уже связан с другой записью 1С "
                                      f"({same.ext_1c_ref}); данные не тронуты.", str(same.pk))
         projects.update(same, actor_id=None, ext_1c_ref=ref)

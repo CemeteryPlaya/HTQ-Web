@@ -153,6 +153,8 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/signoff', component: lazyPages.SignoffInbox, requiresAuth: true },
   { path: '/signoff/processes', component: lazyPages.SignoffProcessList, requiresAuth: true },
   { path: '/signoff/processes/:id', component: lazyPages.SignoffProcessDetail, requiresAuth: true },
+  // Процесс дочерней компании, открытый из холдинга (B8.1): доступ решает сервер — 404, если задача не ваша.
+  { path: '/signoff/companies/:company/processes/:id', component: lazyPages.SignoffForeignProcessDetail, requiresAuth: true },
   { path: '/signoff/routes', component: lazyPages.SignoffRouteList, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
   { path: '/signoff/routes/:id', component: lazyPages.SignoffRouteEditor, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
 

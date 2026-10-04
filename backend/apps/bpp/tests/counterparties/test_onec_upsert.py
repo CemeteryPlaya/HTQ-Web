@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from django.db import IntegrityError, transaction
 
@@ -190,3 +192,60 @@ def test_same_ref_in_two_companies_is_allowed(two_company_schemas):
     for slug in two_company_schemas:
         with use_company(slug):
             assert onec.upsert_counterparty(_record(number)).status == "created"
+
+
+# ── только нижний регистр (D-S8-4) ──────────────────────────────────────
+
+def test_uppercase_ref_past_the_service_is_integrity_error(ctx):
+    """Мимо сервиса (ORM, django-admin, ручной SQL) верхний регистр в БД не
+    попадает: иначе регистрозависимая уникальность пропустила бы второй
+    экземпляр того же GUID."""
+    first, second = common.valid_bins(2)
+    with pytest.raises(IntegrityError, match="ck_bpp_counterparty_ext_1c_lower"), \
+            transaction.atomic():
+        Counterparty.objects.create(name="Верх", kind="legal", country_code="KZ",
+                                    reg_number=first, ext_1c_ref=GUID_A.upper())
+    cp = service.create(common.data(second, ext_1c_ref=GUID_B), actor_id=1)
+    with pytest.raises(IntegrityError, match="ck_bpp_counterparty_ext_1c_lower"), \
+            transaction.atomic():
+        Counterparty.objects.filter(pk=cp.pk).update(ext_1c_ref=GUID_B.upper())
+    cp.refresh_from_db()
+    assert cp.ext_1c_ref == GUID_B
+
+
+def _admin_form(cp, ext_1c_ref: str):
+    from django.contrib import admin
+    from django.forms.models import model_to_dict
+    from django.test import RequestFactory
+
+    model_admin = admin.site._registry[Counterparty]
+    form_class = model_admin.get_form(RequestFactory().post("/"), cp)
+    data = {key: value for key, value in model_to_dict(cp).items()
+            if key in form_class.base_fields and value is not None}
+    data["ext_1c_ref"] = ext_1c_ref
+    return form_class(data, instance=cp)
+
+
+def test_admin_form_with_uppercase_ref_is_a_form_error(ctx):
+    """Поле «Код в 1С» в django-admin редактируется мимо сервиса: верхний
+    регистр — ошибка формы (проверка ограничений модели), а не 500 на save."""
+    cp = service.create(common.data(common.bin_first_pass()), actor_id=1)
+    form = _admin_form(cp, GUID_A.upper())
+    assert not form.is_valid()
+    assert "ext_1c_ref" in str(form.errors) or "регистр" in str(form.errors)
+    assert _admin_form(cp, GUID_A).is_valid(), _admin_form(cp, GUID_A).errors
+
+
+def test_linked_card_is_found_by_exact_ref(ctx):
+    """Хранится только нижний регистр — связанную карточку находит точное
+    сравнение (индекс уникальности), без ``UPPER(...)`` по столбцу."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    number = common.bin_first_pass()
+    first = onec.upsert_counterparty(_record(number))
+    with CaptureQueriesContext(connection) as queries:
+        again = onec.upsert_counterparty(_record(number, guid=GUID_A.upper()))
+    assert again.status == "unchanged" and again.object_id == first.object_id
+    assert Counterparty.objects.count() == 1
+    assert not [q["sql"] for q in queries if re.search(r'UPPER\("\w+"\."ext_1c_ref"', q["sql"])]

@@ -3,7 +3,14 @@
 作成日: 2026-10-02 · Реестр задач для `claude-code-harness` (`/harness-work <N>`, `/harness-sync`).
 Продуктовый контракт (spec) — [docs/plans/2026-10-02-bpp-stage7-executor-a.md](docs/plans/2026-10-02-bpp-stage7-executor-a.md) (решения D-S7-1…8, Review Focus, Global Constraints). Порядок: spec > Plans.md.
 
-Spec delta:
+Phase 8 — spec: [docs/plans/2026-10-03-bpp-stage8-tails-executor-a.md](docs/plans/2026-10-03-bpp-stage8-tails-executor-a.md) (решения D-S8-1…4, Review Focus, Global Constraints).
+
+Spec delta (Phase 8):
+- path: docs/plans/2026-10-03-bpp-stage8-tails-executor-a.md (корневого `spec.md` нет; контракт — план этапа)
+- change: D-S8-1 срок антивируса на всю проверку; D-S8-2 счётчики блокировки раздельные (решение пользователя 03.10); D-S8-3 видимость поиска договоров по `can_view` без запроса на строку; D-S8-4 `ext_1c_ref` только в нижнем регистре (`CheckConstraint`)
+- why: хвосты итогового ревью этапа 7; две проверки плана (subagent) учтены
+
+Spec delta (Phase 7):
 - path: docs/plans/2026-10-02-bpp-stage7-executor-a.md (в репозитории нет корневого `spec.md`; продуктовые контракты модуля — мастер-план и план этапа)
 - change: решения пользователя 02.10 (D-S7-1…8) и правки пяти проверок плана
 - why: задачи ниже опираются на эти правила; при расхождении действует план этапа
@@ -25,6 +32,28 @@ Spec delta:
 
 Отложено (решения 02.10): события календаря отдельной аппкой (A7.1 ч.2), лимит 300 запросов/мин (D-S7-4), отзыв refresh при смене пароля — см. раздел «Отложено» плана этапа.
 
+## Phase 8: БЗО, этап 8 — хвосты итогового ревью этапа 7 (исполнитель A, ветка `new-module-BPP-sanzhar`)
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 8.1 | `[lane:gate]` `[tdd:required]` Срок проверки антивирусом — на всю проверку (D-S8-1): остаток считается раз и проверяется до `settimeout`, ответ без `\0` — `ScanUnavailable`, fail-closed | Красные тесты («капающий» clamd: `< T + 1 с` вместо ~3·T; арифметика срока без `ValueError`; ответ без `\0`) зелёные и с red-log; `htqweb/tests`, `apps/core/tests/test_antivirus*`, `apps/media_files`, `apps/files` зелёные; ранбук и `.env.example` — «на всю проверку» | - | cc:完了 [f286fec] |
+| 8.2 | `[lane:fast]` `[tdd:skip:decision-no-code]` Блокировка входа — счётчики остаются раздельными (D-S8-2, решение пользователя 03.10) | В плане этапа 7 («Отложено») и в ранбуке выкатки (шаг включения блокировки) записано решение с датой; изменений кода нет | - | cc:完了 [211c257] |
+| 8.3 | `[lane:gate]` `[tdd:required]` `[feature:security]` Поиск договоров для привлечения без N+1 (D-S8-3, зона B): `signoff.interface.participant_subject_ids`, `neighbour.search`/`visible_brief` по правилу `can_view` | Число запросов при 3 и 30 договорах у СН равно (`CaptureQueriesContext`); эквивалентность с `can_view` (ФД, СН, ПМ, участник с ролью, автор; без роли — пусто); выключенный `signoff` не ломает поиск ФД; `apps/bpp/tests` (договоры), `apps/tasks/tests/test_engagement_bpp_agreement.py`, `apps/signoff`, сторож изоляции зелёные | - | cc:完了 [d233872] |
+| 8.4 | `[lane:gate]` `[tdd:required]` `ext_1c_ref` только в нижнем регистре (D-S8-4): `CheckConstraint` + миграции `bpp/0020`, `project/0003` (дубли без регистра — стоп, приведение к нижнему), поиск 1С — точное сравнение | Запись верхнего регистра мимо сервиса — `IntegrityError` `ck_*_ext_1c_lower`; django-admin — ошибка формы; тест миграции (дубли — стоп, иначе приведено, откат проходит); `makemigrations --check` чисто; `apps/bpp/tests/counterparties`, `test_onec_migration.py`, `apps/project`, `htqweb/tests` зелёные; ранбук — шаг 4 | - | cc:完了 [99c9d63] |
+| 8.5 | `[lane:release]` `[tdd:skip:verification-and-review]` Прогон, стенд (`migrate_companies`), итоговое ревью `harness-review`, PR в `new-module-BPP-merge` | Затронутые аппки зелёные, `ci-known-failures.txt` не вырос; стенд мигрирован; Critical/Major ревью исправлены; PR создан, CI зелёный; мерж — по команде пользователя | 8.1, 8.2, 8.3, 8.4 | cc:完了 [PR #47, 83aa114] |
+
+## Phase 9: итоги сверки 04.10 — пробелы A без решения (ветка `new-module-BPP-sanzhar`)
+
+Spec: раздел «Дополнение 04.10» плана [этапа 8](docs/plans/2026-10-03-bpp-stage8-tails-executor-a.md). `team_validation_mode: not_required_lightweight` (документы, тесты, одна функция чтения).
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| 9.1 | `[lane:fast]` `[tdd:skip:docs-only]` Мастер-план и CLAUDE.md ↔ код и решения этапов | В мастер-плане нет `DocumentFile` как действующего решения, §2.6 совпадает с сигнатурами кода, A7.1/§7 — с D-S7-2/D-S5-1, у задач A/B — статусы этапов; CLAUDE.md без `calendar`-аппки, `landing_url` верный | 9.4 | cc:完了 [1b9b8c9] |
+| 9.2 | `[lane:gate]` `[tdd:required]` Нагрузка выписки 1С 5 000 строк ≤ 60 с (A4.1, Q-C26) | Тест разбора и автосверки 5 000 строк укладывается в 60 с на Python 3.14 локально (время в отчёте); `apps/bpp/tests/bank` зелёные | - | cc:完了 [41d3f06] |
+| 9.3 | `[lane:gate]` `[tdd:required]` Правила Grafana БЗО срабатывают на подложенных данных (A3.2) | `promtool test rules` по выражениям бизнес-правил БЗО с подложенными рядами: правило срабатывает выше порога и молчит ниже; шаг в `check-monitoring-config.sh`, скрипт зелёный | - | cc:完了 [501c5f8] |
+| 9.4 | `[lane:gate]` `[tdd:required]` `companies.interface.ancestor_slugs` для B8.1 | Предки от родителя вверх, архивные включены, цикл не вешает; `access.inheritance.ancestors_of` через неё; `apps/companies`, `apps/access`, сторож изоляции зелёные | - | cc:完了 [0547b58] |
+| 9.5 | `[lane:release]` `[tdd:skip:verification-and-review]` Прогон затронутых аппок, ревью, push | Затронутые аппки зелёные; ревью без Critical/Major; запушено (в PR #47, пока он открыт) | 9.1, 9.2, 9.3, 9.4 | cc:完了 [PR #47] |
+
 ## 事前確認
 
 - 事項: external-send — `git push origin new-module-BPP-sanzhar`
@@ -40,3 +69,13 @@ Spec delta:
   理由: прогоны тестов и проверка на стенде в DoD задач 7.1–7.8; прод и `test-env` не затрагиваются
   scope: Phase 7 / Task 7.1–7.8
 - secret-read: не требуется — `.env`, `secrets/**` агенты не читают; `onec_check` и тесты 1С — без настоящих доступов.
+- 事項: external-send — `git push origin new-module-BPP-sanzhar`
+  理由: коммиты задач 8.1–8.5 публикуются в ветку исполнителя
+  scope: Phase 8 / Task 8.1–8.5
+- 事項: external-send — GitHub REST API: чтение открытых PR и статуса CI, создание PR в `new-module-BPP-merge` (токен из `git credential fill`, не печатается)
+  理由: DoD задачи 8.5; мерж — только по отдельной команде пользователя
+  scope: Phase 8 / Task 8.5
+- 事項: destructive — тестовые БД `test_htqweb*` (pytest создаёт и удаляет) и `migrate_companies` на БД стенда `docker-compose.test-local.yml`
+  理由: прогоны тестов и проверка миграций `bpp/0020`, `project/0003` на стенде
+  scope: Phase 8 / Task 8.1, 8.3, 8.4, 8.5
+- secret-read (Phase 8): не требуется — `.env`, `secrets/**` не читаются.

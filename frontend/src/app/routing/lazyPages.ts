@@ -61,6 +61,7 @@ export const lazyPages = {
   SignoffInbox: React.lazy(() => import('@/pages/signoff/SignoffInbox')),
   SignoffProcessList: React.lazy(() => import('@/pages/signoff/ProcessList')),
   SignoffProcessDetail: React.lazy(() => import('@/pages/signoff/ProcessDetail')),
+  SignoffForeignProcessDetail: React.lazy(() => import('@/pages/signoff/ForeignProcessDetail')),
   SignoffRouteList: React.lazy(() => import('@/pages/signoff/RouteList')),
   SignoffRouteEditor: React.lazy(() => import('@/pages/signoff/RouteEditor')),
 

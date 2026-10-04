@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from django.db import IntegrityError, transaction
 
@@ -165,3 +167,57 @@ def test_api_taken_ref_is_422_and_null_patch_is_ok(ctx):
     other = call("post", "/projects", {**base, "code": "П-3", "ext_1c_ref": ""}).json()
     assert call("patch", f"/projects/{other['id']}", {"ext_1c_ref": GUID_A}).status_code == 422
     assert call("patch", f"/projects/{first.json()['id']}", {"ext_1c_ref": None}).status_code == 200
+
+
+# ── только нижний регистр (D-S8-4) ──────────────────────────────────────
+
+def test_uppercase_ref_past_the_service_is_integrity_error(ctx):
+    """Мимо сервиса (ORM, django-admin, ручной SQL) верхний регистр в БД не
+    попадает: иначе регистрозависимая уникальность пропустила бы второй
+    экземпляр того же GUID."""
+    with pytest.raises(IntegrityError, match="ck_project_ext_1c_lower"), transaction.atomic():
+        Project.objects.create(code="П-1", name="a", country_code="KZ",
+                               ext_1c_ref=GUID_A.upper())
+    project = projects.create(code="П-2", name="b", country_code="KZ", actor_id=1,
+                              ext_1c_ref=GUID_B)
+    with pytest.raises(IntegrityError, match="ck_project_ext_1c_lower"), transaction.atomic():
+        Project.objects.filter(pk=project.pk).update(ext_1c_ref=GUID_B.upper())
+    project.refresh_from_db()
+    assert project.ext_1c_ref == GUID_B
+
+
+def _admin_form(project, ext_1c_ref: str):
+    from django.contrib import admin
+    from django.forms.models import model_to_dict
+    from django.test import RequestFactory
+
+    model_admin = admin.site._registry[Project]
+    form_class = model_admin.get_form(RequestFactory().post("/"), project)
+    data = {key: value for key, value in model_to_dict(project).items()
+            if key in form_class.base_fields and value is not None}
+    data["ext_1c_ref"] = ext_1c_ref
+    return form_class(data, instance=project)
+
+
+def test_admin_form_with_uppercase_ref_is_a_form_error(ctx):
+    """Поле «Код в 1С» в django-admin редактируется мимо сервиса: верхний
+    регистр — ошибка формы (проверка ограничений модели), а не 500 на save."""
+    project = projects.create(code="П-1", name="a", country_code="KZ", actor_id=1)
+    form = _admin_form(project, GUID_A.upper())
+    assert not form.is_valid()
+    assert "ext_1c_ref" in str(form.errors) or "регистр" in str(form.errors)
+    assert _admin_form(project, GUID_A).is_valid(), _admin_form(project, GUID_A).errors
+
+
+def test_linked_project_is_found_by_exact_ref(ctx):
+    """Хранится только нижний регистр — связанный «Проект» находит точное
+    сравнение (индекс уникальности), без ``UPPER(...)`` по столбцу."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    first = onec.upsert_project(_record())
+    with CaptureQueriesContext(connection) as queries:
+        again = onec.upsert_project(_record(guid=GUID_A.upper()))
+    assert again.status == "unchanged" and again.object_id == first.object_id
+    assert Project.objects.count() == 1
+    assert not [q["sql"] for q in queries if re.search(r'UPPER\("\w+"\."ext_1c_ref"', q["sql"])]

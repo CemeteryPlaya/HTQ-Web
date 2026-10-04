@@ -24,7 +24,7 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import attachments, registry
+from apps.signoff.services import attachments, positions, registry
 from apps.users import interface as users
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
     stages = list(process.stages.prefetch_related("tasks"))
 
     names: dict[int, dict] = {}
+    labels: dict = {}
     if enrich:
         # Инициатор в карту имён идёт наравне с согласующими: карточка
         # показывает, кто отправил объект, а не только безымянный id.
@@ -45,6 +46,11 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         if process.initiator_id is not None:
             name_ids.append(process.initiator_id)
         names = _name_map(name_ids)
+        # Подписи должностей задач — пачкой, по компании за раз: должность
+        # может быть в штате вышестоящей компании (B8.1).
+        refs = [key for stage in stages for task in stage.tasks.all()
+                for key in positions.task_keys(task)[:1] if key is not None]
+        labels = _position_labels(refs)
 
     requirement_labels = _requirement_labels(process)
     card = {
@@ -70,6 +76,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "matched_by": stage.matched_by,
                 "approver_kind": stage.approver_kind,
                 "role_ids": stage.role_ids or [],
+                "role_refs": positions.dump_many(positions.process_stage_refs(stage)),
                 "user_ids": stage.user_ids or [],
                 "approver_key": stage.approver_key or "",
                 "requires_attachment": stage.requires_attachment,
@@ -80,7 +87,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "activated_at": stage.activated_at,
                 "decided_at": stage.decided_at,
                 "tasks": [
-                    serialize_task(task, names=names, urls=enrich)
+                    serialize_task(task, names=names, urls=enrich, labels=labels)
                     for task in stage.tasks.all()
                 ],
             }
@@ -114,7 +121,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
 
 
 def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
-                   urls: bool = False) -> dict:
+                   urls: bool = False, labels: dict | None = None) -> dict:
     """Карточка одного запроса на согласование.
 
     Вынесена из ``serialize_process`` не ради красоты, а потому что её отдаёт
@@ -128,10 +135,14 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
     задачу каждого процесса.
     """
     names = names or {}
+    key = positions.task_keys(task)[0]
     card = {
         "id": task.pk,
         "user_id": task.user_id,
         "position_id": task.position_id,
+        "position_company": task.position_company or "",
+        "position_label": (labels or {}).get(key, {}).get("label") if key else None,
+        "also_positions": list(task.also_positions or []),
         "full_name": names.get(task.user_id, {}).get("full_name", ""),
         "state": task.state,
         "comment": task.comment,
@@ -275,6 +286,23 @@ def describe_many(pairs) -> dict[tuple[str, str], dict]:
             "url": info.get("url"),
         }
     return out
+
+
+def _position_labels(refs) -> dict:
+    """Подписи должностей для карточки. До B8.1 карточка процесса в ``hr``
+    не ходила вовсе, поэтому выключенный кадровый модуль её и теперь не
+    роняет: подписей нет — предусмотренная деградация."""
+    if not refs:
+        return {}
+    from apps.core.services import ServiceDisabled
+    from htqweb.fallback import fallback
+
+    try:
+        return positions.briefs(refs)
+    except ServiceDisabled as exc:
+        return fallback("signoff.presentation.position_labels_unavailable", {},
+                        reason="кадровый модуль выключен — подписи должностей не показаны",
+                        exc=exc, expected=True)
 
 
 def _name_map(user_ids) -> dict[int, dict]:

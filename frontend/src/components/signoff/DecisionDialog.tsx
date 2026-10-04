@@ -49,7 +49,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
-import type { ApprovalProcess } from '@/types/signoff';
+import type { ApprovalProcess, DecisionInput } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
 
@@ -139,9 +139,17 @@ interface Props {
   target: DecisionTarget | null;
   onOpenChange: (open: boolean) => void;
   onDecided: (process: ApprovalProcess) => void;
+  /** Чем отправить решение. По умолчанию — обычное решение на адресе своей
+   *  компании; карточка процесса дочерней, открытая из холдинга (B8.1),
+   *  подставляет решение через холдинг. Документ к такому решению не
+   *  прикладывается: этапы с ним из холдинга не решаются. */
+  decide?: (taskId: number, input: DecisionInput) => Promise<ApprovalProcess>;
 }
 
-export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
+const decideHere = (taskId: number, input: DecisionInput) =>
+  signoffApi.decide(taskId, input).then((r) => r.data);
+
+export function DecisionDialog({ target, onOpenChange, onDecided, decide = decideHere }: Props) {
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
@@ -210,10 +218,9 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       // Порядок обязателен: решение без загруженного документа бэкенд
       // отобьёт 409 «сначала загрузите PDF».
       if (file) await signoffApi.attachDocument(taskId, file);
-      const { data } = await signoffApi.decide(taskId, {
+      return decide(taskId, {
         decision, comment, ...(needsOption ? { option_key: optionKey } : {}),
       });
-      return data;
     },
     onSuccess: (process) => {
       toast.success(kind?.toast ?? 'Решение отправлено');

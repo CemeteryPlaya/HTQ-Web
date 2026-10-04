@@ -1,0 +1,206 @@
+# Правила Grafana БЗО (и два правила этапа 7) срабатывают на подложенных данных
+# (мастер-план БЗО, A3.2; хвост 9.3 этапа 8).
+#
+# Правила живут в Grafana-провижининге (alerting/rules.yml), а не в rule-файлах
+# Prometheus, и promtool читать их не умеет. Поэтому
+# scripts/monitoring/grafana_rules_to_promtool.py переводит выбранные правила
+# в rule-файл Prometheus — `alert: <uid>`, `expr: (<PromQL запроса A>) <op>
+# <порог>`, `for` и метки — тем же смыслом, что у Grafana (мгновенный запрос,
+# threshold с одним условием, noDataState: OK). Правило, которое так честно не
+# переводится, генератор отвергает, а не подделывает.
+#
+# Файл правил генерируется во временный каталог, который
+# scripts/check-monitoring-config.sh монтирует в контейнер promtool как
+# /rules — отсюда абсолютный путь ниже. Вручную:
+#   python scripts/monitoring/grafana_rules_to_promtool.py \
+#       infra/logging/grafana-provisioning/alerting/rules.yml <tmp>/grafana_rules.yml \
+#       --match htqweb_bpp_ --uid htqweb-auth-lockout-burst \
+#       --uid htqweb-antivirus-unavailable \
+#       --tests infra/logging/promtool-tests/bpp_rules_test.yml
+#   docker run --rm -v <tmp>:/rules:ro -v $PWD/infra/logging/promtool-tests:/tests:ro \
+#       --entrypoint promtool prom/prometheus:v2.53.4 test rules /tests/bpp_rules_test.yml
+#
+# Генератор (флаг --tests) требует у КАЖДОГО переведённого правила хотя бы
+# одну проверку «срабатывает» (непустой exp_alerts) и одну «молчит»
+# (exp_alerts: []): новое правило htqweb_bpp_* без тестов роняет шаг.
+#
+# Метки — как у живых серий: бизнес-метрики тенантных аппок несут `company`
+# (apps/core/metrics.py), все серии /metrics Django — `job`/`instance` скрейпа.
+# Правило держит метки серии, поэтому уведомление называет компанию.
+# Аннотации (summary с `$values.A` Grafana) в rule-файл не переносятся: это
+# шаблоны Grafana, не Prometheus.
+
+rule_files:
+  - /rules/grafana_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ══ htqweb-bpp-committed-mismatch: > 0, for 5m ═════════════════════════════
+  # Расхождение у одной компании — алерт ровно у неё; у соседки ровно 0
+  # (граница: gt, а не gte) — молчит. До истечения for — ещё pending.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_bpp_committed_mismatches{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '3x20'
+      - series: 'htqweb_bpp_committed_mismatches{company="hts",job="django-backend",instance="backend-web:8000"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: htqweb-bpp-committed-mismatch
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: htqweb-bpp-committed-mismatch
+        exp_alerts:
+          - exp_labels:
+              company: htq
+              job: django-backend
+              instance: backend-web:8000
+              severity: warning
+              team: platform
+
+  # Ночная сверка сошлась (расхождений 0) — правило гаснет; метрики нет вовсе
+  # (сверка у компании не бежала) — молчит (noDataState: OK).
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_bpp_committed_mismatches{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '2x10 0x20'
+      - series: 'htqweb_bpp_committed_check_age_seconds{company="keg",job="django-backend",instance="backend-web:8000"}'
+        values: '100+60x30'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: htqweb-bpp-committed-mismatch
+        exp_alerts:
+          - exp_labels:
+              company: htq
+              job: django-backend
+              instance: backend-web:8000
+              severity: warning
+              team: platform
+      - eval_time: 20m
+        alertname: htqweb-bpp-committed-mismatch
+        exp_alerts: []
+
+  # ══ htqweb-bpp-committed-check-stale: > 93600 (26 ч), for 15m ══════════════
+  # Возраст итога растёт по минуте: у htq он уже за 26 ч — алерт после 15 мин;
+  # у hts свежий итог — молчит; у keg ровно 26 ч и стоит (граница gt) — молчит.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_bpp_committed_check_age_seconds{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '93601+60x30'
+      - series: 'htqweb_bpp_committed_check_age_seconds{company="hts",job="django-backend",instance="backend-web:8000"}'
+        values: '3600+60x30'
+      - series: 'htqweb_bpp_committed_check_age_seconds{company="keg",job="django-backend",instance="backend-web:8000"}'
+        values: '93600x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: htqweb-bpp-committed-check-stale
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: htqweb-bpp-committed-check-stale
+        exp_alerts:
+          - exp_labels:
+              company: htq
+              job: django-backend
+              instance: backend-web:8000
+              severity: warning
+              team: platform
+
+  # ══ htqweb-bpp-closing-docs-overdue: > 0, for 1h, channel=business ═════════
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_bpp_invoices_closing_docs_overdue{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '2x90'
+      - series: 'htqweb_bpp_invoices_closing_docs_overdue{company="hts",job="django-backend",instance="backend-web:8000"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: htqweb-bpp-closing-docs-overdue
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: htqweb-bpp-closing-docs-overdue
+        exp_alerts:
+          - exp_labels:
+              company: htq
+              job: django-backend
+              instance: backend-web:8000
+              severity: warning
+              team: platform
+              channel: business
+
+  # Метрики нет (таблицы счетов в схеме ещё нет) — молчит.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_bpp_invoices_to_pay{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '7x90'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: htqweb-bpp-closing-docs-overdue
+        exp_alerts: []
+
+  # ══ htqweb-auth-lockout-burst: sum(increase(locked[10m])) > 10, for 5m ═════
+  # 2 блокировки в минуту — 20 за 10 мин, алерт. Отклонённые попытки
+  # (reason="rejected") не считаются, сколько бы их ни было. Порог перейдён на
+  # 6-й минуте (12 > 10), поэтому на 8-й алерт ещё ждёт for: 5m.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_auth_lockout_total{reason="locked",job="django-backend",instance="backend-web:8000"}'
+        values: '0+2x40'
+      - series: 'htqweb_auth_lockout_total{reason="rejected",job="django-backend",instance="backend-web:8000"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: htqweb-auth-lockout-burst
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: htqweb-auth-lockout-burst
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+
+  # Ровно 10 за 10 мин (граница gt) — молчит; всплеск одних отклонений — молчит.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_auth_lockout_total{reason="locked",job="django-backend",instance="backend-web:8000"}'
+        values: '0+1x40'
+      - series: 'htqweb_auth_lockout_total{reason="rejected",job="django-backend",instance="backend-web:8000"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: htqweb-auth-lockout-burst
+        exp_alerts: []
+
+  # ══ htqweb-antivirus-unavailable: sum(increase(unavailable[10m])) > 0, for 5m
+  # clamd молчит — алерт; ожил (счётчик встал) — через 10 мин окна гаснет;
+  # чистые и заражённые проверки на правило не влияют.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_antivirus_scans_total{verdict="unavailable",job="django-backend",instance="backend-web:8000"}'
+        values: '0+1x15 15x30'
+      - series: 'htqweb_antivirus_scans_total{verdict="clean",job="django-backend",instance="backend-web:8000"}'
+        values: '0+5x45'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: htqweb-antivirus-unavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: htqweb-antivirus-unavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              team: platform
+      - eval_time: 40m
+        alertname: htqweb-antivirus-unavailable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_antivirus_scans_total{verdict="unavailable",job="django-backend",instance="backend-web:8000"}'
+        values: '0x30'
+      - series: 'htqweb_antivirus_scans_total{verdict="infected",job="django-backend",instance="backend-web:8000"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: htqweb-antivirus-unavailable
+        exp_alerts: []

@@ -31,7 +31,9 @@ HR-документы и вложения задач — нет (`ScopePolicy.an
    ANTIVIRUS_CLAMD_HOST=clamav
    # необязательно (значения по умолчанию):
    # ANTIVIRUS_CLAMD_PORT=3310
-   # ANTIVIRUS_TIMEOUT=30      # меньше `proxy_read_timeout` загрузок в nginx (45s) и gunicorn 60
+   # ANTIVIRUS_TIMEOUT=30      # таймаут на всю проверку файла (подключение, передача, ответ),
+   #                           # а не на операцию сокета; меньше `proxy_read_timeout` загрузок
+   #                           # в nginx (45s) и gunicorn 60
    # CLAMAV_DATABASE_MIRROR=   # только при 403 — см. §4
    ```
 
@@ -117,7 +119,7 @@ docker compose exec clamav grep -E '^(DatabaseMirror|PrivateMirror)' /etc/clamav
 - Алерт **«Антивирус недоступен»** (`htqweb-antivirus-unavailable`): рост
   `verdict="unavailable"` за 10 минут — загрузки отклоняются 503. Причины по
   частоте: контейнер ещё качает базы (§3), контейнер упал/`unhealthy`, упёрлась
-  память, таймаут.
+  память, вышел таймаут на всю проверку файла (`ANTIVIRUS_TIMEOUT`).
 - Серия `unavailable` появляется только у включённого сканера и только при
   попытках загрузки: ночью без загрузок алерт молчит и при мёртвом clamd —
   ориентируйтесь на `healthy` и панель инфраструктуры.

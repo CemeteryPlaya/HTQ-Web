@@ -194,6 +194,26 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     ]
 
 
+def list_positions_brief() -> list[dict]:
+    """Все должности ТЕКУЩЕЙ схемы компании — справочник для редактора
+    маршрута согласования.
+
+    Тот же набор ключей, что у ``get_positions_brief``, по всей схеме сразу.
+    Нужен signoff (БЗО, B8.1): этап маршрута дочерней компании вправе стоять
+    на должности холдинга, а кадровый API отдаёт должности только компании
+    запроса — signoff входит в схему холдинга (``use_company``) и спрашивает
+    её справочник здесь. Неактивные — тоже, с признаком: старый маршрут
+    должен показывать, на какой должности стоит, а не терять её.
+    """
+    require_service("hr")
+    rows = (Position.objects.select_related("department")
+            .order_by("title", "id")
+            .values("id", "title", "department__name", "is_active"))
+    return [{"id": row["id"], "title": row["title"],
+             "department_name": row["department__name"],
+             "is_active": row["is_active"]} for row in rows]
+
+
 def list_positions_hr_levels() -> list[dict]:
     """Должности текущей компании плюс их HR-уровень — для переноса ролей.
 

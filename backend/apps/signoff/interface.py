@@ -103,6 +103,7 @@ __all__ = [
     "pending_step",
     "decision_stats",
     "is_participant",
+    "participant_subject_ids",
     "purge_processes",
 ]
 
@@ -148,10 +149,12 @@ def start_process(*, subject_type: str, subject_id: int | str,
     ``subject_id`` — целое, строка или ``UUID``: движок приводит его к
     канонической строке ключа модели.
 
-    ``preapproved`` — ``[{position_id, actor_id, label}]`` (мастер-план БЗО,
-    D-26): группы этих должностей уже согласованы — задач им не будет, этап
-    из одних таких групп закроется сразу с событием ``stage_preapproved``.
-    Должность, которой нет в маршруте, — ``engine.PreapprovalMismatch`` (409).
+    ``preapproved`` — ``[{position_id, company?, actor_id, label}]``
+    (мастер-план БЗО, D-26): группы этих должностей уже согласованы — задач
+    им не будет, этап из одних таких групп закроется сразу с событием
+    ``stage_preapproved``. ``company`` — слаг вышестоящей компании, если
+    должность в её штате (B8.1); пусто — своя. Должность, которой нет в
+    маршруте, — ``engine.PreapprovalMismatch`` (409).
     """
     require_service("signoff")
 
@@ -354,9 +357,12 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
     ``route_service.add_stage`` (``order``, ``name``, ``quorum``,
     ``approver_kind``, ``position_ids``/``user_ids``/``approver_key``,
     ``condition``, ``is_fallback``, ``requires_attachment``,
-    ``requires_comment``, ``requirement_key``). Любая ошибка настройки —
-    ``RouteConflict``
-    (экспортируется отсюда же), и ничего не записано.
+    ``requires_comment``, ``requirement_key``). Должности вышестоящих
+    компаний (B8.1) — ``positions: [{company, position_id}]`` рядом с
+    ``position_ids`` своей; во флагах — ``escalation_position_company``,
+    ``no_executor_notify_foreign``, ``self_skip_notify_foreign``. Любая
+    ошибка настройки — ``RouteConflict`` (экспортируется отсюда же), и
+    ничего не записано.
     """
     require_service("signoff")
 
@@ -371,6 +377,7 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
                 order=spec.get("order", 1), name=spec["name"],
                 quorum=spec.get("quorum", "all"),
                 position_ids=list(spec.get("position_ids") or []),
+                positions=list(spec.get("positions") or []),
                 condition=spec.get("condition") or [],
                 is_fallback=bool(spec.get("is_fallback", False)),
                 approver_kind=spec.get("approver_kind", "position"),
@@ -505,14 +512,38 @@ def is_participant(user_id: int, subject_type: str, subject_id: int | str) -> bo
     которому сам signoff показывает процессы (``views._visible_processes``).
     """
     require_service("signoff")
+    return bool(participant_subject_ids(user_id, subject_type, [subject_id]))
+
+
+def participant_subject_ids(user_id: int, subject_type: str, subject_ids) -> set:
+    """Какие из ``subject_ids`` человек согласовывал — правило
+    ``is_participant`` пачкой, одной выборкой (поиск договоров БЗО для
+    соседа, D-S8-3: без запроса на строку).
+
+    Возвращает подмножество ВХОДНЫХ ключей в том виде, в каком их передали
+    (``"ABC…"`` вернётся ``"ABC…"``, хотя хранится в нижнем регистре); ключ,
+    которым объект этого типа быть не может, — просто не участник, а не
+    ошибка всего ответа. Пустой вход — без запроса.
+    """
+    require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
 
-    return ApprovalTask.objects.filter(
+    by_key: dict[str, list] = {}
+    for raw in subject_ids:
+        try:
+            key = registry.storage_key(subject_type, raw)
+        except registry.BadSubjectId:
+            continue
+        by_key.setdefault(key, []).append(raw)
+    if not by_key:
+        return set()
+    found = ApprovalTask.objects.filter(
         user_id=user_id,
         stage__process__subject_type=subject_type,
-        stage__process__subject_id=registry.storage_key(subject_type, subject_id),
-    ).exists()
+        stage__process__subject_id__in=list(by_key),
+    ).values_list("stage__process__subject_id", flat=True).distinct()
+    return {raw for key in found for raw in by_key[key]}
 
 
 def decision_stats(subject_type: str, *, limit: int = 20) -> list[dict]:

@@ -85,7 +85,7 @@ def agreement_brief(ids) -> dict[str, dict]:
 
 def visible_agreement_brief(ids, *, token, company: str | None) -> dict[str, dict]:
     """``agreement_brief`` только по договорам, которые ``token`` вправе видеть
-    (как в реестре договоров); невидимый — как несуществующий. Для проверки
+    (как карточка договора, `agreements.can_view`); невидимый — как несуществующий. Для проверки
     при привязке в чужой форме. Подмодуль ``bpp_agreements`` выключен —
     ``ServiceDisabled``."""
     require_service("bpp")
@@ -99,7 +99,7 @@ def search_agreements(query: str | None, *, partner_key, token,
                       company: str | None, limit: int = 20) -> list[dict]:
     """Поиск договоров контрагента для выбора в чужой форме (привлечение
     партнёра ``tasks``): только «Действует»/«Исполнен», основные (не
-    допсоглашения), с учётом прав ``token`` на договоры — как в реестре;
+    допсоглашения), с учётом прав ``token`` на договоры — как карточка (`agreements.can_view`);
     без права — пусто. Строки: ``{id, number, status, counterparty_id, name,
     ext_number, ext_date}``. Подмодуль ``bpp_agreements`` выключен у компании —
     пустой список. Зовётся в контексте компании."""

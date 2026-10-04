@@ -11,9 +11,16 @@
 #      алерты, но и все дашборды. Именно так прод и стоял: переменная
 #      GF_TELEGRAM_BOT_TOKEN не передавалась контейнеру, и Grafana не
 #      поднималась вовсе, а заметили это только при разборе.
+#   1б. правила алертинга БЗО (и два правила этапа 7) СРАБАТЫВАЮТ: генератор
+#      scripts/monitoring/grafana_rules_to_promtool.py переводит их в rule-файл
+#      Prometheus, `promtool test rules` гоняет его на подложенных рядах
+#      infra/logging/promtool-tests/bpp_rules_test.yml (выше порога — алерт,
+#      ниже — тишина). Провижининг (п. 4) этого не ловит: правило с опечаткой
+#      в метрике принимается и молчит вечно.
 #
 # Usage:  ./scripts/check-monitoring-config.sh
-# Требует docker. Ничего в репозитории не меняет, портов не занимает.
+# Требует docker и python с PyYAML (для п. 1б; в CI — actions/setup-python +
+# pip install pyyaml). Ничего в репозитории не меняет, портов не занимает.
 
 set -euo pipefail
 
@@ -35,7 +42,12 @@ CONTAINER="htqweb-provisioning-check-$$"
 fail() { echo "  ✗ $1" >&2; exit 1; }
 ok()   { echo "  ✓ $1"; }
 
-cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+RULES_TMP=""
+
+cleanup() {
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    if [ -n "$RULES_TMP" ]; then rm -rf "$RULES_TMP"; fi
+}
 trap cleanup EXIT
 
 # ─── 1. prometheus.yml ───────────────────────────────────────────────────────
@@ -44,6 +56,46 @@ docker run --rm -v "$HOST_PWD/infra/logging/prometheus/prometheus.yml:/tmp/p.yml
     --entrypoint promtool "$PROM_IMAGE" check config /tmp/p.yml >/dev/null \
     || fail "promtool отверг конфиг"
 ok "синтаксис принят promtool"
+
+# ─── 1б. правила алертинга срабатывают на подложенных данных ─────────────────
+# Провижининг (п. 4) проверяет, что правила ПРИНЯТЫ, но не что они СРАБОТАЮТ:
+# опечатка в имени метрики или порог не в тех единицах дают правило, которое
+# молчит вечно (noDataState: OK). Правила — Grafana, а не Prometheus, поэтому
+# генератор переводит выбранные в rule-файл Prometheus (тот же PromQL, тот же
+# порог и for), и promtool прогоняет его на подложенных рядах:
+# выше порога — алерт, ниже — тишина. Набор: все правила, читающие
+# htqweb_bpp_* (новое правило БЗО попадает сюда само и без своих тестов роняет
+# шаг), плюс два правила этапа 7. Генератору нужен PyYAML — пробуем
+# кандидатов так же, как в п. 3, но с `import yaml`.
+echo "правила алертинга (promtool test rules)"
+RULES_PYTHON=""
+for candidate in python3 python ./.venv/Scripts/python.exe ./.venv/bin/python; do
+    if "$candidate" -c "import yaml" >/dev/null 2>&1; then RULES_PYTHON="$candidate"; break; fi
+done
+[ -n "$RULES_PYTHON" ] || fail "не найден python с PyYAML для генератора правил (pip install pyyaml)"
+
+RULES_TMP="$(mktemp -d)"
+# mktemp -d на Linux даёт 0700, а promtool в образе работает от nobody и
+# каталог бы не прочитал (Docker Desktop под Windows права bind-mount не
+# учитывает — локально это не видно). Права — как у файлов checkout, которые
+# монтирует п. 1: каталог 755, файл 644.
+chmod 755 "$RULES_TMP"
+RULES_TMP_HOST="$(cd "$RULES_TMP" && (pwd -W 2>/dev/null || pwd))"
+rules_count="$("$RULES_PYTHON" scripts/monitoring/grafana_rules_to_promtool.py \
+    infra/logging/grafana-provisioning/alerting/rules.yml \
+    "$RULES_TMP_HOST/grafana_rules.yml" \
+    --match htqweb_bpp_ \
+    --uid htqweb-auth-lockout-burst \
+    --uid htqweb-antivirus-unavailable \
+    --tests infra/logging/promtool-tests/bpp_rules_test.yml)" \
+    || fail "генератор не перевёл правила Grafana в rule-файл Prometheus (причина выше)"
+chmod 644 "$RULES_TMP/grafana_rules.yml"
+docker run --rm \
+    -v "$RULES_TMP_HOST:/rules:ro" \
+    -v "$HOST_PWD/infra/logging/promtool-tests:/tests:ro" \
+    --entrypoint promtool "$PROM_IMAGE" test rules /tests/bpp_rules_test.yml >&2 \
+    || fail "правила не срабатывают так, как ждут тесты infra/logging/promtool-tests/bpp_rules_test.yml"
+ok "правила БЗО срабатывают на подложенных данных ($rules_count)"
 
 # ─── 2. compose-файлы ────────────────────────────────────────────────────────
 # Значения-заглушки: у прод-файла обязательные переменные объявлены через :?,

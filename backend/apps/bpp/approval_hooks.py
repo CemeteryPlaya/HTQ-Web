@@ -11,6 +11,10 @@
 Маршруты документов модуля, кроме администратора платформы, правят ФД и
 АДМ (В-09): узел ``bpp.routes`` — колбэк ``route_editors`` у каждого типа.
 
+Каждый тип документа решается и из вышестоящей компании (B8.1, директора —
+в штате холдинга): ``_cross_company`` — признак, рубильник подмодуля и
+сводка позиций (``approval_summary``).
+
 Здесь же — проверки доступа к «Истории изменений» (``audit.
 register_history_access``): журнал документа читает тот, кто видит сам
 документ.
@@ -18,6 +22,7 @@ register_history_access``): журнал документа читает тот,
 
 from __future__ import annotations
 
+from apps.bpp import approval_summary
 from apps.bpp.file_owners import actor_from_token
 from apps.bpp.models import (
     AccountableFundsRequest,
@@ -199,6 +204,16 @@ def _route_editors(token) -> bool:
     return actor_from_token(token).can("bpp.routes", "edit")
 
 
+def _cross_company(service: str, summary) -> dict:
+    """Документ модуля решается и из вышестоящей компании (B8.1): колбэки
+    берут компанию из контекста, а требование этапа счёта ``bpp:budget`` —
+    проверка состояния, а не работа согласующего. ``service`` — подмодуль,
+    чей рубильник у компании документа гасит такое решение; ``summary`` —
+    сводка позиций для карточки в холдинге (``approval_summary``). Включает
+    это для маршрута флаг «Решение прямо из холдинга»."""
+    return {"cross_company_decisions": True, "service": service, "summary": summary}
+
+
 def register() -> None:
     signoff.register_subject(
         PurchaseRequest.SIGNOFF_SUBJECT_TYPE,
@@ -213,6 +228,7 @@ def register() -> None:
         facts=_request_facts,
         fact_fields=_request_fact_fields,
         route_editors=_route_editors,
+        **_cross_company("bpp_requests", approval_summary.request_summary),
     )
     signoff.register_subject(
         AccountableFundsRequest.SIGNOFF_SUBJECT_TYPE,
@@ -227,6 +243,7 @@ def register() -> None:
         facts=_accountable_facts,
         fact_fields=lambda: _AMOUNT_FIELDS,
         route_editors=_route_editors,
+        **_cross_company("bpp_accountable", approval_summary.accountable_summary),
     )
     signoff.register_subject(
         AdvanceReport.SIGNOFF_SUBJECT_TYPE,
@@ -237,6 +254,7 @@ def register() -> None:
         facts=_report_facts,
         fact_fields=lambda: _AMOUNT_FIELDS,
         route_editors=_route_editors,
+        **_cross_company("bpp_accountable", approval_summary.advance_report_summary),
     )
     signoff.register_subject(
         Agreement.SIGNOFF_SUBJECT_TYPE,
@@ -257,6 +275,7 @@ def register() -> None:
         check_option=voting.check_option,
         on_option=voting.on_option,
         route_editors=_route_editors,
+        **_cross_company("bpp_agreements", approval_summary.agreement_summary),
     )
     signoff.register_subject(
         Invoice.SIGNOFF_SUBJECT_TYPE,
@@ -273,6 +292,7 @@ def register() -> None:
         requirement_fields=_invoice_requirements,
         check_requirement=invoice_service.check_requirement,
         route_editors=_route_editors,
+        **_cross_company("bpp_invoices", approval_summary.invoice_summary),
     )
     audit.register_history_access(
         Invoice._meta.label_lower,

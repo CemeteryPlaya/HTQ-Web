@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 
 from django.db import models
-from django.db.models.functions import Now
+from django.db.models.functions import Lower, Now
 
 
 class ProjectKind(models.TextChoices):
@@ -50,6 +50,13 @@ class Project(models.Model):
             # Ключ записи в 1С уникален среди непустых внутри компании (A7.3, D-S7-5).
             models.UniqueConstraint(fields=["ext_1c_ref"], condition=~models.Q(ext_1c_ref=""),
                                     name="uq_project_ext_1c"),
+            # Только нижний регистр (D-S8-4): уникальность выше регистрозависима,
+            # и GUID, введённый мимо сервиса (django-admin, ORM) заглавными,
+            # обошёл бы её. Форма django-admin получает ошибку формы.
+            models.CheckConstraint(condition=models.Q(ext_1c_ref=Lower("ext_1c_ref")),
+                                   name="ck_project_ext_1c_lower",
+                                   violation_error_message="«Код в 1С» хранится в нижнем "
+                                                           "регистре (GUID строчными буквами)."),
         ]
         verbose_name = "Проект"
         verbose_name_plural = "Проекты"
