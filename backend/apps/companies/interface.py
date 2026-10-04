@@ -348,6 +348,36 @@ def descendant_slugs(slug: str) -> list[str]:
     return sorted(below)
 
 
+def ancestor_slugs(slug: str) -> list[str]:
+    """Слаги компаний строго ВЫШЕ ``slug`` по дереву владения — от родителя
+    вверх до вершины. Неизвестный слаг и компания без родителя — ``[]``.
+
+    Единственное правило обхода вверх на платформу: по нему наследуются
+    роли обслуживающих должностей (``access.services.inheritance``), и по
+    нему же B8.1 найдёт компании выше по дереву для кросс-компанейского
+    этапа согласования (директор холдинга решает за дочернюю).
+
+    Архивные предки ВКЛЮЧЕНЫ: обход не обрывается на архивной ступени
+    (выше может быть действующая компания), а решение, чьи роли или этапы
+    действуют, принимает вызывающий по ``get_company(...)["is_active"]``.
+
+    Защита от цикла — множеством пройденных слагов: ``Company.parent`` —
+    self-FK без проверки ацикличности, и цикл, заведённый прямым ``UPDATE``,
+    не должен вешать разрешение прав на каждом гейтуемом запросе. Каждая
+    ступень — ``get_company`` (кэш 5 с), как и было в наследовании прав.
+    """
+    result: list[str] = []
+    seen = {slug}
+    row = get_company(slug)
+    cursor = row.get("parent_slug") if row else None
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        result.append(cursor)
+        row = get_company(cursor)
+        cursor = row.get("parent_slug") if row else None
+    return result
+
+
 def grant_membership(slug: str, user_id: int) -> bool:
     """Членство пользователя в компании (``True`` — создано, ``False`` —
     уже было). Та же точка логики, что у ``company_grant`` (с базовой ролью).
