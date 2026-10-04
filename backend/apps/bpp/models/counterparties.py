@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Lower
 
 from .core import BppModel, VersionedModel
 
@@ -74,6 +75,14 @@ class Counterparty(VersionedModel):
             # Ключ записи в 1С уникален среди непустых внутри компании (A7.3, D-S7-5).
             models.UniqueConstraint(fields=["ext_1c_ref"], condition=~models.Q(ext_1c_ref=""),
                                     name="uq_bpp_counterparty_ext_1c"),
+            # Только нижний регистр (D-S8-4): уникальность выше регистрозависима,
+            # и GUID, введённый мимо сервиса (django-admin, ORM) заглавными,
+            # обошёл бы её. Сервис и 1С пишут нижний регистр сами; форма
+            # django-admin получает ошибку формы (проверка ограничений модели).
+            models.CheckConstraint(condition=Q(ext_1c_ref=Lower("ext_1c_ref")),
+                                   name="ck_bpp_counterparty_ext_1c_lower",
+                                   violation_error_message="«Код в 1С» хранится в нижнем "
+                                                           "регистре (GUID строчными буквами)."),
         ]
         indexes = [
             models.Index(fields=["status", "name"], name="ix_bpp_counterparty_status"),
