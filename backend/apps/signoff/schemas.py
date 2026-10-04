@@ -61,6 +61,14 @@ Condition = list[Predicate]
 
 # ── Маршруты ────────────────────────────────────────────────────────────
 
+class PositionRefIn(BaseModel):
+    """Должность парой (БЗО, B8.1): ``company`` — слаг вышестоящей компании,
+    в штате которой должность; пусто — своя компания."""
+
+    company: str = Field("", max_length=32)
+    position_id: int
+
+
 class RouteFlags(BaseModel):
     """Флаги маршрута (мастер-план БЗО, D-21) — все выключены по умолчанию.
     «Роли» здесь — HR-должности, как у согласующих этапов."""
@@ -72,6 +80,12 @@ class RouteFlags(BaseModel):
     no_executor_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
     escalation_position_id: Optional[int] = None
     self_skip_notify_position_ids: list[int] = Field(default_factory=list, max_length=20)
+    # B8.1: должности вышестоящих компаний для тех же ролей и решение «прямо
+    # из холдинга» (живой флаг, в снимок процесса не копируется).
+    escalation_position_company: str = Field("", max_length=32)
+    no_executor_notify_foreign: list[PositionRefIn] = Field(default_factory=list, max_length=20)
+    self_skip_notify_foreign: list[PositionRefIn] = Field(default_factory=list, max_length=20)
+    allow_direct_decisions: bool = False
 
 
 class RouteCreate(RouteFlags):
@@ -94,11 +108,18 @@ class RouteUpdate(BaseModel):
     no_executor_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
     escalation_position_id: Optional[int] = None
     self_skip_notify_position_ids: Optional[list[int]] = Field(None, max_length=20)
+    escalation_position_company: Optional[str] = Field(None, max_length=32)
+    no_executor_notify_foreign: Optional[list[PositionRefIn]] = Field(None, max_length=20)
+    self_skip_notify_foreign: Optional[list[PositionRefIn]] = Field(None, max_length=20)
+    allow_direct_decisions: Optional[bool] = None
 
 
 class PositionBrief(BaseModel):
     id: int
     title: str = ""
+    # Компания должности (B8.1): пусто — своя; название — для подписи.
+    company: str = ""
+    company_name: Optional[str] = None
 
 
 class StageCreate(BaseModel):
@@ -119,6 +140,9 @@ class StageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     quorum: Quorum = Quorum.ALL
     position_ids: list[int] = Field(default_factory=list)
+    # Должности парами, в том числе вышестоящих компаний (B8.1); складываются
+    # с ``position_ids`` своей компании.
+    positions: list[PositionRefIn] = Field(default_factory=list)
     # Пустое условие — «этап нужен всегда»; это и есть поведение всех этапов
     # до появления ветвления, поэтому значение по умолчанию именно такое.
     condition: Condition = Field(default_factory=list)
@@ -140,6 +164,8 @@ class StageCreate(BaseModel):
     def _roles_match_kind(self):
         if len(set(self.position_ids)) != len(self.position_ids):
             raise ValueError("должности в этапе повторяются")
+        if len({(ref.company, ref.position_id) for ref in self.positions}) != len(self.positions):
+            raise ValueError("должности в этапе повторяются")
         if len(set(self.user_ids)) != len(self.user_ids):
             raise ValueError("согласующие в этапе повторяются")
         # Смысл сочетаний — в route_service._check_approver_kind; здесь
@@ -147,9 +173,10 @@ class StageCreate(BaseModel):
         # неуместен. Дубль осознанный — 422 на форме понятнее, чем 409 из
         # сервиса, а сервис обязан защищаться и без схемы (его зовёт и
         # django-admin).
-        if self.approver_kind == ApproverKind.POSITION and not self.position_ids:
+        has_positions = bool(self.position_ids or self.positions)
+        if self.approver_kind == ApproverKind.POSITION and not has_positions:
             raise ValueError("нужна хотя бы одна должность")
-        if self.approver_kind != ApproverKind.POSITION and self.position_ids:
+        if self.approver_kind != ApproverKind.POSITION and has_positions:
             raise ValueError(
                 "у этапа с этим видом согласующих должности не заполняются")
         if self.approver_kind == ApproverKind.USERS and not self.user_ids:
@@ -166,6 +193,9 @@ class StageUpdate(BaseModel):
     # None — «не трогать список»; пустой список запрещён отдельной проверкой
     # в сервисе, чтобы не молча получить неисполнимый этап.
     position_ids: Optional[list[int]] = None
+    # Пары (B8.1). Прислано хоть одно из двух — список должностей этапа
+    # заменяется целиком их суммой.
+    positions: Optional[list[PositionRefIn]] = None
     # А здесь пустой список — законное «снять условие»: отличить его от «не
     # трогать» позволяет exclude_unset во вьюхе (см. StageDetailView.patch).
     condition: Optional[Condition] = None
@@ -197,6 +227,9 @@ class ApproverFieldRead(BaseModel):
 
 class RoleRead(BaseModel):
     position_id: int
+    # Компания должности (B8.1): пусто — своя.
+    company: str = ""
+    company_name: Optional[str] = None
     title: str = ""
     department_name: Optional[str] = None
     is_active: bool = True
@@ -258,6 +291,13 @@ class RouteRead(BaseModel):
     no_executor_notify_positions: list[PositionBrief] = Field(default_factory=list)
     escalation_position: Optional[PositionBrief] = None
     self_skip_notify_positions: list[PositionBrief] = Field(default_factory=list)
+    # B8.1: компания должности эскалации, получатели из вышестоящих компаний,
+    # решение «прямо из холдинга» и допускает ли его тип документа вообще.
+    escalation_position_company: str = ""
+    no_executor_notify_foreign: list[PositionRefIn] = Field(default_factory=list)
+    self_skip_notify_foreign: list[PositionRefIn] = Field(default_factory=list)
+    allow_direct_decisions: bool = False
+    cross_company_decisions: bool = False
     stages: list[StageRead]
     # Схема области — только в карточке одного маршрута (редактор): по каким
     # фактам ветвить и какие ключи «назначает объект» предлагать.
@@ -289,6 +329,12 @@ class TaskRead(BaseModel):
     id: int
     user_id: int
     position_id: Optional[int] = None
+    # Компания должности (B8.1): пусто — своя; подпись — «ФД · Hi-Tech Group»
+    # (только в обогащённой карточке). ``also_positions`` — остальные
+    # должности этапа, которые закрывает эта же задача.
+    position_company: str = ""
+    position_label: Optional[str] = None
+    also_positions: list[dict] = Field(default_factory=list)
     full_name: str = ""
     state: TaskState
     comment: str
@@ -320,6 +366,8 @@ class ProcessStageRead(BaseModel):
     # решении.
     approver_kind: ApproverKind = ApproverKind.POSITION
     role_ids: list[int] = Field(default_factory=list)
+    # Все должности этапа парами ``{company, position_id}`` (B8.1).
+    role_refs: list[dict] = Field(default_factory=list)
     user_ids: list[int] = Field(default_factory=list)
     approver_key: str = ""
     requires_attachment: bool = False
@@ -407,6 +455,64 @@ class InboxItem(BaseModel):
     file_id: Optional[str] = None
     initiator_id: Optional[int]
     created_at: datetime
+
+
+class CompanyBrief(BaseModel):
+    """Компания строки очереди или карточки (B8.1). ``url`` — её адрес для
+    перехода (``companies.public_url``); пусто, если корень не настроен."""
+
+    slug: str
+    subdomain: Optional[str] = None
+    name: str = ""
+    url: Optional[str] = None
+    current: bool = False
+
+
+class InboxAllItem(InboxItem):
+    """Строка единой очереди «Ждёт меня» по всем компаниям (B8.1).
+
+    ``can_enter`` — у человека есть членство в компании задачи, и «Открыть»
+    переведёт его туда; ``direct_allowed`` — задачу можно решить прямо
+    отсюда (флаг маршрута), а если нет — ``direct_blocker`` объясняет почему.
+    ``process_path`` — где решать на адресе компании задачи."""
+
+    company: Optional[CompanyBrief] = None
+    can_enter: bool = True
+    direct_allowed: bool = False
+    direct_blocker: Optional[str] = None
+    process_path: str = ""
+
+
+class SummaryColumn(BaseModel):
+    key: str
+    label: str = ""
+    align: Optional[str] = None
+
+
+class SummaryLines(BaseModel):
+    columns: list[SummaryColumn] = Field(default_factory=list)
+    rows: list[dict] = Field(default_factory=list)
+    total: Optional[dict] = None
+
+
+class SubjectSummary(BaseModel):
+    """Сводка документа для решения из вышестоящей компании (``Subject.summary``):
+    поля шапки и таблица позиций — готовыми строками."""
+
+    fields: list[dict] = Field(default_factory=list)
+    lines: Optional[SummaryLines] = None
+
+
+class ForeignProcessRead(ProcessRead):
+    """Карточка процесса дочерней компании, открытая из холдинга (B8.1)."""
+
+    company: CompanyBrief
+    summary: Optional[SubjectSummary] = None
+    my_task_id: Optional[int] = None
+    direct_allowed: bool = False
+    direct_blocker: Optional[str] = None
+    # Есть членство в компании документа — «Открыть в компании» её откроет.
+    can_enter: bool = False
 
 
 class FieldOption(BaseModel):

@@ -48,7 +48,18 @@ from .models import (
     StageState,
     TaskState,
 )
-from .services import attachments, batch, engine, presentation, registry
+from htqweb.tenancy import current_company_or_none
+
+from .services import (
+    attachments,
+    batch,
+    direct,
+    engine,
+    inbox,
+    positions,
+    presentation,
+    registry,
+)
 from .services import route_service as routes
 from .services.engine import InvalidDecision, SelfApprovalForbidden, SignoffError
 from .services.registry import UnknownSubject
@@ -221,6 +232,36 @@ class RouteDetailView(SignoffView):
         _editable_route(request.token, route_id)
         routes.delete_route(route_id)
         return HttpResponse(status=204)
+
+
+class PositionCompaniesView(SignoffView):
+    """Из каких компаний редактор маршрута может брать должности (B8.1):
+    своя и действующие вышестоящие, ближайшая первой. Права — как у правки
+    маршрутов: администратор или редактор хоть одного типа."""
+
+    @read
+    def get(self, request):
+        _require_route_rights(request.token)
+        own = current_company_or_none() or ""
+        rows = [{"slug": own, "name": positions.company_name(own) or "", "own": True}]
+        rows.extend({"slug": slug, "name": positions.company_name(slug) or slug, "own": False}
+                    for slug in positions.allowed_companies() if slug)
+        return rows
+
+
+class PositionsView(SignoffView):
+    """Справочник должностей компании для этапа маршрута (B8.1): своей или
+    вышестоящей (``?company=<слаг>``, пусто — своя). Кадровый API отдаёт
+    должности только компании запроса, поэтому должности холдинга редактор
+    маршрута дочерней берёт здесь. Другая компания — 404, как несуществующая."""
+
+    @read
+    def get(self, request):
+        _require_route_rights(request.token)
+        try:
+            return positions.list_positions(self.request.GET.get("company") or "")
+        except positions.PositionRefError as exc:
+            raise Http404(str(exc)) from exc
 
 
 class RouteStagesView(SignoffView):
@@ -440,6 +481,48 @@ class InboxView(SignoffView):
     def get(self, request):
         return [schemas.InboxItem.model_validate(row)
                 for row in presentation.list_inbox(request.token.user_id)]
+
+
+class InboxAllView(SignoffView):
+    """«Ждёт меня» по всем компаниям пользователя (БЗО, B8.1): текущая, где
+    есть членство, и ниже по дереву владения. Тот же принцип, что у
+    ``InboxView``: всегда про того, кто спрашивает, чужой очереди нет."""
+
+    @read
+    def get(self, request):
+        return [schemas.InboxAllItem.model_validate(row)
+                for row in inbox.inbox_all(request.token.user_id)]
+
+
+class ForeignProcessView(SignoffView):
+    """Карточка процесса дочерней компании — для решения из холдинга (B8.1).
+    Компания не ниже текущей или процесс без задач этого человека — 404."""
+
+    @read
+    def get(self, request, company: str, process_id: int):
+        return schemas.ForeignProcessRead.model_validate(
+            direct.process_card(company, process_id, user_id=request.token.user_id))
+
+
+class ForeignDecisionView(SignoffView):
+    """Решение по своей задаче дочерней компании прямо из холдинга (B8.1).
+
+    ``admin=False``, как у ``TaskDecisionView``: решает названный в маршруте
+    человек. Отказы — в докстринге ``services/direct.py``."""
+
+    @write("POST", body=schemas.Decision, admin=False)
+    def post(self, request, company: str, task_id: int, data: schemas.Decision):
+        try:
+            card = direct.decide(company, task_id, user_id=request.token.user_id,
+                                 decision=data.decision, comment=data.comment,
+                                 option_key=data.option_key)
+        except InvalidDecision as exc:
+            return json_error(str(exc), 422)
+        except (SelfApprovalForbidden, direct.DirectForbidden) as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ForeignProcessRead.model_validate(card)
 
 
 class TaskAttachmentView(SignoffView):

@@ -1,9 +1,10 @@
 """``companies.interface.ancestor_slugs`` — предки компании вверх по дереву
-владения (задача 9.4, заготовка под B8.1 — кросс-компанейское согласование).
+владения (задача 9.4 и B8.1; две одноимённые функции сведены 04.10 в одну).
 
-Правило обхода одно на платформу: ``access.services.inheritance.ancestors_of``
-теперь зовёт эту функцию, поэтому её поведение — контракт для наследования
-прав: от родителя вверх, архивные включены, цикл не вешает.
+Правило обхода одно на платформу: по умолчанию — только действующие предки
+(согласование между компаниями, B8.1), ``include_archived=True`` — все
+(наследование ролей, ``access.services.inheritance.ancestors_of``). В обоих
+режимах — от родителя вверх, обход идёт через архив дальше, цикл не вешает.
 """
 
 import pytest
@@ -32,16 +33,28 @@ def test_chain_goes_from_parent_upward():
 
 
 @pytest.mark.django_db
-def test_archived_intermediate_ancestor_is_included():
-    """Архив обход не обрывает и из результата не выбрасывается: чьи роли
-    и этапы действуют, решает вызывающий."""
+def test_archived_intermediate_ancestor_is_included_on_request():
+    """``include_archived=True`` (наследование ролей): архив обход не
+    обрывает и из результата не выбрасывается — чьи роли действуют, решает
+    вызывающий."""
     top = _co("t-anc-arch-top")
     mid = _co("t-anc-arch-mid", top, status=CompanyStatus.ARCHIVED)
     _co("t-anc-arch-low", mid)
 
-    assert interface.ancestor_slugs("t-anc-arch-low") == [
+    assert interface.ancestor_slugs("t-anc-arch-low", include_archived=True) == [
         "t-anc-arch-mid", "t-anc-arch-top",
     ]
+
+
+@pytest.mark.django_db
+def test_by_default_archived_is_skipped_but_walk_goes_on():
+    """По умолчанию (согласование между компаниями, B8.1) архивной ступени
+    в ответе нет, а действующий холдинг над ней — есть."""
+    top = _co("t-anc-def-top")
+    mid = _co("t-anc-def-mid", top, status=CompanyStatus.ARCHIVED)
+    _co("t-anc-def-low", mid)
+
+    assert interface.ancestor_slugs("t-anc-def-low") == ["t-anc-def-top"]
 
 
 @pytest.mark.django_db

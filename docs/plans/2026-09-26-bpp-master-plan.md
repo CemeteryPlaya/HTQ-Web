@@ -332,7 +332,7 @@ def register_digest_source(key: str, fn, *, tenant: bool, section: str | None = 
 
 # apps/companies/interface.py  (платформа; A8.1, этап 8 — для B8.1)
 def descendant_slugs(slug: str) -> list[str]: ...           # действующие компании ниже по дереву (через архивных предков)
-def ancestor_slugs(slug: str) -> list[str]: ...             # компании выше, от родителя вверх, архивные включены (9.4)
+def ancestor_slugs(slug: str, *, include_archived: bool = False) -> list[str]: ...  # компании выше, от родителя вверх; по умолчанию только действующие (B8.1), include_archived=True — для наследования ролей
 def grant_membership(slug: str, user_id: int) -> bool: ...   # + missing_member_ids, is_holding, use_company — htqweb.tenancy.db
 
 # apps/hr/interface.py  (B1.1)

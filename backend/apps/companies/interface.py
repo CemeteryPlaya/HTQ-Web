@@ -151,6 +151,42 @@ def is_holding(slug: str) -> bool:
     return bool(company and company["kind"] == CompanyKind.HOLDING)
 
 
+def ancestor_slugs(slug: str, *, include_archived: bool = False) -> list[str]:
+    """Компании ВЫШЕ ``slug`` по дереву владения, ближайшая первой.
+    Неизвестный слаг и компания без родителя — ``[]``.
+
+    Единственное правило обхода вверх на платформу (сведение 04.10 двух
+    одноимённых функций — B8.1 Руслана и задачи 9.4):
+
+    * по умолчанию — только ДЕЙСТВУЮЩИЕ: архивная компания в ответ не
+      попадает, но обход идёт через неё дальше (выше может стоять
+      действующий холдинг). Так её зовёт согласование между компаниями
+      (B8.1: этап маршрута дочерней вправе ссылаться на должность своей или
+      вышестоящей компании) и ``bpp_configure_routes``;
+    * ``include_archived=True`` — все предки, решение «чьи роли действуют»
+      принимает вызывающий: так её зовёт наследование ролей обслуживающих
+      должностей (``access.services.inheritance.ancestors_of``).
+
+    Цикл в данных (``Company.parent`` — self-FK без проверки ацикличности,
+    цикл заводится прямым ``UPDATE``) обрывается на уже пройденном слаге —
+    разрешение прав идёт на каждом гейтуемом запросе и не должно виснуть.
+    Каждая ступень — ``get_company`` (кэш 5 с).
+    """
+    out: list[str] = []
+    seen = {slug}
+    row = get_company(slug)
+    cursor = row.get("parent_slug") if row else None
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        row = get_company(cursor)
+        if include_archived or (row is not None and row["is_active"]):
+            out.append(cursor)
+        if row is None:
+            break
+        cursor = row.get("parent_slug")
+    return out
+
+
 def active_company_slugs(*, fresh: bool = False) -> list[str]:
     """Slug'и всех действующих компаний, в алфавитном порядке.
 
@@ -346,36 +382,6 @@ def descendant_slugs(slug: str) -> list[str]:
             seen.add(cursor)
             cursor = parents.get(cursor)
     return sorted(below)
-
-
-def ancestor_slugs(slug: str) -> list[str]:
-    """Слаги компаний строго ВЫШЕ ``slug`` по дереву владения — от родителя
-    вверх до вершины. Неизвестный слаг и компания без родителя — ``[]``.
-
-    Единственное правило обхода вверх на платформу: по нему наследуются
-    роли обслуживающих должностей (``access.services.inheritance``), и по
-    нему же B8.1 найдёт компании выше по дереву для кросс-компанейского
-    этапа согласования (директор холдинга решает за дочернюю).
-
-    Архивные предки ВКЛЮЧЕНЫ: обход не обрывается на архивной ступени
-    (выше может быть действующая компания), а решение, чьи роли или этапы
-    действуют, принимает вызывающий по ``get_company(...)["is_active"]``.
-
-    Защита от цикла — множеством пройденных слагов: ``Company.parent`` —
-    self-FK без проверки ацикличности, и цикл, заведённый прямым ``UPDATE``,
-    не должен вешать разрешение прав на каждом гейтуемом запросе. Каждая
-    ступень — ``get_company`` (кэш 5 с), как и было в наследовании прав.
-    """
-    result: list[str] = []
-    seen = {slug}
-    row = get_company(slug)
-    cursor = row.get("parent_slug") if row else None
-    while cursor is not None and cursor not in seen:
-        seen.add(cursor)
-        result.append(cursor)
-        row = get_company(cursor)
-        cursor = row.get("parent_slug") if row else None
-    return result
 
 
 def grant_membership(slug: str, user_id: int) -> bool:

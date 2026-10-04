@@ -73,7 +73,7 @@ def ancestors_of(company: str) -> list[str]:
     """
     from apps.companies import interface as companies
 
-    return companies.ancestor_slugs(company)
+    return companies.ancestor_slugs(company, include_archived=True)
 
 
 def inherit(user_id: int, company: str) -> Inherited:

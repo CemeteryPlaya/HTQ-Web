@@ -149,10 +149,12 @@ def start_process(*, subject_type: str, subject_id: int | str,
     ``subject_id`` — целое, строка или ``UUID``: движок приводит его к
     канонической строке ключа модели.
 
-    ``preapproved`` — ``[{position_id, actor_id, label}]`` (мастер-план БЗО,
-    D-26): группы этих должностей уже согласованы — задач им не будет, этап
-    из одних таких групп закроется сразу с событием ``stage_preapproved``.
-    Должность, которой нет в маршруте, — ``engine.PreapprovalMismatch`` (409).
+    ``preapproved`` — ``[{position_id, company?, actor_id, label}]``
+    (мастер-план БЗО, D-26): группы этих должностей уже согласованы — задач
+    им не будет, этап из одних таких групп закроется сразу с событием
+    ``stage_preapproved``. ``company`` — слаг вышестоящей компании, если
+    должность в её штате (B8.1); пусто — своя. Должность, которой нет в
+    маршруте, — ``engine.PreapprovalMismatch`` (409).
     """
     require_service("signoff")
 
@@ -355,9 +357,12 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
     ``route_service.add_stage`` (``order``, ``name``, ``quorum``,
     ``approver_kind``, ``position_ids``/``user_ids``/``approver_key``,
     ``condition``, ``is_fallback``, ``requires_attachment``,
-    ``requires_comment``, ``requirement_key``). Любая ошибка настройки —
-    ``RouteConflict``
-    (экспортируется отсюда же), и ничего не записано.
+    ``requires_comment``, ``requirement_key``). Должности вышестоящих
+    компаний (B8.1) — ``positions: [{company, position_id}]`` рядом с
+    ``position_ids`` своей; во флагах — ``escalation_position_company``,
+    ``no_executor_notify_foreign``, ``self_skip_notify_foreign``. Любая
+    ошибка настройки — ``RouteConflict`` (экспортируется отсюда же), и
+    ничего не записано.
     """
     require_service("signoff")
 
@@ -372,6 +377,7 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
                 order=spec.get("order", 1), name=spec["name"],
                 quorum=spec.get("quorum", "all"),
                 position_ids=list(spec.get("position_ids") or []),
+                positions=list(spec.get("positions") or []),
                 condition=spec.get("condition") or [],
                 is_fallback=bool(spec.get("is_fallback", False)),
                 approver_kind=spec.get("approver_kind", "position"),

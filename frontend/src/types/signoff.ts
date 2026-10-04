@@ -172,8 +172,38 @@ export interface CoverageGap {
 
 // ─── Маршруты ────────────────────────────────────────────────────────────
 
+/**
+ * Должность парой «компания + должность» (мастер-план БЗО, B8.1): этап
+ * маршрута дочерней компании может стоять на должности ВЫШЕСТОЯЩЕЙ —
+ * директора в штате холдинга. `company` — слаг этой компании; пусто — своя.
+ * Должности у компаний свои, и id повторяются, поэтому одного id мало.
+ */
+export interface PositionRef {
+  company: string;
+  position_id: number;
+}
+
+/** Компания, из которой редактор маршрута может брать должности. */
+export interface PositionCompany {
+  slug: string;
+  name: string;
+  /** Своя компания (её должности хранятся с пустым `company`). */
+  own: boolean;
+}
+
+/** Должность из справочника компании для редактора маршрута. */
+export interface PositionOption {
+  id: number;
+  title: string;
+  department_name: string | null;
+  is_active: boolean;
+}
+
 export interface RouteRole {
   position_id: number;
+  /** Компания должности (B8.1): пусто — своя. */
+  company?: string;
+  company_name?: string | null;
   title: string;
   department_name: string | null;
   is_active: boolean;
@@ -221,10 +251,13 @@ export interface RouteStage {
   requirement_label: string | null;
 }
 
-/** Должность в подписи флагов маршрута. */
+/** Должность в подписи флагов маршрута. `title` у должности вышестоящей
+ *  компании уже несёт её название («ФД · Hi-Tech Group»). */
 export interface PositionBrief {
   id: number;
   title: string;
+  company?: string;
+  company_name?: string | null;
 }
 
 /** Флаги маршрута, которые принимают ручки маршрута. */
@@ -236,6 +269,13 @@ export interface RouteFlagsInput {
   no_executor_notify_position_ids?: number[];
   escalation_position_id?: number | null;
   self_skip_notify_position_ids?: number[];
+  /** B8.1: должности вышестоящих компаний для тех же ролей. */
+  escalation_position_company?: string;
+  no_executor_notify_foreign?: PositionRef[];
+  self_skip_notify_foreign?: PositionRef[];
+  /** Задачу можно решить прямо из очереди вышестоящей компании. Живой
+   *  флаг: действует сразу, в том числе на идущие согласования. */
+  allow_direct_decisions?: boolean;
 }
 
 export interface ApprovalRoute {
@@ -261,6 +301,14 @@ export interface ApprovalRoute {
   no_executor_notify_positions: PositionBrief[];
   escalation_position: PositionBrief | null;
   self_skip_notify_positions: PositionBrief[];
+  /** B8.1 — см. `RouteFlagsInput`. `cross_company_decisions` — тип документа
+   *  вообще допускает решение из вышестоящей компании; без него переключатель
+   *  не показывается. */
+  escalation_position_company?: string;
+  no_executor_notify_foreign?: PositionRef[];
+  self_skip_notify_foreign?: PositionRef[];
+  allow_direct_decisions?: boolean;
+  cross_company_decisions?: boolean;
   stages: RouteStage[];
   /** Только в карточке ОДНОГО маршрута: схема его области — факты для
    *  условий и ключи «назначает объект». */
@@ -301,6 +349,12 @@ export interface ProcessTask {
   user_id: number;
   /** HR position through which this task was assigned; null for legacy and initiator tasks. */
   position_id: number | null;
+  /** Компания должности (B8.1): пусто — своя; подпись — «ФД · Hi-Tech Group». */
+  position_company?: string;
+  position_label?: string | null;
+  /** Остальные должности этапа, которые закрывает эта же задача (один
+   *  человек на двух должностях — решение засчитывается за обе). */
+  also_positions?: PositionRef[];
   full_name: string;
   state: TaskState;
   comment: string;
@@ -333,6 +387,8 @@ export interface ProcessStage {
   approver_kind: ApproverKind;
   /** HR-должности, по которым этот снимок маршрута разрешил задачи. */
   role_ids: number[];
+  /** Все должности этапа парами, включая вышестоящих компаний (B8.1). */
+  role_refs?: PositionRef[];
   user_ids: number[];
   approver_key: string;
   requires_attachment: boolean;
@@ -402,6 +458,59 @@ export interface InboxItem {
   created_at: string;
 }
 
+/** Компания строки очереди или карточки (B8.1). */
+export interface CompanyBrief {
+  slug: string;
+  /** Короткий адрес компании — по нему `switchCompany` строит хост. */
+  subdomain: string | null;
+  name: string;
+  url: string | null;
+  /** Компания текущего адреса. */
+  current: boolean;
+}
+
+/**
+ * Строка единой очереди «Ждёт меня» по всем компаниям (B8.1).
+ *
+ * Директора — в штате холдинга, а документы дочерних согласуются в схемах
+ * дочерних, поэтому очередь собирается по текущей компании, компаниям с
+ * членством и дочерним текущей. Задачу чужой компании можно открыть там
+ * (`can_enter` — есть членство) или решить прямо отсюда (`direct_allowed` —
+ * маршрут это разрешает); `direct_blocker` — почему нельзя.
+ */
+export interface InboxAllItem extends InboxItem {
+  /** `null` — запрос без контекста компании (голый домен). */
+  company: CompanyBrief | null;
+  can_enter: boolean;
+  direct_allowed: boolean;
+  direct_blocker: string | null;
+  /** Где решать на адресе компании задачи. */
+  process_path: string;
+}
+
+/** Сводка документа для решения из вышестоящей компании — готовыми
+ *  строками: поля шапки и таблица позиций (`Subject.summary`). */
+export interface SubjectSummary {
+  fields: { label: string; value: string }[];
+  lines: {
+    columns: { key: string; label: string; align?: 'right' | null }[];
+    rows: Record<string, string>[];
+    total: { label: string; value: string } | null;
+  } | null;
+}
+
+/** Карточка процесса дочерней компании, открытая из холдинга (B8.1). */
+export interface ForeignProcess extends ApprovalProcess {
+  company: CompanyBrief;
+  summary: SubjectSummary | null;
+  /** Своя задача на активном этапе — её и можно решить. */
+  my_task_id: number | null;
+  direct_allowed: boolean;
+  direct_blocker: string | null;
+  /** Есть членство в компании документа — её адрес откроется. */
+  can_enter: boolean;
+}
+
 export interface SignoffEnums {
   quorum: EnumOption[];
   approver_kind: EnumOption[];
@@ -422,6 +531,9 @@ export interface StageInput {
   /** Минимум одна у `position` — этап без должностей движок не запустит. У
    *  `initiator` наоборот: список обязан быть пустым. */
   position_ids: number[];
+  /** Должности парами, в том числе вышестоящих компаний (B8.1);
+   *  складываются с `position_ids` своей компании. */
+  positions?: PositionRef[];
   condition?: Condition;
   is_fallback?: boolean;
   approver_kind?: ApproverKind;
@@ -443,6 +555,8 @@ export interface StageUpdateInput {
   name?: string;
   quorum?: Quorum;
   position_ids?: number[];
+  /** Пары (B8.1); прислано хоть одно из двух — список заменяется их суммой. */
+  positions?: PositionRef[];
   condition?: Condition;
   is_fallback?: boolean;
   /** Переключение на `initiator` стирает названных согласующих само —

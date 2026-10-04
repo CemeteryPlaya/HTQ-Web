@@ -144,6 +144,19 @@ class RouteEditors(Protocol):
         компании запроса уже установлен."""
 
 
+class Summary(Protocol):
+    def __call__(self, subject_id: Any) -> dict | None:
+        """Сводка объекта для решения из вышестоящей компании (БЗО, B8.1):
+        ``{"fields": [{label, value}], "lines": {columns: [{key, label,
+        align?}], rows: [{key: value}], total: {label, value} | None} |
+        None}``. Значения — готовые строки (суммы уже отформатированы):
+        signoff и фронт рисуют их, не зная модели. ``None`` — объекта нет.
+
+        Прав читателя колбэк НЕ проверяет: signoff зовёт его только для
+        владельца задачи этого процесса — человека, который по документу
+        решает. Контекст — схема компании документа."""
+
+
 @dataclass(frozen=True)
 class Subject:
     """Что предметная аппка рассказала signoff о своём типе объектов.
@@ -211,6 +224,16 @@ class Subject:
 
     ``route_editors`` — кто, кроме администратора платформы, правит маршруты
     типа (``can_edit_routes``). Нет колбэка — только администратор, как было.
+
+    ``cross_company_decisions`` (БЗО, B8.1) — объект можно решить из очереди
+    вышестоящей компании, не заходя на адрес своей: предметная аппка
+    ручается, что её колбэки берут компанию только из контекста (а не из
+    запроса), а требования этапов — проверки состояния объекта, а не работа
+    согласующего на нём. Включает это для маршрута флаг
+    ``ApprovalRoute.allow_direct_decisions``. ``service`` — рубильник
+    предмета (подмодуль, ``KNOWN_SUBMODULES``): решение из холдинга
+    проверяет его у компании документа, как HTTP-гейт проверил бы на её
+    адресе. ``summary`` — сводка объекта для такого решения (``Summary``).
     """
 
     subject_type: str
@@ -235,6 +258,9 @@ class Subject:
     check_option: CheckOption | None = None
     on_option: OnOption | None = None
     route_editors: RouteEditors | None = None
+    cross_company_decisions: bool = False
+    service: str = ""
+    summary: Summary | None = None
     takes_scope_fact_fields: bool = False
     takes_scope_approver_fields: bool = False
     takes_scope_requirement_fields: bool = False
@@ -262,7 +288,10 @@ def register_subject(subject_type: str, *, label: str, model: type,
                      options: Options | None = None,
                      check_option: CheckOption | None = None,
                      on_option: OnOption | None = None,
-                     route_editors: RouteEditors | None = None) -> Subject:
+                     route_editors: RouteEditors | None = None,
+                     cross_company_decisions: bool = False,
+                     service: str = "",
+                     summary: Summary | None = None) -> Subject:
     """Объявить тип объектов согласуемым.
 
     Повторная регистрация того же типа ПЕРЕЗАПИСЫВАЕТ запись, а не падает:
@@ -343,6 +372,8 @@ def register_subject(subject_type: str, *, label: str, model: type,
         requirement_fields=requirement_fields, check_requirement=check_requirement,
         options=options, check_option=check_option, on_option=on_option,
         route_editors=route_editors,
+        cross_company_decisions=cross_company_decisions, service=service,
+        summary=summary,
         takes_scope_fact_fields=_takes_scope(fact_fields),
         takes_scope_approver_fields=_takes_scope(approver_fields),
         takes_scope_requirement_fields=_takes_scope(requirement_fields),
@@ -500,6 +531,24 @@ def on_option_for(subject_type: str, subject_id: Any, stage_order: int,
     subject = get_subject(subject_type)
     if subject.on_option is not None:
         subject.on_option(_native(subject, subject_id), stage_order, user_id, option_key)
+
+
+def summary_for(subject_type: str, subject_id: Any) -> dict | None:
+    """Сводка объекта (``Subject.summary``, B8.1) или ``None``.
+
+    Оформление, как ``describe``: сломанный колбэк не роняет карточку —
+    решающий всё равно может открыть документ на адресе его компании."""
+    from htqweb.fallback import fallback
+
+    subject = get_subject(subject_type)
+    if subject.summary is None:
+        return None
+    try:
+        return subject.summary(_native(subject, subject_id))
+    except Exception as exc:
+        return fallback("signoff.registry.summary_failed", None,
+                        reason="сводка объекта не собралась", exc=exc,
+                        subject_type=subject_type)
 
 
 def scope_for(subject_type: str, subject_id: Any) -> str:

@@ -97,8 +97,12 @@ def preapproved_for(agr: Agreement) -> list[dict] | None:
         for task in stage["tasks"]:
             if (task["user_id"] == final["actor_id"] and task.get("option_key") == key
                     and task.get("position_id")):
-                return [{"position_id": task["position_id"], "actor_id": final["actor_id"],
-                         "label": PREAPPROVED_LABEL}]
+                # ГД дочерней — должность холдинга (B8.1): предсогласуется
+                # пара «компания + должность», иначе движок искал бы её в
+                # маршруте как свою и не нашёл.
+                return [{"position_id": task["position_id"],
+                         "company": task.get("position_company") or "",
+                         "actor_id": final["actor_id"], "label": PREAPPROVED_LABEL}]
     return None
 
 

@@ -8,14 +8,13 @@
 
 from __future__ import annotations
 
-from apps.hr import interface as hr
 from apps.signoff.models import (
     ApprovalProcess,
     ProcessState,
     StageState,
     TaskState,
 )
-from apps.signoff.services import presentation, registry
+from apps.signoff.services import positions, presentation, registry
 from apps.signoff.services.registry import BadSubjectId
 
 _OPEN = (StageState.ACTIVE, StageState.NO_EXECUTOR)
@@ -54,10 +53,11 @@ def current_holders(subject_type: str, subject_ids) -> dict[str, dict]:
     }
     names = presentation._name_map(
         task.user_id for tasks in pending.values() for task in tasks)
-    position_ids = [tasks[0].position_id for tasks in pending.values()
-                    if tasks and tasks[0].position_id is not None]
-    titles = ({row["id"]: row.get("title", "") for row in hr.get_positions_brief(position_ids)}
-              if position_ids else {})
+    # Должность первой группы — парой (B8.1): у дочерней это часто должность
+    # холдинга, и подпись несёт его название («ФД · Hi-Tech Group»).
+    first = {pk: positions.task_keys(tasks[0])[0] for pk, tasks in pending.items() if tasks}
+    titles = positions.briefs([ref for ref in first.values() if ref is not None]) \
+        if any(ref is not None for ref in first.values()) else {}
 
     out: dict[str, dict] = {}
     for process in processes:
@@ -67,13 +67,14 @@ def current_holders(subject_type: str, subject_ids) -> dict[str, dict]:
         users = [{"id": task.user_id,
                   "name": names.get(task.user_id, {}).get("full_name", "")}
                  for task in _unique_users(tasks)]
-        first_position = tasks[0].position_id if tasks else None
+        first_position = first.get(process.pk)
         since = min((stage.activated_at for stage in stages if stage.activated_at),
                     default=process.created_at)
         out[process.subject_id] = {
             "stage": " / ".join(stage.name for stage in stages),
             "users": users,
-            "position": titles.get(first_position) if first_position is not None else None,
+            "position": (titles.get(first_position, {}).get("label")
+                         if first_position is not None else None),
             "since": since,
             "no_executor": no_executor,
         }

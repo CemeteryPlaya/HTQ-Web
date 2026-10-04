@@ -57,9 +57,9 @@ from apps.signoff.models import (
     StageState,
     TaskState,
 )
-from apps.signoff.services import conditions, registry, resolution
+from apps.signoff.services import conditions, positions, registry, resolution
+from apps.signoff.services.positions import PositionRef
 # Соседи — только через interface (apps/core/tests/test_app_isolation.py).
-from apps.hr import interface as hr
 from apps.messenger import interface as messenger
 from apps.users import interface as users
 
@@ -336,12 +336,16 @@ def start(*, subject_type: str, subject_id: int | str,
 
     first_order = min(order for order, _, _, _ in plan)
     for order, stage, matched_by, approvers_by_position in plan:
+        refs = (positions.route_stage_refs(stage)
+                if stage.approver_kind == ApproverKind.POSITION else [])
         process_stage = ApprovalProcessStage.objects.create(
             process=process, order=order, name=stage.name, quorum=stage.quorum,
             condition=stage.condition, matched_by=matched_by,
             approver_kind=stage.approver_kind,
-            role_ids=([row.position_id for row in stage.roles.all()]
-                      if stage.approver_kind == ApproverKind.POSITION else []),
+            # ``role_ids`` — только должности своей компании (так их читают
+            # процессы до B8.1), ``role_refs`` — все, парами.
+            role_ids=[ref.position_id for ref in refs if not ref.company],
+            role_refs=positions.dump_many(refs),
             user_ids=(list(stage.user_ids or [])
                       if stage.approver_kind == ApproverKind.USERS else []),
             approver_key=(stage.approver_key
@@ -360,6 +364,13 @@ def start(*, subject_type: str, subject_id: int | str,
             if stage.approver_kind != ApproverKind.INITIATOR:
                 resolution.apply_self_approval(outcome, initiator_id=initiator_id,
                                                flags=flags)
+            if outcome.missing:
+                # Без ленивого разрешения ждать исполнителя некому: группа,
+                # которую не на кого эскалировать, — отказ на запуске, а не
+                # молча пропущенный этап.
+                raise RouteUnusable(
+                    f"На этапе «{stage.name}» некому согласовать вместо автора: "
+                    + "; ".join(outcome.unavailable.values()))
             _create_tasks(process, process_stage, outcome, flags=flags)
 
     # Отсеянные ветки — в журнал: карточка процесса показывает только то, что
@@ -389,34 +400,38 @@ def start(*, subject_type: str, subject_id: int | str,
     return process
 
 
-def _preapproved_positions(preapproved, selected) -> dict[int, dict]:
-    """``{position_id: {position_id, actor_id, label}}`` — только должности,
-    которые реально стоят на отобранных этапах маршрута."""
+def _preapproved_positions(preapproved, selected) -> dict[PositionRef, dict]:
+    """``{ref: {position_id, company, actor_id, label}}`` — только должности,
+    которые реально стоят на отобранных этапах маршрута. ``company`` пуст у
+    своей должности (B8.1: решившая должность может быть в штате холдинга)."""
     if not preapproved:
         return {}
-    on_route = {row.position_id for item in selected
+    on_route = {ref for item in selected
                 if item.stage.approver_kind == ApproverKind.POSITION
-                for row in item.stage.roles.all()}
-    out: dict[int, dict] = {}
+                for ref in positions.route_stage_refs(item.stage)}
+    out: dict[PositionRef, dict] = {}
     for item in preapproved:
-        position_id = int(item["position_id"])
-        if position_id not in on_route:
+        ref = positions.parse(item)
+        if ref not in on_route:
             raise PreapprovalMismatch(
-                f"Должности #{position_id} нет ни на одном этапе маршрута — "
-                f"предсогласовать её нельзя")
-        out[position_id] = {"position_id": position_id,
-                            "actor_id": item.get("actor_id"),
-                            "label": item.get("label") or "Согласовано заранее"}
+                f"Должности #{ref.position_id}"
+                + (f" компании «{ref.company}»" if ref.company else "")
+                + " нет ни на одном этапе маршрута — предсогласовать её нельзя")
+        out[ref] = {"position_id": ref.position_id, "company": ref.company,
+                    "actor_id": item.get("actor_id"),
+                    "label": item.get("label") or "Согласовано заранее"}
     return out
 
 
 def _log_preapproved(process: ApprovalProcess, stage: ApprovalProcessStage,
-                     pre: dict[int, dict], *, actor_id: int | None) -> None:
-    hits = [pre[position_id] for position_id in (stage.role_ids or []) if position_id in pre]
+                     pre: dict[PositionRef, dict], *, actor_id: int | None) -> None:
+    hits = [pre[ref] for ref in positions.process_stage_refs(stage) if ref in pre]
     if hits:
         _log(process, "stage_preapproved", actor_id=actor_id, payload={
             "stage": stage.name, "order": stage.order,
             "position_ids": [row["position_id"] for row in hits],
+            "positions": [{"company": row["company"], "position_id": row["position_id"]}
+                          for row in hits],
             "actor_ids": [row["actor_id"] for row in hits],
             "label": hits[0]["label"]})
 
@@ -532,10 +547,12 @@ def _facts_hint(facts: dict) -> str:
 
 def _resolve_stages(selected, *, initiator_id: int | None,
                     subject_type: str, subject_id: str,
-                    ) -> list[tuple[int, object, str, dict[int | None, list[int]]]]:
+                    ) -> list[tuple[int, object, str, dict[PositionRef | None, list[int]]]]:
     """Проверить исполнимость отобранных этапов и развернуть согласующих.
 
-    Возвращает ``(order, stage, matched_by, {position_id: user_ids})``.
+    Возвращает ``(order, stage, matched_by, {должность: user_ids})``;
+    должность — пара «компания + должность» (B8.1), у видов без должностей —
+    ``None``.
 
     Здесь же ``ApproverKind`` превращается в конкретные id: дальше движок
     работает со списком пользователей и про вид согласующих не знает — ровно
@@ -548,7 +565,7 @@ def _resolve_stages(selected, *, initiator_id: int | None,
     Проверяются только ОТОБРАННЫЕ этапы — уволившийся согласующий в ветке,
     которая к этому объекту не относится, запуску не мешает.
     """
-    plan: list[tuple[int, object, str, dict[int | None, list[int]]]] = []
+    plan: list[tuple[int, object, str, dict[PositionRef | None, list[int]]]] = []
     all_ids: set[int] = set()
     for item in selected:
         stage = item.stage
@@ -563,10 +580,13 @@ def _resolve_stages(selected, *, initiator_id: int | None,
 
     active = _active_user_ids(all_ids)
     for _, stage, _, approvers_by_position in plan:
-        user_ids = [
+        # Без повторов: один человек на двух должностях этапа (ГД исполняет и
+        # ФД) — одна задача (``_create_tasks``), а не «неактивный согласующий»
+        # из-за того, что множество короче списка.
+        user_ids = list(dict.fromkeys(
             user_id for ids in approvers_by_position.values()
             for user_id in ids
-        ]
+        ))
         if stage.approver_kind == ApproverKind.INITIATOR:
             if not any(user_id in active for user_id in user_ids):
                 raise RouteUnusable(
@@ -585,7 +605,7 @@ def _resolve_stages(selected, *, initiator_id: int | None,
 
 
 def _approver_ids(stage, *, initiator_id: int | None,
-                  subject_type: str, subject_id: str) -> dict[int | None, list[int]]:
+                  subject_type: str, subject_id: str) -> dict[PositionRef | None, list[int]]:
     """Кому адресовать запросы этого этапа — по виду согласующих.
 
     Должности берутся из маршрута и разворачиваются через HR; этап
@@ -624,23 +644,32 @@ def _approver_ids(stage, *, initiator_id: int | None,
             )
         return {None: user_ids}
 
-    position_ids = [row.position_id for row in stage.roles.all()]
-    if not position_ids:
+    refs = positions.route_stage_refs(stage)
+    if not refs:
         raise RouteUnusable(
             f"На этапе «{stage.name}» не назначена ни одна должность"
         )
-    resolved = hr.resolve_position_users(position_ids)
-    missing = [position_id for position_id in position_ids
-               if not resolved.get(position_id)]
+    try:
+        resolved = positions.resolve_users(refs)
+    except positions.CompanyUnavailable as exc:
+        # Должность вышестоящей компании (B8.1), а войти в неё сейчас нельзя:
+        # без ленивого разрешения ждать некому — отказ на запуске с причиной.
+        raise RouteUnusable(
+            f"На этапе «{stage.name}» не определить согласующего: {exc.reason}"
+        ) from exc
+    missing = [ref for ref in refs if not resolved.get(ref)]
     if missing:
         raise RouteUnusable(
             f"На этапе «{stage.name}» нет активного сотрудника с активной "
-            f"учётной записью для должности: " + ", ".join(map(str, missing))
+            f"учётной записью для должности: " + ", ".join(map(_ref_text, missing))
         )
-    return {
-        position_id: list(dict.fromkeys(resolved[position_id]))
-        for position_id in position_ids
-    }
+    return {ref: list(dict.fromkeys(resolved[ref])) for ref in refs}
+
+
+def _ref_text(ref: PositionRef) -> str:
+    """Должность в тексте отказа: своя — номером, как до B8.1; должность
+    вышестоящей компании — с её слагом, иначе номер ничего не говорит."""
+    return f"{ref.position_id} ({ref.company})" if ref.company else str(ref.position_id)
 
 
 def _active_user_ids(user_ids) -> set[int]:
@@ -683,7 +712,8 @@ def voting_stages_now(process: ApprovalProcess) -> bool:
 
 @transaction.atomic
 def act(*, task_id: int, actor_id: int, decision: str,
-        comment: str = "", option_key: str = "") -> ApprovalProcess:
+        comment: str = "", option_key: str = "",
+        guard=None, decided_from: str | None = None) -> ApprovalProcess:
     """Принять решение по запросу и продвинуть процесс.
 
     ``option_key`` — ключ варианта, когда предметная аппка предложила выбор
@@ -691,6 +721,12 @@ def act(*, task_id: int, actor_id: int, decision: str,
     ЭТОТ вариант». Голос хранится в запросе и уходит предметной аппке
     (``on_option``); какой вариант в итоге принят, решает она сама по
     голосам (``interface.final_option``).
+
+    ``guard(process, stage, task)`` — проверка вызывающего ПОД замком
+    процесса, до любых записей (решение прямо из холдинга, B8.1: флаг
+    маршрута и препятствия перепроверяются там, где их уже не изменит
+    параллельный запрос). ``decided_from`` — слаг компании, из очереди
+    которой принято решение; ложится в журнал.
 
     Возвращает процесс в состоянии ПОСЛЕ решения.
     """
@@ -721,6 +757,8 @@ def act(*, task_id: int, actor_id: int, decision: str,
         raise ProcessClosed("По этому запросу решение уже принято")
 
     stage = task.stage
+    if guard is not None:
+        guard(process, stage, task)
     flags = resolution.flags_of(process)
     # BR-061, вторая линия: маршрут с запретом самосогласования автору задач
     # не ставит, но задача могла появиться до включения флага. Этап «подпись
@@ -807,6 +845,9 @@ def act(*, task_id: int, actor_id: int, decision: str,
                "file_id": task.file_id or None}
     if chosen_key:
         payload.update({"option_key": chosen_key, "option_label": chosen_label})
+    if decided_from:
+        # Решено из очереди вышестоящей компании, а не на адресе этой (B8.1).
+        payload["decided_from"] = decided_from
     _log(process, _EVENT_KIND[decision], actor_id=actor_id, payload=payload)
     _emit(process, "task_decided", {"task_id": task.pk, "decision": decision,
                                     "actor_id": actor_id, "stage": stage.name})
@@ -829,9 +870,13 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
     процесса, а не одного этапа.
     """
     tasks = list(stage.tasks.all())
-    tasks_by_position: dict[int | None, list[ApprovalTask]] = {}
+    # Группа кворума — должность парой «компания + должность» (B8.1). Задача
+    # держателя двух должностей этапа входит в обе группы (``also_positions``):
+    # его одно решение засчитывается за каждую (решение 02.10).
+    tasks_by_position: dict[PositionRef | None, list[ApprovalTask]] = {}
     for item in tasks:
-        tasks_by_position.setdefault(item.position_id, []).append(item)
+        for key in positions.task_keys(item):
+            tasks_by_position.setdefault(key, []).append(item)
 
     # A selected HR position represents one required role in a stage.  The
     # stage proceeds only after every selected role has met its quorum: ``any``
@@ -845,12 +890,16 @@ def _settle_stage(stage: ApprovalProcessStage) -> bool:
     # Once one holder has approved an ``any`` role, the other holders have no
     # further say in this stage.  Leave their tasks pending while another role
     # is still awaited and one of them could reject a role that already passed.
+    # Задача гасится, только когда закрыты ВСЕ её группы: держатель двух
+    # должностей, одну из которых уже согласовал другой, ещё нужен за вторую.
     if stage.quorum == Quorum.ANY:
-        for position_id, role_tasks in tasks_by_position.items():
-            if role_settled(role_tasks):
-                stage.tasks.filter(
-                    position_id=position_id, state=TaskState.PENDING,
-                ).update(state=TaskState.SKIPPED)
+        settled = {key for key, role_tasks in tasks_by_position.items()
+                   if role_settled(role_tasks)}
+        done = [item.pk for item in tasks if item.state == TaskState.PENDING
+                and all(key in settled for key in positions.task_keys(item))]
+        if done:
+            stage.tasks.filter(pk__in=done, state=TaskState.PENDING).update(
+                state=TaskState.SKIPPED)
 
     enough = all(role_settled(role_tasks)
                  for role_tasks in tasks_by_position.values())
@@ -947,7 +996,7 @@ def _materialize(process: ApprovalProcess, stage: ApprovalProcessStage, *,
             stage, initiator_id=process.initiator_id,
             subject_type=process.subject_type, subject_id=process.subject_id,
             flags=flags,
-            exclude_positions=[row["position_id"] for row in (process.preapproved or [])])
+            exclude_positions=positions.parse_many(process.preapproved or []))
     except resolution.StageNotConfigured as exc:
         raise RouteUnusable(str(exc)) from exc
 
@@ -955,11 +1004,18 @@ def _materialize(process: ApprovalProcess, stage: ApprovalProcessStage, *,
         if stage.state != StageState.NO_EXECUTOR:
             stage.state = StageState.NO_EXECUTOR
             stage.save(update_fields=["state"])
-            _log(process, "no_executor", actor_id=None, payload={
+            payload = {
                 "stage": stage.name, "order": stage.order,
-                "position_ids": [key for key in outcome.missing if key is not None]})
-            _notify_positions(flags["no_executor_notify_position_ids"], process, {
-                "type": "signoff.no_executor", "stage": stage.name})
+                "position_ids": [key.position_id for key in outcome.missing if key is not None],
+                "positions": positions.dump_many(key for key in outcome.missing if key is not None)}
+            if outcome.unavailable:
+                # Должности вышестоящей компании, в которую сейчас не войти
+                # (B8.1): почему исполнителя нет — архив, нет схемы, выключен hr.
+                payload["unavailable"] = outcome.unavailable
+            _log(process, "no_executor", actor_id=None, payload=payload)
+            _notify_positions(resolution.notify_refs(
+                flags, "no_executor_notify_position_ids", "no_executor_notify_foreign"),
+                process, {"type": "signoff.no_executor", "stage": stage.name})
         return False
     _create_tasks(process, stage, outcome, flags=flags)
     return True
@@ -967,23 +1023,43 @@ def _materialize(process: ApprovalProcess, stage: ApprovalProcessStage, *,
 
 def _create_tasks(process: ApprovalProcess, stage: ApprovalProcessStage,
                   outcome: "resolution.Resolution", *, flags: dict) -> None:
-    """Задачи этапа по разрешённым группам + следы самосогласования."""
-    ApprovalTask.objects.bulk_create([
-        ApprovalTask(stage=stage, user_id=user_id, position_id=position_id)
-        for position_id, user_ids in outcome.groups.items()
-        for user_id in user_ids
-    ])
+    """Задачи этапа по разрешённым группам + следы самосогласования.
+
+    Задача у человека на этапе ОДНА (``uq_signoff_task_stage_user``): держит
+    он на этапе две должности — например, ГД временно исполняет и ФД, —
+    вторая уходит в ``also_positions`` той же задачи, и его решение
+    засчитывается за обе (решение 02.10). Раньше это была вторая задача тому
+    же человеку и 500 на уникальности.
+    """
+    tasks: dict[int, ApprovalTask] = {}
+    for key, user_ids in outcome.groups.items():
+        for user_id in user_ids:
+            task = tasks.get(user_id)
+            if task is None:
+                tasks[user_id] = ApprovalTask(
+                    stage=stage, user_id=user_id,
+                    position_id=key.position_id if key is not None else None,
+                    position_company=key.company if key is not None else "",
+                    also_positions=[])
+            elif key is not None and task.position_id is not None:
+                task.also_positions.append(key.as_dict())
+    ApprovalTask.objects.bulk_create(list(tasks.values()))
     if outcome.escalated:
+        escalation = resolution.escalation_ref(flags)
         _log(process, "self_approval_escalated", actor_id=None, payload={
             "stage": stage.name, "order": stage.order,
-            "position_ids": [key for key in outcome.escalated if key is not None],
-            "escalation_position_id": flags.get("escalation_position_id")})
+            "position_ids": [key.position_id for key in outcome.escalated if key is not None],
+            "positions": positions.dump_many(key for key in outcome.escalated if key is not None),
+            "escalation_position_id": flags.get("escalation_position_id"),
+            "escalation_position_company": escalation.company if escalation else ""})
     if outcome.skipped:
         _log(process, "self_approval_skipped", actor_id=None, payload={
             "stage": stage.name, "order": stage.order,
-            "position_ids": [key for key in outcome.skipped if key is not None]})
-        _notify_positions(flags["self_skip_notify_position_ids"], process, {
-            "type": "signoff.self_approval_skipped", "stage": stage.name})
+            "position_ids": [key.position_id for key in outcome.skipped if key is not None],
+            "positions": positions.dump_many(key for key in outcome.skipped if key is not None)})
+        _notify_positions(resolution.notify_refs(
+            flags, "self_skip_notify_position_ids", "self_skip_notify_foreign"),
+            process, {"type": "signoff.self_approval_skipped", "stage": stage.name})
 
 
 @transaction.atomic
@@ -1261,11 +1337,13 @@ def _notify_active_stages(process: ApprovalProcess) -> None:
                                        "order": process.current_order})
 
 
-def _notify_positions(position_ids, process: ApprovalProcess, extra: dict) -> None:
+def _notify_positions(refs, process: ApprovalProcess, extra: dict) -> None:
     """Уведомить держателей должностей (и их временных исполнителей) о
     событии процесса: «Нет исполнителя» — АДМ и ГД, пропуск самосогласования
-    ГД — ФД (мастер-план БЗО, D-21/D-22). Нет должностей — никого."""
-    user_ids = resolution.position_user_ids(position_ids)
+    ГД — ФД (мастер-план БЗО, D-21/D-22). Должности — пары или голые id
+    своей компании; ГД и ФД дочерней — в штате холдинга (B8.1). Нет
+    должностей — никого."""
+    user_ids = resolution.position_user_ids(refs)
     if not user_ids:
         return
     described = _describe(process)
