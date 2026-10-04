@@ -14,8 +14,17 @@ WORKDIR /app
 
 # build-essential/libpq на случай, если у какого-то пина нет колеса под 3.14
 # (psycopg[binary]/Pillow/bcrypt обычно ставятся как wheels — это подстраховка).
+# libpango*/libharfbuzz-subset0/fontconfig — WeasyPrint (bpp: печать
+# документов в PDF, этап 2 A, задача 6): с 53.0 ему не нужен GTK/cairo, только
+# Pango (тянет HarfBuzz) и fontconfig; harfbuzz-subset — встраивание в PDF
+# только использованных глифов (список пакетов — из инструкции WeasyPrint для
+# Debian). fonts-dejavu-core — шрифт кириллицы (шаблон
+# apps/bpp/templates/bpp/print/base.html): без него текст ушёл бы
+# пустыми прямоугольниками без единой ошибки.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libpq5 \
+    && apt-get install -y --no-install-recommends \
+        build-essential libpq5 \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fontconfig fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

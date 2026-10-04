@@ -53,6 +53,13 @@ Postgres резолвит объекты представления по OID, а
 всех сразу — а не признак того, что операция безобидна и не требует
 внимания. ``--no-grant-all`` — явный отказ, если членства планируется
 выдавать отдельно (``manage.py company_grant``).
+
+Файлы тенантных владельцев (документы модуля БЗО и любой другой тенантной
+аппки) живут в ``public``-таблице ``apps.files`` и до первой компании несут
+``company_slug=""``. Переезжая в компанию, таблицы владельца обязаны забрать
+и их — иначе в схеме компании документ №5 перестал бы видеть свои файлы:
+фильтр по компании — часть ключа его файлов. Поэтому
+``files.assign_company`` идёт в той же транзакции, что и перенос таблиц.
 """
 
 import argparse
@@ -66,6 +73,8 @@ from psycopg import sql
 
 from apps.companies.models import Company, CompanyKind, SLUG_VALIDATOR
 from apps.companies.services import holding_views, membership_service, schema_service
+# Сосед — только через interface (apps/core/tests/test_app_isolation.py).
+from apps.files import interface as files
 from htqweb.tenancy.context import schema_for
 
 
@@ -197,6 +206,12 @@ class Command(BaseCommand):
         else:
             self.stdout.write(f"  [ок] все {len(tables)} таблиц физически в public.")
 
+        counts = files.assign_company(slug, dry_run=True)
+        self.stdout.write(
+            f"  [инфо] файлов тенантных владельцев без компании: {counts['files']} "
+            f"(записей журнала: {counts['events']}) — получат компанию {slug!r}."
+        )
+
     def handle(self, *args, **opts):
         slug, schema = opts["slug"], schema_for(opts["slug"])
         tables = self._tenant_tables()
@@ -287,6 +302,9 @@ class Command(BaseCommand):
                     [list(settings.TENANT_APPS)],
                 )
 
+            # Файлы тенантных владельцев — вместе с их таблицами (см. докстринг модуля).
+            stamped = files.assign_company(slug)
+
         # Вне транзакции переноса, как и в company_create/migrate_companies:
         # DROP VIEW/CREATE VIEW — своя отдельная транзакция в
         # rebuild_holding_views. drop_holding_views() здесь не нужен — см.
@@ -318,5 +336,6 @@ class Command(BaseCommand):
                       "используйте manage.py company_grant.")
         self.stdout.write(self.style.SUCCESS(
             f"Перенесено {len(tables)} таблиц в {schema}. Компания {slug} создана."
-            f"{grant_note}"
+            f"{grant_note} Файлам тенантных владельцев проставлена компания: "
+            f"{stamped['files']}."
         ))

@@ -160,6 +160,8 @@ def create_thing(request, data: CreateThing):
 
 Covered by [`apps/core/tests/test_api_view.py`](apps/core/tests/test_api_view.py).
 
+**Domain errors and retries.** `raise htqweb.errors.DomainError(code, message, fields=..., status=422)` in a service becomes `{"detail", "code", "fields"}` — `detail` is ready for a human, `code` for the frontend (the BZO module uses the texts of its spec, §26.1). `api_view(..., idempotent=True)` on a write handle: a repeat with the same `Idempotency-Key` header within 24 hours gets the first response back (`Idempotent-Replay: true`), a concurrent repeat gets 409 `E-IDEM-01`, a failed request is not remembered (`htqweb/idempotency.py`).
+
 ### 3. URLs mount themselves — don't touch `htqweb/urls.py`
 
 `htqweb/urls.py` loops over every installed app; any app whose `AppConfig` sets `API_PREFIX` and
@@ -234,6 +236,16 @@ A second, per-company layer sits on top: `apps.companies.models.CompanyModule` s
 for one company (never one of `apps.core.services.CORE_MODULES`), and `apps.core.services.service_status()`
 merges both layers for the middleware and `require_service()` alike — see `../CLAUDE.md`, «Два
 независимых рубильника».
+
+A part of an app can have its own switch: `apps.core.models.KNOWN_SUBMODULES` maps a submodule to
+its parent service (one level; today the seven `bpp_*`). `apps.core.services.disabled_layer()`
+checks the parent first, and the 503 names whichever layer is off. `manage.py service` and the
+company-modules screen accept submodule names; the access registry does not (rights are granted on
+the module). In `PREFIX_TO_SERVICE` a submodule prefix sits ABOVE its module prefix (first match
+wins) and has no trailing slash — `prefix_matches()` then matches it only on a path-segment
+boundary, so `/api/bpp/v1/bank` does not swallow a neighbour like `/api/bpp/v1/bank-xyz`
+(org bank accounts and statement templates live under `bank/` on purpose and are switched off
+with `bpp_bank`).
 
 Flip one: `manage.py service <name> --on/--off [--message "..."]`. A disabled app answers `503`
 `{"detail", "code": "service_disabled", "service"}` at the HTTP edge and via any `interface.py`

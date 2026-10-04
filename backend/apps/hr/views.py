@@ -78,6 +78,7 @@ from .services import position_service as pos_svc
 from .services import recruitment_service as rec_svc
 from .services import share_link_service as share_link_svc
 from .services import staffing_service as staffing_svc
+from .services import acting_service as acting_svc
 from .services import substitution_service as sub_svc
 from .services import time_service as time_svc
 
@@ -507,6 +508,83 @@ def substitution_detail(request, sub_id: int):
         return _update_substitution(request, sub_id=sub_id)
     if request.method == "DELETE":
         return _delete_substitution(request, sub_id=sub_id)
+    return json_error("Method Not Allowed", 405)
+
+
+# ── /acting-assignments — временные исполнители должностей (БЗО, B1.1) ─────
+#
+# Назначают АДМ и HR (мастер-план БЗО, D-22): правка — hr:admin, как у
+# матрицы замещений; чтение — hr:read.
+
+def _acting_error(exc: acting_svc.ActingError):
+    return json_error(exc.detail, exc.status)
+
+
+def _query_int(request, name: str) -> int | None:
+    raw = request.GET.get(name)
+    if raw in (None, ""):
+        return None
+    return int(raw)
+
+
+@api_view(methods=("GET",), auth="jwt", module="hr", level="read")
+def _list_acting(request):
+    try:
+        position_id = _query_int(request, "position_id")
+        employee_id = _query_int(request, "employee_id")
+        raw_date = request.GET.get("active_on")
+        active_on = datetime.date.fromisoformat(raw_date) if raw_date else None
+    except ValueError:
+        return json_error(
+            "Неверный фильтр: position_id и employee_id — целые числа, active_on — "
+            "дата ГГГГ-ММ-ДД.", 422)
+    rows = acting_svc.list_assignments(position_id=position_id, employee_id=employee_id,
+                                       active_on=active_on)
+    return [acting_svc.serialize(row) for row in rows]
+
+
+@api_view(methods=("POST",), auth="jwt", body=schemas.ActingAssignmentCreate, status=201,
+          module="hr", level="admin")
+def _create_acting(request, data: schemas.ActingAssignmentCreate):
+    try:
+        row = acting_svc.create(**data.model_dump(), assigned_by_id=request.token.user_id)
+    except acting_svc.ActingError as exc:
+        return _acting_error(exc)
+    return acting_svc.serialize(row)
+
+
+def acting_collection(request):
+    if request.method == "GET":
+        return _list_acting(request)
+    if request.method == "POST":
+        return _create_acting(request)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PATCH",), auth="jwt", body=schemas.ActingAssignmentUpdate,
+          module="hr", level="admin")
+def _update_acting(request, assignment_id: int, data: schemas.ActingAssignmentUpdate):
+    try:
+        row = acting_svc.update(assignment_id, **data.model_dump(exclude_unset=True))
+    except acting_svc.ActingError as exc:
+        return _acting_error(exc)
+    return acting_svc.serialize(row)
+
+
+@api_view(methods=("DELETE",), auth="jwt", module="hr", level="admin")
+def _delete_acting(request, assignment_id: int):
+    try:
+        acting_svc.delete(assignment_id)
+    except acting_svc.ActingError as exc:
+        return _acting_error(exc)
+    return HttpResponse(status=204)
+
+
+def acting_detail(request, assignment_id: int):
+    if request.method == "PATCH":
+        return _update_acting(request, assignment_id=assignment_id)
+    if request.method == "DELETE":
+        return _delete_acting(request, assignment_id=assignment_id)
     return json_error("Method Not Allowed", 405)
 
 

@@ -104,6 +104,9 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.cms",
     "apps.media_files",
+    # Файловая подсистема ТЗ §21 — общая: её владельцы бывают и общими
+    # (заявка), и тенантными (договор), см. apps/files/models.py.
+    "apps.files",
     # Доменные аппки миграции — скаффолд prep 4.0 (PLAN.md §5). Пустые
     # (модели/роуты/задачи приходят в их фазах §6), но уже установлены и
     # отключаемы: URL-автодискавери монтирует их по AppConfig.API_PREFIX,
@@ -130,6 +133,13 @@ INSTALLED_APPS = [
     # до первого ready(), поэтому предметная аппка вправе регистрировать
     # свой тип независимо от того, стоит она здесь выше или ниже.
     "apps.signoff",
+    # Модуль БЗО «Бюджет, закупки и оплаты» и его платформенные аппки
+    # (docs/plans/2026-09-26-bpp-master-plan.md). project и bpp — тенантные,
+    # но в TENANT_APPS попадают вместе с первой миграцией (задачи A1.3, A1.1).
+    "apps.refdata",        # справочники, public · /api/refdata/v1/
+    "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
+    "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
+    "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
@@ -138,7 +148,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
@@ -150,6 +160,10 @@ MIDDLEWARE = [
     # знать компанию, чтобы спросить и глобальный рубильник, и компанейский.
     "htqweb.middleware.company_context.CompanyContextMiddleware",
     "htqweb.middleware.service_gate.ServiceGateMiddleware",
+    # Заморозка «Договоров» после переноса в БЗО (A6.2): запись под
+    # /api/contracts/ замороженной компании — 403. После обоих верхних:
+    # нужен search_path компании, а выключенный модуль отвечает своим 503.
+    "apps.contracts.middleware.ContractsFreezeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise отдаёт собранную (collectstatic) статику прямо из WSGI/ASGI-процесса
     # — gunicorn/uvicorn сами статику не отдают. Должен идти СРАЗУ после Security.
@@ -272,6 +286,12 @@ JWT_SECRET = env("JWT_SECRET", "change-me")
 JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "htqweb-auth"
 JWT_ACCESS_TTL_MIN = int(env("JWT_ACCESS_TTL_MIN", "60"))
+
+# Блокировка входа (D-S7-3, htqweb/ratelimit.py): столько неудач по одному
+# логину за AUTH_LOCKOUT_SECONDS закрывают вход на те же секунды. 0 — выключено;
+# в compose по умолчанию 0, включают после окна выкатки (ранбук).
+AUTH_LOCKOUT_THRESHOLD = int(env("AUTH_LOCKOUT_THRESHOLD", "0") or 0)
+AUTH_LOCKOUT_SECONDS = int(env("AUTH_LOCKOUT_SECONDS", "900") or 900)
 JWT_REFRESH_TTL_DAYS = int(env("JWT_REFRESH_TTL_DAYS", "7"))
 
 LANGUAGE_CODE = "ru"
@@ -398,6 +418,12 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 # Отдельный TELEGRAM_BOT_TOKEN оставлен как переопределение — на случай, если
 # сводку когда-нибудь захотят слать другим ботом.
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", env("GF_TELEGRAM_BOT_TOKEN", ""))
+# Бот уведомлений пользователей (D-24, Q-E20) — ОТДЕЛЬНЫЙ от бота алертов
+# Grafana: токен алертов не должен попадать в пользовательский контур.
+# Пусто — канал Telegram выключен для всех (доставки помечаются skipped).
+NOTIFY_TELEGRAM_BOT_TOKEN = env("NOTIFY_TELEGRAM_BOT_TOKEN", "")
+NOTIFY_TELEGRAM_BOT_NAME = env("NOTIFY_TELEGRAM_BOT_NAME", "")
+NOTIFY_TELEGRAM_WEBHOOK_SECRET = env("NOTIFY_TELEGRAM_WEBHOOK_SECRET", "")
 # А вот чат нужен свой и по умолчанию пуст: id бизнес-группы живёт литералом в
 # contact_points.yml (Grafana не умеет брать его из окружения — см. объяснение
 # там), и продублировать его ещё и здесь значило бы завести вторую правду о
@@ -685,6 +711,33 @@ MAILBOX_LOCAL_PART_PATTERN = env("MAILBOX_LOCAL_PART_PATTERN", "f.last").strip()
 # task 3.2 report). media_signed_url_* is NOT ported here either — signed
 # URLs are a later task (3.3+).
 MAX_UPLOAD_SIZE_MB = int(env("MAX_UPLOAD_SIZE_MB", "100"))
+# Потолок размера документа файловой подсистемы (apps.files, ТЗ §21):
+# справочник «Типы файлов» не даст поставить больше. Совпадает с
+# client_max_body_size локации /api/files/v1/ в infra/nginx/default.conf
+# (21M — запас на обвязку multipart) и с max_mb scope file_object в media.
+FILES_UPLOAD_CEILING_MB = 20
+# Антивирус (ТЗ §21 [Л], htqweb/antivirus.py): clamd контейнера clamav по TCP.
+# Пустой хост — проверки нет вовсе (тесты, стенд без контейнера); настроенный,
+# но недоступный сканер ЗАКРЫВАЕТ приём файлов тех scope, что требуют проверки
+# (ScopePolicy.antivirus), а не пропускает их непроверенными.
+ANTIVIRUS_CLAMD_HOST = env("ANTIVIRUS_CLAMD_HOST", "")
+ANTIVIRUS_CLAMD_PORT = int(env("ANTIVIRUS_CLAMD_PORT", "3310"))
+# 20 МБ на локальной сети clamd проверяет за секунды; таймаут — на зависание.
+# Меньше самого короткого ``proxy_read_timeout`` путей загрузки в nginx (45s у
+# /api/ и /api/bpp/v1/bank/) и ``gunicorn --timeout 60``: иначе шлюз или
+# gunicorn оборвут запрос раньше, чем сканер «не ответит», и пользователь
+# получит 504/обрыв вместо 503 E-SYS-01 (A7.4).
+ANTIVIRUS_TIMEOUT = float(env("ANTIVIRUS_TIMEOUT", "30"))
+# ── 1С (заготовка, A7.3, D-38, D-S7-5) ──────────────────────────────────
+# Адрес публикации OData, учётная запись и пароль живут в файле секретов
+# (secrets/onec.env, подключается через env_file compose), а не в репозитории
+# и не в ``environment:`` compose. Пустой ONEC_ODATA_URL — интеграция выключена.
+ONEC_ODATA_URL = env("ONEC_ODATA_URL", "")
+ONEC_USER = env("ONEC_USER", "")
+ONEC_PASSWORD = env("ONEC_PASSWORD", "")
+ONEC_TIMEOUT = float(env("ONEC_TIMEOUT", "20"))
+# http (не https) — только для стенда: клиент иначе отказывается.
+ONEC_ALLOW_HTTP = env("ONEC_ALLOW_HTTP", "").lower() in ("1", "true", "yes")
 ALLOWED_MIME_TYPES = env("ALLOWED_MIME_TYPES", "")  # comma-separated, "" = allow all
 IMAGE_JPEG_QUALITY = int(env("IMAGE_JPEG_QUALITY", "85"))
 THUMBNAIL_FORMAT = env("THUMBNAIL_FORMAT", "webp")  # webp | jpeg | png

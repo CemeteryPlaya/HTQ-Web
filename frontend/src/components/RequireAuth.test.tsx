@@ -12,6 +12,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { RouteRequirement } from '@/app/routing/types';
 import type { AccessLevel } from '@/lib/auth/permissions';
 
 import { resetSessionRestoreForTests } from '@/lib/auth/sessionRestore';
@@ -52,8 +53,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-const permissionsOf = (levels: Record<string, AccessLevel>, isLoading = false) => ({
+const permissionsOf = (levels: Record<string, AccessLevel>, isLoading = false,
+  nodes: Record<string, string[]> = {}) => ({
   company: 'hi-tech-qazaqstan',
+  can: (node: string, flag: string) => (nodes[node] ?? []).includes(flag),
   level: (module: string) => levels[module] ?? 'none',
   atLeast: (module: string, required: AccessLevel) => {
     const order = ['none', 'read', 'write', 'admin'];
@@ -66,7 +69,7 @@ const permissionsOf = (levels: Record<string, AccessLevel>, isLoading = false) =
   refetch: vi.fn(),
 });
 
-const renderGate = (requires?: { module: string; level: AccessLevel }) =>
+const renderGate = (requires?: RouteRequirement) =>
   render(
     <MemoryRouter initialEntries={['/gated']}>
       <Routes>
@@ -130,6 +133,22 @@ describe('RequireAuth — гейт по модулю и уровню', () => {
   it('отправляет на профиль, когда модуля нет в правах вовсе', () => {
     renderGate({ module: 'contracts', level: 'read' });
 
+    expect(screen.getByText('профиль')).toBeInTheDocument();
+  });
+
+  it('«или узел»: без уровня модуля пускает держателя признака на узле', () => {
+    // Доски задач — держателям «Доски задач проекта» без кадровых прав (01.10).
+    const boards: RouteRequirement = {
+      module: 'hr', level: 'read', orNode: { node: 'project.board', flag: 'view' },
+    };
+    permissionsSpy.mockReturnValue(permissionsOf({ tasks: 'write' }, false,
+      { 'project.board': ['view'] }));
+    renderGate(boards);
+    expect(screen.getByText('содержимое страницы')).toBeInTheDocument();
+
+    cleanup();
+    permissionsSpy.mockReturnValue(permissionsOf({ tasks: 'write' }));
+    renderGate(boards);
     expect(screen.getByText('профиль')).toBeInTheDocument();
   });
 

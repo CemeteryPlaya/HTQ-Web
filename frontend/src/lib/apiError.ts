@@ -28,6 +28,13 @@
  *
  * Всё остальное сводится к одной запасной фразе: разбирать сетевые сбои по
  * отдельности здесь нечего.
+ *
+ * **Ошибки с кодом** (`{detail, code, fields, details}` — конверт модуля БЗО,
+ * мастер-план D-28; так отвечает и файловая подсистема apps.files). Там
+ * `detail` по контракту — всегда готовый текст для человека по ТЗ §26 («что
+ * произошло, почему и что делать»), поэтому он показывается при любом
+ * статусе, а `code` (`E-CON-01`, `E-FIL-03`, …) отдаёт `errorCode` — для мест,
+ * которые ветвятся по смыслу отказа.
  */
 
 import { toast } from 'sonner';
@@ -47,7 +54,7 @@ import i18next from '@/i18n';
 interface ApiErrorShape {
   response?: {
     status?: number;
-    data?: { detail?: unknown };
+    data?: { detail?: unknown; code?: unknown };
   };
   /** Свёрнутая форма 5xx из `api/client.ts`. */
   status?: number;
@@ -60,7 +67,24 @@ interface ApiErrorShape {
   archivedReported?: boolean;
 }
 
-/** Текст `detail`, если бэкенд прислал именно текст. */
+/** `detail` ошибки с кодом (конверт D-28) — только когда это именно тот
+ *  конверт (есть `code`): такой текст готов для человека при любом статусе. */
+function codedDetail(error: unknown): string | null {
+  const data = (error as ApiErrorShape)?.response?.data;
+  if (data && typeof data.code === 'string' && typeof data.detail === 'string'
+      && data.detail) {
+    return data.detail;
+  }
+  return null;
+}
+
+/** Код ошибки (`E-CON-01`, `E-FIL-03`, …) или `null`. */
+export function errorCode(error: unknown): string | null {
+  const code = (error as ApiErrorShape)?.response?.data?.code;
+  return typeof code === 'string' ? code : null;
+}
+
+/** Текст `detail`, если бэкенд прислал текст. */
 export function errorDetail(error: unknown): string | null {
   const shape = error as ApiErrorShape;
   const detail = shape?.response?.data?.detail;
@@ -119,6 +143,8 @@ const PERMISSION_GATE_DETAIL = [
  * место обходило бы политику статусов и печатало бы внутренности 500-й.
  */
 export function explainedDetail(error: unknown): string | null {
+  const coded = codedDetail(error);
+  if (coded) return coded;
   const status = errorStatus(error);
   if (status === undefined || !EXPLAINED_BY_BACKEND.includes(status)) return null;
   return errorDetail(error);

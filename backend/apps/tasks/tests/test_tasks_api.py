@@ -14,8 +14,10 @@ is itself the behaviour PLAN.md §7 requires and is asserted directly in
 import pytest
 from django.test import Client
 
+# Колокольчик — в центре уведомлений (A1.5 модуля БЗО).
+from apps.notifications.models import Notification
 from apps.tasks.models import (
-    AssigneeRole, Label, Notification, Priority, Project, Status, Task,
+    AssigneeRole, Label, Priority, Project, Status, Task,
     TaskActivity, TaskAssignee, TaskDelegate, TaskType, TaskWatcher,
 )
 
@@ -205,7 +207,7 @@ def test_create_task_notifies_the_crew():
     post_json(Client(), f"{BASE}/tasks/",
               {"summary": "N", "assignee_id": 11}, **auth())
     note = Notification.objects.get(recipient_id=11)
-    assert note.verb.startswith("task_assigned:")
+    assert note.title.startswith("task_assigned:")
     assert note.target_type == "task"
 
 

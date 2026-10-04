@@ -45,6 +45,8 @@ import { LinkedRequestBadge } from '@/components/contracts/LinkedRequestPicker';
 import { contractsApi } from '@/api/contracts';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
+import { MigratedTo } from './FrozenNotice';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
@@ -94,6 +96,8 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   const permissions = usePermissions();
   const myId = activeProfile?.id ? Number(activeProfile.id) : null;
   const isAdmin = permissions.atLeast('contracts', 'admin');
+  // Раздел заморожен после переноса в БЗО (A6.2) — правки нет ни у кого.
+  const { frozen } = useContractsFreeze();
 
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -145,10 +149,12 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
   });
 
   const canUpload =
+    !frozen &&
     agreement !== undefined &&
     (isAdmin || (agreement.created_by === myId && agreement.status === 'draft'));
 
   const canEdit =
+    !frozen &&
     agreement !== undefined &&
     isAdmin &&
     isEditableState(agreement.approval_state) &&
@@ -217,6 +223,7 @@ const AgreementDetailView = ({ id: agreementId, embedded = false }: Props) => {
 
   return (
     <div className="space-y-6">
+      <MigratedTo targets={agreement.migrated_to} />
       {/* ─── Шапка ────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 space-y-2">

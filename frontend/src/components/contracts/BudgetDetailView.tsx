@@ -50,6 +50,7 @@ import {
 import ProjectLinkBadge from '@/components/contracts/ProjectLinkBadge';
 import { contractsApi } from '@/api/contracts';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import type { AgreementStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
@@ -76,6 +77,8 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
 
   const permissions = usePermissions();
   const isAdmin = permissions.atLeast('contracts', 'admin');
+  // Раздел заморожен после переноса в БЗО (A6.2) — правки нет ни у кого.
+  const { frozen } = useContractsFreeze();
 
   const {
     data: budget,
@@ -136,7 +139,7 @@ const BudgetDetailView = ({ id: budgetId, embedded = false }: Props) => {
   // Правка шапки бюджета — админская (`BudgetDetailView.patch` — admin=True) и
   // только пока бюджет редактируем по оси согласования (`assert_editable`),
   // иначе сохранение упрётся в 409. Гасим кнопку заранее.
-  const canEdit = isAdmin && isEditableState(budget.approval_state);
+  const canEdit = !frozen && isAdmin && isEditableState(budget.approval_state);
 
   // На странице процесса `h1` уже занят самим согласованием.
   const Heading = embedded ? 'h2' : 'h1';

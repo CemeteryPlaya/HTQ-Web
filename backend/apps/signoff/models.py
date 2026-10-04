@@ -3,7 +3,8 @@
 Универсальный движок согласования: он ничего не знает про бюджеты, договоры
 и вообще про предметные аппки. Объект, который согласуют, адресуется парой
 ``(subject_type, subject_id)`` — строка вида ``"contracts.budget"`` и id
-строки в ЧУЖОЙ таблице. Ни ``ContentType``, ни межаппного FK здесь нет и
+строки в ЧУЖОЙ таблице; id хранится строкой — каноническим ключом модели,
+целым или UUID. Ни ``ContentType``, ни межаппного FK здесь нет и
 быть не может: правило репозитория (``apps/core/tests/test_app_isolation.py``)
 запрещает signoff импортировать ``apps.contracts.models``, а ``ContentType``
 дал бы обходной путь к тому же самому через ``content_type.model_class()``.
@@ -123,6 +124,11 @@ class StageState(models.TextChoices):
     # доработку или отозвали раньше. Отдельно от «отклонён», чтобы в карточке
     # было видно, КТО отказал, а кто просто не успел получить запрос.
     SKIPPED = "skipped", "Не потребовался"
+    # На роль этапа не назначен ни один действующий исполнитель (ТЗ §16.1
+    # п.5): документ ждёт на этапе, пока его не назначат, а уведомлены те,
+    # кто может назначить. Бывает только у маршрутов с ``lazy_resolution``:
+    # без него движок отказывает в запуске (``RouteUnusable``).
+    NO_EXECUTOR = "no_executor", "Нет исполнителя"
 
 
 class TaskState(models.TextChoices):
@@ -367,6 +373,50 @@ class ApprovalRoute(models.Model):
                              db_index=True, verbose_name="Область")
     name = models.CharField(max_length=200, verbose_name="Название")
     is_active = models.BooleanField(default=True, db_default=True)
+
+    # ── Флаги маршрута (мастер-план БЗО, D-21). Все выключены по умолчанию:
+    # без них движок ведёт себя как до них. На запуске копируются в процесс
+    # (``ApprovalProcess.route_flags``) — маршрут фиксируется при отправке.
+    # BR-061: автор документа его не согласует; его группа уходит
+    # временному исполнителю должности, иначе — эскалации.
+    forbid_self_approval = models.BooleanField(default=False, db_default=False)
+    # BR-060: отказ и возврат — с комментарием не короче N символов; 0 — не
+    # требуется.
+    reject_comment_min = models.PositiveSmallIntegerField(default=0, db_default=0)
+    # ТЗ §16.1 п.2: исполнитель этапа определяется, когда этап становится
+    # активным, а не на запуске; нет исполнителя — этап ждёт («Нет
+    # исполнителя») вместо отказа в запуске.
+    lazy_resolution = models.BooleanField(default=False, db_default=False)
+    # D-18: группа этапов, где не сошлось ни одно условие и нет «иначе»,
+    # пропускается, а не роняет запуск; пропущены все — объект согласован
+    # сразу (допсоглашение без изменения суммы).
+    skip_unmatched_groups = models.BooleanField(default=False, db_default=False)
+    # «Роли» в словаре signoff — HR-должности. Кого уведомить о «Нет
+    # исполнителя» (ТЗ §16.1 п.5: АДМ и ГД).
+    no_executor_notify_position_ids = models.JSONField(default=list, blank=True)
+    # BR-061: к кому уходит группа автора, если ни держателя, ни временного
+    # исполнителя, кроме автора, нет (ГД).
+    escalation_position_id = models.IntegerField(null=True, blank=True)
+    # D-22: автор — сам держатель эскалации (ГД), группа пропущена; кого
+    # уведомить (ФД).
+    self_skip_notify_position_ids = models.JSONField(default=list, blank=True)
+
+    # ── Согласование между компаниями (БЗО, B8.1). Директора — в штате
+    # холдинга, поэтому и эскалация, и получатели уведомлений дочерней могут
+    # быть должностями ВЫШЕСТОЯЩЕЙ компании: компания эскалации — отдельным
+    # столбцом, получатели оттуда — парами ``[{company, position_id}]``.
+    # Пусто — своя компания, как до B8.1. Снимком в процесс, как соседи.
+    escalation_position_company = models.CharField(max_length=32, default="", db_default="",
+                                                   blank=True)
+    no_executor_notify_foreign = models.JSONField(default=list, db_default=[], blank=True)
+    self_skip_notify_foreign = models.JSONField(default=list, db_default=[], blank=True)
+    # Задачу этого маршрута можно решить прямо из очереди вышестоящей
+    # компании, не переходя на адрес дочерней (решение Руслана 02.10). В
+    # снимок процесса НЕ копируется: читается в момент решения, поэтому
+    # включение и выключение действуют сразу, в том числе на идущие
+    # согласования.
+    allow_direct_decisions = models.BooleanField(default=False, db_default=False)
+
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
@@ -468,6 +518,15 @@ class ApprovalRouteStage(models.Model):
         verbose_name="Требуется пояснение",
         help_text="Согласовать этап можно только с непустым комментарием",
     )
+    # Кто выбирает вариант (исходный документ или альтернативу, ТЗ §12.4).
+    # Модуль БЗО (D-25/D-26): выбирают ФД и ГД, решает голос последнего из
+    # них. Этап без признака в процессе, где он есть хоть у одного этапа,
+    # согласует без выбора. Нет ни у одного — выбирает каждый этап, как было.
+    votes_option = models.BooleanField(
+        default=False, db_default=False,
+        verbose_name="Выбирает вариант",
+        help_text="При альтернативах согласующий этапа выбирает вариант",
+    )
     # Третье требование этапа — к САМОМУ ОБЪЕКТУ, а не к решению. Документ и
     # пояснение приносит согласующий вместе с решением; здесь же этап ждёт,
     # чтобы на объекте что-то БЫЛО СДЕЛАНО: у заявки на закуп заполнен
@@ -538,23 +597,45 @@ class ApprovalRouteStageRole(models.Model):
     должности и их активные ``user_id``; именно последние попадают в снимок
     ``ApprovalTask``.  Поэтому смена сотрудника меняет будущие процессы, но
     никогда не переписывает уже выданные задания и их аудит.
+
+    ``position_company`` — в штате какой компании эта должность (БЗО, B8.1):
+    пусто — своей, иначе слаг ВЫШЕСТОЯЩЕЙ компании (директора дочерних — в
+    штате холдинга). Должности у компаний свои, id повторяются, поэтому
+    должность адресуется только парой.
     """
 
     stage = models.ForeignKey(ApprovalRouteStage, on_delete=models.CASCADE,
                               related_name="roles")
     position_id = models.IntegerField(db_index=True, verbose_name="Должность")
+    position_company = models.CharField(max_length=32, default="", db_default="", blank=True,
+                                        verbose_name="Компания должности",
+                                        help_text="Пусто — своя компания")
 
     class Meta:
         ordering = ("id",)
         constraints = [
-            models.UniqueConstraint(fields=["stage", "position_id"],
-                                    name="uq_signoff_stage_role"),
+            models.UniqueConstraint(fields=["stage", "position_company", "position_id"],
+                                    name="uq_signoff_stage_role_company"),
         ]
         verbose_name = "Должность согласующего"
         verbose_name_plural = "Должности согласующих"
 
     def __str__(self) -> str:
-        return f"position#{self.position_id} @ {self.stage_id}"
+        where = f"{self.position_company}:" if self.position_company else ""
+        return f"position#{where}{self.position_id} @ {self.stage_id}"
+
+    def clean(self) -> None:
+        """Компания должности — своя или вышестоящая, должность существует
+        (для django-admin: HTTP-путь проверяет то же в ``route_service``)."""
+        from django.core.exceptions import ValidationError
+
+        from apps.signoff.services import positions
+
+        try:
+            positions.check_refs([positions.PositionRef(self.position_company or "",
+                                                        int(self.position_id))])
+        except positions.PositionRefError as exc:
+            raise ValidationError({"position_company": str(exc)}) from exc
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -576,7 +657,11 @@ class ApprovalProcess(models.Model):
     """
 
     subject_type = models.CharField(max_length=64, verbose_name="Тип объекта")
-    subject_id = models.IntegerField(verbose_name="Объект")
+    # Строка, а не целое: документы модуля БЗО адресуются UUID (мастер-план
+    # D-05). Хранится каноническая строка ключа модели
+    # (services/registry.storage_key); колбэки получают ключ в типе модели
+    # (registry.native_id).
+    subject_id = models.CharField(max_length=64, verbose_name="Объект")
     # Область, по маршруту которой шёл процесс (см. ``ApprovalRoute.scope``).
     # Часть снимка: объект может сменить область (заявку перевели в другой
     # шаблон), а ответ «по какому маршруту согласовывали» обязан остаться.
@@ -598,6 +683,15 @@ class ApprovalProcess(models.Model):
     # ответить на него нечем.
     subject_facts = models.JSONField(default=dict, blank=True,
                                      verbose_name="Факты объекта")
+    # Флаги маршрута на момент запуска (``ApprovalRoute.forbid_self_approval``
+    # и соседи): правка маршрута не меняет идущий процесс (ТЗ §16.1 п.2).
+    route_flags = models.JSONField(default=dict, blank=True,
+                                   verbose_name="Флаги маршрута")
+    # Предсогласованные группы должностей (мастер-план БЗО, D-26):
+    # ``[{position_id, actor_id, label}]`` — задач им не ставится ни на
+    # запуске, ни при ленивой активации этапа.
+    preapproved = models.JSONField(default=list, blank=True,
+                                   verbose_name="Предсогласовано")
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -669,7 +763,13 @@ class ApprovalProcessStage(models.Model):
     # HR-должности, по которым на запуске были разрешены конкретные задачи.
     # Сотрудник на должности может смениться завтра; карточка старого процесса
     # всё равно должна объяснять, какую именно роль он подписывал.
+    # Только должности СВОЕЙ компании — так их читают процессы до B8.1.
     role_ids = models.JSONField(default=list, blank=True)
+    # Все должности этапа парами ``[{company, position_id}]`` (БЗО, B8.1):
+    # ``company`` пуст у своих и равен слагу вышестоящей компании у её
+    # должностей. Авторитетен он, а не ``role_ids``; пустой — у этапов,
+    # заведённых до B8.1 (читатель берёт ``role_ids`` как свои).
+    role_refs = models.JSONField(default=list, db_default=[], blank=True)
     # Та же роль для двух других видов: кого назвал маршрут поимённо и по
     # какому ключу объект назвал согласующих. Справочные, как ``role_ids``.
     user_ids = models.JSONField(default=list, blank=True)
@@ -680,8 +780,12 @@ class ApprovalProcessStage(models.Model):
     # должно избавлять от документа (или пояснения) тех, кто ещё не решил.
     requires_attachment = models.BooleanField(default=False, db_default=False)
     requires_comment = models.BooleanField(default=False, db_default=False)
+    votes_option = models.BooleanField(default=False, db_default=False)
     requirement_key = models.CharField(max_length=64, default="", db_default="",
                                        blank=True)
+    # Когда этап стал активным — «Сейчас у … с такого-то времени» (ТЗ §16.2).
+    # У этапов, заведённых до столбца, пусто: читатель берёт время запуска.
+    activated_at = models.DateTimeField(null=True, blank=True)
     decided_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -716,6 +820,15 @@ class ApprovalTask(models.Model):
     position_id = models.IntegerField(
         null=True, blank=True, db_index=True, verbose_name="Position of approver",
     )
+    # В штате какой компании ``position_id`` (БЗО, B8.1): пусто — своей.
+    # Не ``company_slug``: ``ApprovalTask`` входит в сводные представления
+    # холдинга, и там столбец с этим именем добавляет сборка представления.
+    position_company = models.CharField(max_length=32, default="", db_default="", blank=True)
+    # Остальные должности этапа, которые закрывает эта же задача: один
+    # человек держит на этапе две должности (ГД исполняет и ФД) — задача у
+    # него одна, а решение засчитывается за все (решение 02.10).
+    # ``[{company, position_id}]``.
+    also_positions = models.JSONField(default=list, db_default=[], blank=True)
     state = models.CharField(max_length=16, choices=TaskState.choices,
                              default=TaskState.PENDING,
                              db_default=TaskState.PENDING)
@@ -729,6 +842,12 @@ class ApprovalTask(models.Model):
     # Живёт на задаче, а не на предметном объекте, потому что это
     # свидетельство КОНКРЕТНОГО решения: «вот что подписал этот человек на
     # этом этапе». Перепишет ли предметная аппка ссылку себе — её дело.
+    # Вариант, за который отдан голос «согласовать», когда предметная аппка
+    # предложила выбор (``registry.options_for``: исходный документ или его
+    # альтернатива, ТЗ §12). Ключ и подпись — снимком: предложение могут
+    # отозвать, а голос обязан остаться читаемым.
+    option_key = models.CharField(max_length=64, blank=True, default="", db_default="")
+    option_label = models.CharField(max_length=300, blank=True, default="", db_default="")
     file_id = models.CharField(max_length=64, null=True, blank=True,
                                verbose_name="Приложенный документ")
     acted_at = models.DateTimeField(null=True, blank=True)

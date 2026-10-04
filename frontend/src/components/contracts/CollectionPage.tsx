@@ -5,11 +5,13 @@ import { Search } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 
 type CollectionPageHeaderProps = {
   icon: LucideIcon;
   title: string;
   description?: string;
+  /** Кнопки создания. В замороженном разделе (A6.2) не рисуются. */
   actions?: ReactNode;
   children?: ReactNode;
 };
@@ -21,6 +23,8 @@ export function CollectionPageHeader({
   actions,
   children,
 }: CollectionPageHeaderProps) {
+  const { frozen } = useContractsFreeze();
+  const shownActions = frozen ? null : actions;
   return (
     <div className="mb-6 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -35,7 +39,7 @@ export function CollectionPageHeader({
             )}
           </div>
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {shownActions && <div className="flex shrink-0 items-center gap-2">{shownActions}</div>}
       </div>
       {children}
     </div>
@@ -143,6 +147,9 @@ export function CollectionTable({
   emptyAction,
   children,
 }: CollectionTableProps) {
+  // «Оформить первый» в архиве (A6.2) вёл бы на закрытую форму.
+  const { frozen } = useContractsFreeze();
+  const shownEmptyAction = frozen ? null : emptyAction;
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       {isLoading ? (
@@ -156,7 +163,7 @@ export function CollectionTable({
       ) : isEmpty ? (
         <div className="flex min-h-48 flex-col items-center justify-center p-8 text-center">
           <p className="text-muted-foreground">{emptyMessage}</p>
-          {emptyAction && <div className="mt-4">{emptyAction}</div>}
+          {shownEmptyAction && <div className="mt-4">{shownEmptyAction}</div>}
         </div>
       ) : (
         <>

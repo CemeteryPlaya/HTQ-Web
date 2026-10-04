@@ -8,6 +8,7 @@ inlines this directly in the router; split out here into
 
 from __future__ import annotations
 
+from django.contrib.auth.hashers import make_password
 from django.db.models import Q
 from django.utils import timezone
 
@@ -19,7 +20,12 @@ class InvalidCredentials(Exception):
 
 
 class AccountNotActivated(Exception):
-    """User found (and password not yet checked) but ``status != ACTIVE``."""
+    """Пароль верен, но ``status != ACTIVE`` (поднимается только после проверки пароля)."""
+
+
+def find_user(login_id: str) -> User | None:
+    """Публичный поиск по логину входа (``auth_unlock`` использует тот же)."""
+    return _find_user(login_id)
 
 
 def _find_user(login_id: str) -> User | None:
@@ -33,21 +39,32 @@ def _find_user(login_id: str) -> User | None:
 def authenticate(login_id: str, password: str) -> User:
     """``POST token/`` login.
 
-    Reproduces the FastAPI original's check order exactly
-    (``obtain_token``): unknown user -> ``InvalidCredentials``; user found
-    but not ``ACTIVE`` -> ``AccountNotActivated`` (checked *before* the
-    password, so an inactive account with a wrong password still reports
-    "not activated", not "invalid credentials"); active user + wrong
-    password -> ``InvalidCredentials``. On success, updates ``last_login``.
+    Порядок проверок (D-S7-3; у FastAPI-оригинала статус шёл ДО пароля, и
+    это выдавало существование логина): неизвестный логин ->
+    ``InvalidCredentials``; неверный пароль (в том числе у неактивной учётки)
+    -> ``InvalidCredentials``; верный пароль, но статус не ``ACTIVE`` ->
+    ``AccountNotActivated``. «Не активирована» слышит только тот, кто знает
+    пароль. Для неизвестного логина хеш всё равно считается, чтобы время
+    ответа не выдавало существование. При успехе обновляется ``last_login``.
     """
     user = _find_user(login_id)
     if user is None:
+        make_password(password)
+        raise InvalidCredentials()
+    if not user.check_password(password):
         raise InvalidCredentials()
     if user.status != UserStatus.ACTIVE:
         raise AccountNotActivated()
-    if not user.check_password(password):
-        raise InvalidCredentials()
 
     user.last_login = timezone.now()
     user.save(update_fields=["last_login"])
     return user
+
+
+def reset_lockout(user: User) -> None:
+    """Снять блокировку входа по обоим логинам пользователя (имя и e-mail)."""
+    from htqweb import ratelimit
+
+    for login in {user.username, user.email}:
+        if login:
+            ratelimit.reset_login(login)

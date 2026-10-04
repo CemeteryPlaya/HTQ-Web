@@ -34,7 +34,7 @@ from django.db.models import Q, QuerySet
 from django.http import Http404, HttpResponse
 from django.utils.decorators import method_decorator
 
-from htqweb.http import ApiView, api_view, json_error
+from htqweb.http import ApiError, ApiView, api_view, json_error
 
 from . import schemas
 from .models import (
@@ -48,9 +48,20 @@ from .models import (
     StageState,
     TaskState,
 )
-from .services import attachments, engine, presentation, registry
+from htqweb.tenancy import current_company_or_none
+
+from .services import (
+    attachments,
+    batch,
+    direct,
+    engine,
+    inbox,
+    positions,
+    presentation,
+    registry,
+)
 from .services import route_service as routes
-from .services.engine import SignoffError
+from .services.engine import InvalidDecision, SelfApprovalForbidden, SignoffError
 from .services.registry import UnknownSubject
 from .services.route_service import RouteConflict
 
@@ -94,9 +105,6 @@ class SignoffView(ApiView):
 
 
 read = method_decorator(api_view(methods=("GET",), auth="jwt"))
-admin_read = method_decorator(
-    api_view(methods=("GET",), auth="jwt", admin=True)
-)
 
 
 def write(method: str, body=None, status: int = 200, admin: bool = True):
@@ -133,18 +141,67 @@ def _visible_process_or_404(process_id: int, token) -> ApprovalProcess:
 # ═══════════════════════════════════════════════════════════════════════
 # Маршруты
 # ═══════════════════════════════════════════════════════════════════════
+#
+# Маршруты правит администратор платформы, а маршруты своего типа — ещё и
+# тот, кого назовёт предметная аппка (``registry.route_editors``; модуль БЗО,
+# В-09: ФД и АДМ). Поэтому ручки — ``admin=False`` с проверкой по типу
+# маршрута: гейт ``admin=True`` не знает, чей это маршрут.
+
+class RoutesForbidden(ApiError):
+    status_code = 403
+    detail = "Маршруты согласования этого типа документов правит администратор."
+
+
+def _require_route_rights(token) -> set[str] | None:
+    """Типы, маршруты которых правит не-администратор; ``None`` —
+    администратор, ему все. Ни одного типа — 403 до поиска строки: как
+    прежний гейт ``admin=True``, ответ не выдаёт, есть ли маршрут с таким id."""
+    if token.is_elevated:
+        return None
+    editable = registry.route_editable_types(token)
+    if not editable:
+        raise RoutesForbidden()
+    return editable
+
+
+def _require_type(token, subject_type: str) -> None:
+    _require_route_rights(token)
+    if not registry.can_edit_routes(subject_type, token):
+        raise RoutesForbidden()
+
+
+def _editable_route(token, route_id: int):
+    _require_route_rights(token)
+    route = routes.get_route_or_404(route_id)
+    _require_type(token, route.subject_type)
+    return route
+
+
+def _editable_stage(token, stage_id: int):
+    _require_route_rights(token)
+    stage = routes.get_stage_or_404(stage_id)
+    _require_type(token, stage.route.subject_type)
+    return stage
+
 
 class RouteCollectionView(SignoffView):
-    @admin_read
+    @read
     def get(self, request):
-        rows = routes.list_routes(subject_type=self.str_param("subject_type"),
+        subject_type = self.str_param("subject_type")
+        editable = _require_route_rights(request.token)
+        if editable is not None and subject_type and subject_type not in editable:
+            raise RoutesForbidden()
+        rows = routes.list_routes(subject_type=subject_type,
                                   is_active=self.bool_param("is_active"),
                                   scope=self.request.GET.get("scope"))
+        if editable is not None:
+            rows = [row for row in rows if row.subject_type in editable]
         return [schemas.RouteRead.model_validate(routes.serialize_route(row))
                 for row in rows]
 
-    @write("POST", body=schemas.RouteCreate, status=201)
+    @write("POST", body=schemas.RouteCreate, status=201, admin=False)
     def post(self, request, data: schemas.RouteCreate):
+        _require_type(request.token, data.subject_type)
         try:
             route = routes.create_route(**data.model_dump())
         except CONFLICTS as exc:
@@ -153,32 +210,66 @@ class RouteCollectionView(SignoffView):
 
 
 class RouteDetailView(SignoffView):
-    @admin_read
+    @read
     def get(self, request, route_id: int):
+        route = _editable_route(request.token, route_id)
         # ``gaps=True`` только здесь: карточка одного маршрута — это экран
         # редактора, ради которого подсказка и считается.
-        return schemas.RouteRead.model_validate(
-            routes.serialize_route(routes.get_route_or_404(route_id), gaps=True))
+        return schemas.RouteRead.model_validate(routes.serialize_route(route, gaps=True))
 
-    @write("PATCH", body=schemas.RouteUpdate)
+    @write("PATCH", body=schemas.RouteUpdate, admin=False)
     def patch(self, request, route_id: int, data: schemas.RouteUpdate):
+        _editable_route(request.token, route_id)
         try:
-            route = routes.update_route(route_id, **data.model_dump())
+            # Только присланные поля: у должности эскалации null значит «убрать».
+            route = routes.update_route(route_id, **data.model_dump(exclude_unset=True))
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.RouteRead.model_validate(routes.serialize_route(route))
 
-    @write("DELETE")
+    @write("DELETE", admin=False)
     def delete(self, request, route_id: int):
+        _editable_route(request.token, route_id)
         routes.delete_route(route_id)
         return HttpResponse(status=204)
+
+
+class PositionCompaniesView(SignoffView):
+    """Из каких компаний редактор маршрута может брать должности (B8.1):
+    своя и действующие вышестоящие, ближайшая первой. Права — как у правки
+    маршрутов: администратор или редактор хоть одного типа."""
+
+    @read
+    def get(self, request):
+        _require_route_rights(request.token)
+        own = current_company_or_none() or ""
+        rows = [{"slug": own, "name": positions.company_name(own) or "", "own": True}]
+        rows.extend({"slug": slug, "name": positions.company_name(slug) or slug, "own": False}
+                    for slug in positions.allowed_companies() if slug)
+        return rows
+
+
+class PositionsView(SignoffView):
+    """Справочник должностей компании для этапа маршрута (B8.1): своей или
+    вышестоящей (``?company=<слаг>``, пусто — своя). Кадровый API отдаёт
+    должности только компании запроса, поэтому должности холдинга редактор
+    маршрута дочерней берёт здесь. Другая компания — 404, как несуществующая."""
+
+    @read
+    def get(self, request):
+        _require_route_rights(request.token)
+        try:
+            return positions.list_positions(self.request.GET.get("company") or "")
+        except positions.PositionRefError as exc:
+            raise Http404(str(exc)) from exc
 
 
 class RouteStagesView(SignoffView):
     """Добавление этапа в маршрут."""
 
-    @write("POST", body=schemas.StageCreate, status=201)
+    @write("POST", body=schemas.StageCreate, status=201, admin=False)
     def post(self, request, route_id: int, data: schemas.StageCreate):
+        _editable_route(request.token, route_id)
         try:
             stage = routes.add_stage(route_id, **data.model_dump())
         except CONFLICTS as exc:
@@ -187,13 +278,14 @@ class RouteStagesView(SignoffView):
 
 
 class StageDetailView(SignoffView):
-    @admin_read
+    @read
     def get(self, request, stage_id: int):
-        return schemas.StageRead.model_validate(
-            routes.serialize_stage(routes.get_stage_or_404(stage_id)))
+        stage = _editable_stage(request.token, stage_id)
+        return schemas.StageRead.model_validate(routes.serialize_stage(stage))
 
-    @write("PATCH", body=schemas.StageUpdate)
+    @write("PATCH", body=schemas.StageUpdate, admin=False)
     def patch(self, request, stage_id: int, data: schemas.StageUpdate):
+        _editable_stage(request.token, stage_id)
         try:
             # exclude_unset: у списка согласующих None («не трогать») и
             # пустой список («стереть») — разные намерения, и model_dump()
@@ -204,8 +296,9 @@ class StageDetailView(SignoffView):
             return self.conflict(exc)
         return schemas.StageRead.model_validate(routes.serialize_stage(stage))
 
-    @write("DELETE")
+    @write("DELETE", admin=False)
     def delete(self, request, stage_id: int):
+        _editable_stage(request.token, stage_id)
         try:
             routes.delete_stage(stage_id)
         except CONFLICTS as exc:
@@ -225,7 +318,7 @@ class ProcessCollectionView(SignoffView):
             request.token,
         )
         subject_type = self.str_param("subject_type")
-        subject_id = self.int_param("subject_id")
+        subject_id = self.str_param("subject_id")
         state = self.str_param("state")
         initiator_id = self.int_param("initiator_id")
         scope = self.request.GET.get("scope")
@@ -234,7 +327,13 @@ class ProcessCollectionView(SignoffView):
         if scope is not None:
             query = query.filter(scope=scope)
         if subject_id is not None:
-            query = query.filter(subject_id=subject_id)
+            try:
+                key = (registry.storage_key(subject_type, subject_id)
+                       if subject_type is not None else subject_id)
+            except UnknownSubject:
+                # Такого ключа у типа не бывает — значит, нет и процессов.
+                return []
+            query = query.filter(subject_id=key)
         if state is not None:
             query = query.filter(state=state)
         if initiator_id is not None:
@@ -297,6 +396,24 @@ class ProcessCancelView(SignoffView):
             presentation.serialize_process(process, enrich=True))
 
 
+class ProcessRetryExecutorsView(SignoffView):
+    """Ещё раз поискать исполнителей этапам «Нет исполнителя» (ТЗ §16.1 п.5).
+
+    Администратор назначил сотрудника или временного исполнителя и не хочет
+    ждать периодической задачи (``signoff.retry_no_executor_dispatch``).
+    Отвечает карточкой процесса и числом оживших этапов.
+    """
+
+    @write("POST")
+    def post(self, request, process_id: int):
+        if not ApprovalProcess.objects.filter(pk=process_id).exists():
+            raise Http404("Процесс согласования не найден")
+        found = engine.retry_no_executor(process_id, actor_id=request.token.user_id)
+        process = ApprovalProcess.objects.get(pk=process_id)
+        card = presentation.serialize_process(process, enrich=True)
+        return {"found": found, "process": schemas.ProcessRead.model_validate(card).model_dump(mode="json")}
+
+
 class ProcessReworkView(SignoffView):
     """«Вернуть на доработку» по УЖЕ ЗАКРЫТОМУ кругу — администратором или
     согласующим, который действительно принял решение в этом процессе.
@@ -324,13 +441,17 @@ class ProcessReworkView(SignoffView):
         if process is None:
             raise Http404("Процесс согласования не найден")
 
+        own_tasks = ApprovalTask.objects.filter(stage__process_id=process_id,
+                                                user_id=request.token.user_id)
+        # Круг ещё идёт — ответ «ещё идёт» (409 от ``engine.reopen``) любому
+        # участнику: у согласующего с открытой задачей решения пока нет, и
+        # проверка ниже отказала бы ему в праве, которое тут ни при чём.
+        running = process.state == ProcessState.PENDING and (
+            own_tasks.exists() or request.token.is_elevated)
         # Только реально принятое решение. Наличие созданной, но погашенной
         # задачи ещё не даёт права отпирать завершённый документ.
-        is_approver = ApprovalTask.objects.filter(
-            stage__process_id=process_id, user_id=request.token.user_id,
-            acted_at__isnull=False,
-        ).exists()
-        if not (is_approver or request.token.is_elevated):
+        is_approver = own_tasks.filter(acted_at__isnull=False).exists()
+        if not (running or is_approver or request.token.is_elevated):
             return json_error("Вернуть на доработку может согласующий этого "
                               "процесса или администратор", 403)
 
@@ -360,6 +481,48 @@ class InboxView(SignoffView):
     def get(self, request):
         return [schemas.InboxItem.model_validate(row)
                 for row in presentation.list_inbox(request.token.user_id)]
+
+
+class InboxAllView(SignoffView):
+    """«Ждёт меня» по всем компаниям пользователя (БЗО, B8.1): текущая, где
+    есть членство, и ниже по дереву владения. Тот же принцип, что у
+    ``InboxView``: всегда про того, кто спрашивает, чужой очереди нет."""
+
+    @read
+    def get(self, request):
+        return [schemas.InboxAllItem.model_validate(row)
+                for row in inbox.inbox_all(request.token.user_id)]
+
+
+class ForeignProcessView(SignoffView):
+    """Карточка процесса дочерней компании — для решения из холдинга (B8.1).
+    Компания не ниже текущей или процесс без задач этого человека — 404."""
+
+    @read
+    def get(self, request, company: str, process_id: int):
+        return schemas.ForeignProcessRead.model_validate(
+            direct.process_card(company, process_id, user_id=request.token.user_id))
+
+
+class ForeignDecisionView(SignoffView):
+    """Решение по своей задаче дочерней компании прямо из холдинга (B8.1).
+
+    ``admin=False``, как у ``TaskDecisionView``: решает названный в маршруте
+    человек. Отказы — в докстринге ``services/direct.py``."""
+
+    @write("POST", body=schemas.Decision, admin=False)
+    def post(self, request, company: str, task_id: int, data: schemas.Decision):
+        try:
+            card = direct.decide(company, task_id, user_id=request.token.user_id,
+                                 decision=data.decision, comment=data.comment,
+                                 option_key=data.option_key)
+        except InvalidDecision as exc:
+            return json_error(str(exc), 422)
+        except (SelfApprovalForbidden, direct.DirectForbidden) as exc:
+            return json_error(str(exc), 403)
+        except CONFLICTS as exc:
+            return self.conflict(exc)
+        return schemas.ForeignProcessRead.model_validate(card)
 
 
 class TaskAttachmentView(SignoffView):
@@ -413,7 +576,16 @@ class TaskDecisionView(SignoffView):
         try:
             process = engine.act(task_id=task_id,
                                  actor_id=request.token.user_id,
-                                 decision=data.decision, comment=data.comment)
+                                 decision=data.decision, comment=data.comment,
+                                 option_key=data.option_key)
+        except InvalidDecision as exc:
+            # Решение составлено неверно (вариант голоса, короткий комментарий
+            # BR-060) — 422, а не 409 (мастер-план БЗО). Раньше CONFLICTS:
+            # InvalidDecision — его наследник.
+            return json_error(str(exc), 422)
+        except SelfApprovalForbidden as exc:
+            # BR-061: автор не согласует свой документ — 403 (ТЗ §23).
+            return json_error(str(exc), 403)
         except CONFLICTS as exc:
             return self.conflict(exc)
         return schemas.ProcessRead.model_validate(
@@ -430,14 +602,7 @@ class TaskBatchDecisionView(SignoffView):
 
     @write("POST", body=schemas.BatchDecision, admin=False)
     def post(self, request, data: schemas.BatchDecision):
-        results = []
-        for task_id in data.task_ids:
-            try:
-                engine.act(task_id=task_id, actor_id=request.token.user_id,
-                           decision=data.decision, comment=data.comment)
-                results.append({"task_id": task_id, "ok": True})
-            except (Http404, *CONFLICTS) as exc:
-                results.append({"task_id": task_id, "ok": False, "error": str(exc)})
+        results = batch.decide_many(actor_id=request.token.user_id, items=data.as_items())
         return [schemas.BatchDecisionResult.model_validate(row) for row in results]
 
 

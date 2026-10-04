@@ -407,18 +407,19 @@ def test_holder_of_an_unrelated_role_reads_and_marks_their_own_notifications(cli
     basic`` в остальных тестах файла несёт ``tasks`` = write и не ловит
     сужение до чужого домена).
     """
-    from apps.tasks.models import Notification
+    # Колокольчик — в центре уведомлений (A1.5 модуля БЗО).
+    from apps.notifications.models import Notification
 
     user = _mk("messenger-only")
     assign(company_row, user.id, "messenger", "write")
     head = headers(user, company_row)
 
     notification = Notification.objects.create(
-        recipient_id=user.id, verb="task_assigned:TASK-1")
+        recipient_id=user.id, event="tasks.task", title="task_assigned:TASK-1")
 
     listed = client.get(f"{BASE}/notifications/", **head)
     assert listed.status_code == 200
-    assert [row["id"] for row in listed.json()] == [notification.id]
+    assert [row["id"] for row in listed.json()] == [str(notification.id)]
 
     marked = client.post(
         f"{BASE}/notifications/{notification.id}/mark_read/", **head)

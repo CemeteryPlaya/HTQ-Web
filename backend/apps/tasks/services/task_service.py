@@ -32,10 +32,12 @@ from django.db.models.functions import TruncDate
 from django.http import Http404
 from django.utils import timezone
 
+from apps.notifications import interface as notifications
+from htqweb.tenancy.context import current_company_or_none
+
 from ..models import (
     AssigneeRole,
     Label,
-    Notification,
     Status,
     TERMINAL_STATUSES,
     TRANSITIONS,
@@ -357,9 +359,11 @@ def _notify(recipient_id: int, actor_id: int | None, task: Task,
     so a notification problem could never fail the mutation that caused it —
     kept, but logged rather than silently passed."""
     try:
-        Notification.objects.create(recipient_id=recipient_id,
-                                    actor_id=actor_id, task=task, verb=verb,
-                                    target_type="task", target_id=task.id)
+        # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
+        notifications.notify(
+            recipients=[recipient_id], event="tasks.task", title=verb,
+            company_slug=current_company_or_none(), target_type="task",
+            target_id=str(task.id), actor_id=actor_id, deliver=False)
     except Exception:
         logger.exception("tasks: failed to write notification %r", verb)
 

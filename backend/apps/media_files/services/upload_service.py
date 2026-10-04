@@ -26,11 +26,17 @@ from __future__ import annotations
 import datetime
 import hashlib
 import mimetypes
+import re
 import uuid
 from dataclasses import dataclass
 
-from django.conf import settings
+import logging
 
+from django.conf import settings
+from prometheus_client import Counter
+
+from htqweb import antivirus
+from htqweb.http import ApiError
 from htqweb.storage import get_storage
 
 from apps.media_files.models import FileMetadata
@@ -40,6 +46,7 @@ from apps.media_files.services.image_service import (
     detect_mime,
     kind_from_mime,
     normalise as normalise_image,
+    validate as validate_image,
 )
 from apps.media_files.services.scope_policy import (
     ScopePolicy,
@@ -49,13 +56,72 @@ from apps.media_files.services.scope_policy import (
 )
 
 
-class UploadValidationError(ValueError):
-    """Pipeline rejected the upload — caller maps to an HTTP status code."""
+class UploadValidationError(ApiError, ValueError):
+    """Pipeline rejected the upload — caller maps to an HTTP status code.
+
+    ``ApiError`` — чтобы отказ, не перехваченный вызывающей аппкой, всё равно
+    дошёл до клиента своим статусом и текстом, а не 500 (``api_view``);
+    ``ValueError`` — прежний контракт для тех, кто ловит его сам.
+    """
 
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+
+
+class FileInfected(UploadValidationError):
+    """Антивирус нашёл угрозу — файл не сохраняется.
+
+    Текст — для человека и по-русски: его показывают и вьюхи, которые сами
+    отказ не разбирают (договорный контур, согласование).
+    """
+
+    def __init__(self, signature: str) -> None:
+        super().__init__(
+            422, f"Файл не загружен: антивирус обнаружил угрозу «{signature}». "
+                 f"Проверьте файл и компьютер антивирусом и загрузите чистую копию.")
+        self.signature = signature
+
+
+class ScanUnavailable(UploadValidationError):
+    """Scope требует проверки, а сканер не ответил — файл не сохраняется."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            503, "Файл не загружен: проверка на вирусы сейчас недоступна, а без "
+                 "неё файлы не принимаются. Повторите загрузку через несколько минут.")
+        self.reason = reason
+
+
+logger = logging.getLogger(__name__)
+
+#: Вердикты антивируса (A7.4, D-31). Вне ``collect_all()``, как
+#: ``htqweb_fallback_total``: счётчик процесса web. Не растёт, пока сканер
+#: выключен (пустой ``ANTIVIRUS_CLAMD_HOST``) или scope проверки не требует.
+#: ``unavailable`` — включённый, но молчащий сканер: пользователь видит 503,
+#: а оператор — рост этой серии (алерт ``htqweb-antivirus-unavailable``).
+antivirus_scans_total = Counter(
+    "htqweb_antivirus_scans_total",
+    "Проверки файлов антивирусом по вердиктам (clean, infected, unavailable)",
+    ["verdict"],
+)
+_VERDICTS = ("clean", "infected", "unavailable")
+_labels_ready = False
+
+
+def _init_verdict_labels() -> None:
+    """Создать все три серии при первом использовании включённого сканера.
+
+    Без этого серия ``unavailable`` рождается сразу значением 1, а
+    ``increase()`` Prometheus не видит прироста у серии, появившейся уже
+    ненулевой, — первый отказ сканера остался бы без алерта."""
+    global _labels_ready
+    if _labels_ready:
+        return
+    for verdict in _VERDICTS:
+        antivirus_scans_total.labels(verdict)
+    _labels_ready = True
 
 
 @dataclass
@@ -79,15 +145,47 @@ def _ext_for(mime: str, original_filename: str) -> str:
     return ""
 
 
-def _build_path(scope: str, file_id: uuid.UUID, ext: str) -> str:
-    """Layout: ``<scope>/<yyyy>/<mm>/<uuid>/original<ext>``.
+def _build_path(scope: str, file_id: uuid.UUID, ext: str,
+                folder: str | None = None) -> str:
+    """Layout: ``<scope>/<yyyy>/<mm>/<uuid>/original<ext>``, or
+    ``<scope>/<folder>/<uuid>/original<ext>`` for a ``folder_layout`` scope.
 
     Grouping by scope makes per-domain quotas / cleanup straightforward;
     nesting under <uuid>/ leaves room for sibling variants under the same
-    prefix without colliding with other uploads.
+    prefix without colliding with other uploads. A folder replaces the date
+    part: every file of one owner object (e.g. one request) then shares one
+    prefix, which is what "one object = one folder" means in storage.
     """
+    if folder is not None:
+        return f"{scope}/{folder}/{file_id}/original{ext}"
     now = datetime.datetime.now(datetime.timezone.utc)
     return f"{scope}/{now.year}/{now.month:02d}/{file_id}/original{ext}"
+
+
+# Сегменты папки — только то, что безопасно в ключе S3 и в пути ФС: у
+# S3-бэкенда нет своей защиты от ``..`` (она есть только у LocalStorage).
+_FOLDER_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}(?:/[a-z0-9][a-z0-9_-]{0,63}){0,3}")
+
+
+def _resolve_folder(folder: str | None, policy: ScopePolicy) -> str | None:
+    """Папка обязательна для ``folder_layout``-scope и запрещена для прочих.
+
+    Строго в обе стороны: раскладка ключей — свойство scope, и смешение двух
+    схем в одном префиксе сделало бы его нечитаемым. Заодно это закрывает
+    прямую загрузку в такой scope через ``POST /api/media/v1/files/``: HTTP-
+    эндпоинт папку не передаёт, и файл без владельца туда не ляжет.
+    """
+    if not policy.folder_layout:
+        if folder is not None:
+            raise UploadValidationError(
+                422, f"Scope '{policy.name}' does not use folders")
+        return None
+    if folder is None:
+        raise UploadValidationError(
+            422, f"Scope '{policy.name}' requires a folder")
+    if not _FOLDER_RE.fullmatch(folder):
+        raise UploadValidationError(422, f"Invalid folder {folder!r}")
+    return folder
 
 
 def _validate_size(data: bytes, policy: ScopePolicy) -> None:
@@ -154,6 +252,25 @@ def _validate_signature(data: bytes, mime: str, policy: ScopePolicy) -> None:
         )
 
 
+def _scan(data: bytes, filename: str, policy: ScopePolicy) -> None:
+    """Антивирус — после дешёвых проверок (размер, тип, сигнатура), но ДО
+    разбора картинки и записи: байты, которые клиент прислал, а не то, во
+    что их превратила обработка."""
+    if not policy.antivirus or not antivirus.enabled():
+        return
+    _init_verdict_labels()
+    try:
+        verdict = antivirus.scan(data)
+    except antivirus.ScanUnavailable as exc:
+        antivirus_scans_total.labels("unavailable").inc()
+        logger.error("antivirus unavailable, upload of %r refused: %s", filename, exc)
+        raise ScanUnavailable(str(exc)) from exc
+    antivirus_scans_total.labels("clean" if verdict.clean else "infected").inc()
+    if not verdict.clean:
+        logger.warning("antivirus: %r rejected, signature %s", filename, verdict.signature)
+        raise FileInfected(verdict.signature)
+
+
 def upload_file_bytes(
     *,
     data: bytes,
@@ -162,8 +279,12 @@ def upload_file_bytes(
     scope: str,
     requested_is_public: bool | None,
     owner_id: int | None,
+    folder: str | None = None,
 ) -> UploadResult:
     """Accept raw bytes, run the pipeline, and persist a ``FileMetadata`` row.
+
+    ``folder`` — папка владельца для ``folder_layout``-scope (см.
+    ``_resolve_folder``); у остальных scope должна быть ``None``.
 
     Raises ``UploadValidationError`` (caller maps ``.status_code``/``.detail``
     to an HTTP response) for oversize/wrong-mime/undecodable-image inputs.
@@ -173,11 +294,13 @@ def upload_file_bytes(
     # all use the same normalized form (see scope_policy.normalize_scope).
     scope = normalize_scope(scope)
     policy = get_policy(scope)
+    folder = _resolve_folder(folder, policy)
     _validate_size(data, policy)
 
     real_mime = detect_mime(data, fallback=declared_mime)
     _validate_mime(real_mime, policy)
     _validate_signature(data, real_mime, policy)
+    _scan(data, original_filename, policy)
     kind = kind_from_mime(real_mime)
 
     # Hash the *original* (pre-normalisation) bytes so a future dedup lookup
@@ -192,7 +315,7 @@ def upload_file_bytes(
     final_bytes = data
     final_mime = real_mime
 
-    if kind == "image" and settings.STRIP_EXIF:
+    if kind == "image" and settings.STRIP_EXIF and not policy.keep_original:
         try:
             normalised = normalise_image(data, real_mime)
             final_bytes = normalised.data
@@ -201,11 +324,18 @@ def upload_file_bytes(
             height = normalised.height
         except ImageProcessingError as exc:
             raise UploadValidationError(415, f"invalid image: {exc}") from exc
+    elif kind == "image" and policy.keep_original:
+        # Байты не трогаем (SHA-256 должен описывать хранимое), но
+        # декодируемость и предел пикселей проверяем так же, как normalise.
+        try:
+            width, height = validate_image(data)
+        except ImageProcessingError as exc:
+            raise UploadValidationError(415, f"invalid image: {exc}") from exc
 
     storage = get_storage(bucket=settings.MEDIA_S3_BUCKET)
     file_uuid = uuid.uuid4()
     ext = _ext_for(final_mime, original_filename)
-    path = _build_path(scope, file_uuid, ext)
+    path = _build_path(scope, file_uuid, ext, folder)
     storage.save(path, final_bytes, content_type=final_mime)
 
     meta = FileMetadata.objects.create(
@@ -226,3 +356,19 @@ def upload_file_bytes(
 
     enqueue = bool(kind == "image" and policy.variants)
     return UploadResult(meta=meta, enqueue_variants=enqueue)
+
+
+def discard(path: str) -> None:
+    """Удалить объект, только что записанный ``upload_file_bytes``, из хранилища.
+
+    Для отката: вызывающий записал байты, а его собственная запись не
+    удалась — строка ``FileMetadata`` откатится вместе с его транзакцией, а
+    объект в S3 остался бы «сиротой», на которого ничто не ссылается.
+    """
+    get_storage(bucket=settings.MEDIA_S3_BUCKET).delete(path)
+
+
+def read_original(meta: FileMetadata) -> bytes:
+    """Байты оригинала из хранилища — тем же ``get_storage``, которым
+    ``upload_file_bytes`` их туда положил (и который подменяют тесты)."""
+    return get_storage(bucket=settings.MEDIA_S3_BUCKET).open(meta.path)

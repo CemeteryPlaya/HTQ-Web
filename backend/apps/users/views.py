@@ -40,6 +40,8 @@ from pydantic import ValidationError
 from apps.companies.interface import user_may_enter_company
 from apps.mail import interface as mail_interface
 from htqweb.authn.jwt import AuthError, decode_token, issue_token_pair
+from htqweb import ratelimit
+from htqweb.errors import DomainError
 from htqweb.fallback import fallback
 from htqweb.http import api_view, json_error
 
@@ -95,7 +97,16 @@ def _company_slug_for_token(request, user_id: int):
     if not user_may_enter_company(user_id, slug):
         return None, json_error("Forbidden", 403)
     return slug, None
-def _log_login_failure(request, reason: str) -> None:
+
+
+def _client_ip(request) -> str:
+    # X-Real-IP ставит nginx (``$remote_addr``, во всех локациях ``/api/``), а
+    # первый элемент X-Forwarded-For клиент может подделать сам.
+    real = (request.headers.get("x-real-ip") or "").strip()
+    return (real or request.META.get("REMOTE_ADDR") or "-")[:45]
+
+
+def _log_login_failure(request, reason: str, login: str) -> None:
     """Строка в лог на каждый неудачный вход — источник алерта о подборе.
 
     В ЛОГ, а не в AuditLog, и это осознанный размен. ``obtain_token`` —
@@ -110,23 +121,45 @@ def _log_login_failure(request, reason: str) -> None:
     ``not_activated`` и ``invalid_credentials``, потому что перебор ИМЁН и
     перебор ПАРОЛЕЙ выглядят по-разному и разбираются по-разному.
     """
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    ip = forwarded or request.META.get("REMOTE_ADDR") or "-"
-    logger.warning("auth_login_failed reason=%s ip=%s", reason, ip[:45])
+    # key — префикс хеша логина: связывает неудачи с заблокированным ключом
+    # (auth_login_locked), не раскрывая сам логин.
+    logger.warning("auth_login_failed reason=%s ip=%s key=%s", reason,
+                   _client_ip(request), ratelimit.digest_prefix(login))
 
 
 # ── POST token/ — login by email or username ────────────────────────────────
 
 @api_view(methods=("POST",), auth=None, body=schemas.TokenObtainRequest)
 def obtain_token(request, data: schemas.TokenObtainRequest):
+    login = data.email
+    # Блокировка — ДО проверки пароля и даже при верном пароле (D-S7-3);
+    # порог 0 (по умолчанию в compose) — не действует.
+    left = ratelimit.login_locked(login)
+    if left is not None:
+        logger.warning("auth_login_locked ip=%s key=%s", _client_ip(request),
+                       ratelimit.digest_prefix(login))
+        error = DomainError(
+            "E-AUTH-LOCKED",
+            "Слишком много неудачных попыток входа. Повторите позже.",
+            status=429)
+        response = JsonResponse(error.payload(), status=429)
+        response["Retry-After"] = str(left)
+        return response
+
     try:
-        user = auth_service.authenticate(data.email, data.password)
+        user = auth_service.authenticate(login, data.password)
     except auth_service.AccountNotActivated:
-        _log_login_failure(request, "not_activated")
+        # Пароль верен — это не подбор, счётчик не растёт.
+        _log_login_failure(request, "not_activated", login)
         return json_error("Account is not activated", 401)
     except auth_service.InvalidCredentials:
-        _log_login_failure(request, "invalid_credentials")
+        ratelimit.register_login_failure(login)
+        _log_login_failure(request, "invalid_credentials", login)
         return json_error("Invalid credentials", 401)
+
+    # Обе формы логина учётки (имя и e-mail): иначе неудачи под другой формой
+    # пережили бы успешный вход.
+    auth_service.reset_lockout(user)
 
     company_slug, error = _company_slug_for_token(request, user.id)
     if error is not None:

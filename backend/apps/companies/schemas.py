@@ -99,6 +99,7 @@ class ModuleRead(BaseModel):
     enabled: bool
     message: str
     is_core: bool
+    parent: str | None = None
 
 
 class ModulePatch(BaseModel):

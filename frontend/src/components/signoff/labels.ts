@@ -34,6 +34,7 @@ export const STAGE_STATE_LABELS: Record<StageState, string> = {
   rejected: 'Отклонён',
   rework: 'Возвращён на доработку',
   skipped: 'Не потребовался',
+  no_executor: 'Нет исполнителя',
 };
 
 export const TASK_STATE_LABELS: Record<TaskState, string> = {

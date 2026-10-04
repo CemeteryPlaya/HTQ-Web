@@ -1,6 +1,6 @@
 from django.http import JsonResponse
 
-from apps.core.services import disabled_payload, service_status
+from apps.core.services import disabled_layer, disabled_payload
 
 # Префикс URL → имя сервиса в реестре. Единственное место маппинга.
 PREFIX_TO_SERVICE = {
@@ -10,11 +10,27 @@ PREFIX_TO_SERVICE = {
     "/api/requests/": "approvals",
     "/api/cms/": "cms",
     "/api/media/": "media",
+    "/api/files/": "files",
     "/api/email/": "mail",
     "/api/messenger/": "messenger",
     "/api/contracts/": "contracts",
     "/api/signoff/": "signoff",
     "/api/access/": "access",
+    "/api/project/": "project",
+    "/api/refdata/": "refdata",
+    "/api/notifications/": "notifications",
+    # Подмодули БЗО — ВЫШЕ префикса модуля: гейт берёт первое совпадение, а
+    # родителя подмодуль проверяет сам (apps.core.services.disabled_layer).
+    "/api/bpp/v1/budgets": "bpp_budget",
+    "/api/bpp/v1/requests": "bpp_requests",
+    "/api/bpp/v1/plan": "bpp_requests",
+    "/api/bpp/v1/agreements": "bpp_agreements",
+    "/api/bpp/v1/invoices": "bpp_invoices",
+    "/api/bpp/v1/bank": "bpp_bank",
+    "/api/bpp/v1/alternatives": "bpp_alternatives",
+    "/api/bpp/v1/kpi": "bpp_alternatives",
+    "/api/bpp/v1/accountable": "bpp_accountable",
+    "/api/bpp/": "bpp",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }
@@ -44,6 +60,20 @@ APP_LABEL_TO_SERVICE = {
 }
 
 
+def prefix_matches(path: str, prefix: str) -> bool:
+    """Путь под префиксом гейта.
+
+    Префикс со слешем на конце — обычное «начинается с». Префикс без слеша
+    (подмодули БЗО: голый путь коллекции ``/api/bpp/v1/budgets`` тоже
+    гейтится, ``APPEND_SLASH = False``) совпадает только на границе сегмента:
+    иначе ``/api/bpp/v1/bank`` захватил бы условного соседа ``/api/bpp/v1/bank-xyz``
+    и погасил его чужим рубильником.
+    """
+    if prefix.endswith("/"):
+        return path.startswith(prefix)
+    return path == prefix or path.startswith(prefix + "/")
+
+
 def service_name_for_app_label(app_label: str) -> str:
     return APP_LABEL_TO_SERVICE.get(app_label, app_label)
 
@@ -54,9 +84,9 @@ class ServiceGateMiddleware:
 
     def __call__(self, request):
         for prefix, name in PREFIX_TO_SERVICE.items():
-            if request.path.startswith(prefix):
-                enabled, message = service_status(name)
-                if not enabled:
-                    return JsonResponse(disabled_payload(name, message), status=503)
+            if prefix_matches(request.path, prefix):
+                off = disabled_layer(name)
+                if off is not None:
+                    return JsonResponse(disabled_payload(*off), status=503)
                 break
         return self.get_response(request)

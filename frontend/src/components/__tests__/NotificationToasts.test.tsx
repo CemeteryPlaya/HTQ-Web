@@ -36,6 +36,22 @@ vi.mock('@/api/tasks', () => ({
 
 vi.mock('sonner', () => ({ toast: toastMock, Toaster: () => null }));
 
+// Сокет мессенджера: сервер шлёт «notification» в персональную комнату, когда
+// центр уведомлений записал новое. Обработчики собираются, чтобы тест мог
+// «прислать» событие сам.
+const socketHandlers = vi.hoisted(() => ({} as Record<string, (payload: unknown) => void>));
+vi.mock('@/features/messenger/api/socket', () => ({
+    getMessengerSocket: () => ({
+        on: (event: string, handler: (payload: unknown) => void) => {
+            socketHandlers[event] = handler;
+        },
+        off: vi.fn(),
+    }),
+}));
+vi.mock('@/hooks/useActiveProfile', () => ({
+    useActiveProfile: () => ({ activeProfile: { id: 1 } }),
+}));
+
 // Настоящий модуль звука, подменён только сам проигрыватель.
 vi.mock('@/lib/sound/soundService', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/sound/soundService')>()),
@@ -139,5 +155,49 @@ describe('NotificationToasts', () => {
 
         await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
         expect(ctor).not.toHaveBeenCalled();
+    });
+
+    it('после переезда ленты на UUID не всплывают старые уведомления', async () => {
+        // До выкатки в «показанных» лежали числовые id старой ленты; после
+        // переноса те же уведомления приходят с UUID. Без миграции каждое
+        // непрочитанное из последних 50 всплыло бы карточкой со звуком.
+        localStorage.setItem('htq:notif:toasted', JSON.stringify(['3', '4']));
+        const moved = { ...NOTIFICATION, id: '0f4c1a52-2e5d-4a8f-9a7e-5b8d1c3e2f10' };
+        fetchNotifications.mockResolvedValue([moved]);
+
+        await mountAndLoad();
+        act(() => setToastHostMounted(true));
+
+        await waitFor(() =>
+            expect(JSON.parse(localStorage.getItem('htq:notif:toasted') ?? '[]')).toContain(moved.id),
+        );
+        expect(toastMock).not.toHaveBeenCalled();
+        expect(playNotificationSound).not.toHaveBeenCalled();
+    });
+
+    it('новое уведомление после переезда показывается как обычно', async () => {
+        localStorage.setItem('htq:notif:toasted',
+            JSON.stringify(['3', '0f4c1a52-2e5d-4a8f-9a7e-5b8d1c3e2f10']));
+        const fresh = { ...NOTIFICATION, id: '7a1b2c3d-0000-4000-8000-000000000001' };
+        fetchNotifications.mockResolvedValue([fresh]);
+
+        await mountAndLoad();
+        act(() => setToastHostMounted(true));
+
+        await waitFor(() => expect(toastMock).toHaveBeenCalledTimes(1));
+    });
+
+    it('событие сокета о новом уведомлении сразу перечитывает ленту', async () => {
+        // Без этого лента обновлялась только опросом раз в 30 секунд.
+        await mountAndLoad();
+        expect(fetchNotifications).toHaveBeenCalledTimes(1);
+
+        act(() => socketHandlers.notification?.({ type: 'notification', id: 'x' }));
+        await waitFor(() => expect(fetchNotifications).toHaveBeenCalledTimes(2));
+
+        // Чужие события того же канала (старт конференции) ленту не трогают.
+        act(() => socketHandlers.notification?.({ type: 'conference_started' }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(fetchNotifications).toHaveBeenCalledTimes(2);
     });
 });

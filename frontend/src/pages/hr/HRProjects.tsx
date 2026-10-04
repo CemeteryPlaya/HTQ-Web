@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   AlertTriangle, Calendar, ChevronDown, ChevronRight, Edit, Gauge, MapPin,
@@ -35,7 +35,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 
 import {
-  createProject, deleteProject, fetchProjects, fetchProjectTasks,
+  createProject, deleteProject, fetchProjectLinkCandidates, fetchProjects, fetchProjectTasks,
   fetchRoadmaps, fetchSites, setProjectSites, updateProject,
 } from '@/api/tasks';
 import { fetchDepartments } from '@/api/hr';
@@ -47,11 +47,25 @@ import {
   projectStatusLabel,
 } from '@/lib/tasks/project';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
-import type { Project, ProjectStatus, Site, Task } from '@/types/tasks';
+import type {
+  Project, ProjectLinkCandidate, ProjectStatus, Site, Task,
+} from '@/types/tasks';
 
-/** Blank form. Owner is left unset on create — the server fills it with the
- *  caller (`project_service.create_project`), which is the sane default. */
+/** Карточка «Проекта» БЗО — там правятся название, статус, сроки и
+ *  руководитель связанной доски (D-02: «Проект» главный). */
+const platformProjectHref = (ref: string) => `/bpp/projects/${ref}`;
+
+/** Статус «Проекта» → статус доски: «закрыт» у доски — «завершён». */
+const BOARD_STATUS: Record<ProjectLinkCandidate['status'], ProjectStatus> = {
+  active: 'active',
+  closed: 'completed',
+};
+
+/** Blank form. На создании название, статус, сроки и владелец приходят из
+ *  выбранного «Проекта» (`project_link.create_linked`) — поля формы для них
+ *  заполняются только у доски без связи. */
 const emptyForm = {
+  project: null as ProjectLinkCandidate | null,
   name: '',
   description: '',
   status: 'active' as ProjectStatus,
@@ -67,6 +81,90 @@ const emptyForm = {
 };
 
 type FormState = typeof emptyForm;
+
+/* ─────────────────────────── Project picker ─────────────────────────── */
+
+/**
+ * Доска задач заводится только к «Проекту» модуля закупок (D-02) — и одна на
+ * проект. Список — проекты без доски и не в архиве
+ * (`GET tasks/v1/projects/link-candidates`); пустой запрос отдаёт первые
+ * двадцать, поэтому список виден сразу, без ввода.
+ */
+const ProjectRefPicker: React.FC<{
+  value: ProjectLinkCandidate | null;
+  onPick: (project: ProjectLinkCandidate | null) => void;
+}> = ({ value, onPick }) => {
+  const { t } = useTranslation();
+  const [term, setTerm] = useState('');
+  const query = term.trim();
+
+  const { data: options = [], isFetching } = useQuery({
+    queryKey: ['tasks-project-link-candidates', query],
+    queryFn: () => fetchProjectLinkCandidates(query),
+    enabled: value == null,
+  });
+
+  if (value) {
+    return (
+      <div className="grid gap-2">
+        <Label>{t('tasks.projects.platformProject', 'Проект')}</Label>
+        <div className="flex items-center gap-2 text-sm">
+          <Badge variant="outline" className="font-mono">{value.code}</Badge>
+          <span className="flex-1 truncate font-medium">{value.name}</span>
+          <Button type="button" size="sm" variant="ghost" onClick={() => onPick(null)}>
+            {t('tasks.projects.pickAnother', 'Другой')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor="project-ref-search">
+        {t('tasks.projects.platformProject', 'Проект')}
+      </Label>
+      <Input
+        id="project-ref-search"
+        value={term}
+        onChange={(e) => setTerm(e.target.value)}
+        placeholder={t('tasks.projects.pickProjectSearch', 'Код или название проекта')}
+      />
+      <div className="max-h-48 overflow-y-auto rounded-md border">
+        {isFetching && (
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {t('common.loading', 'Загрузка...')}
+          </p>
+        )}
+        {!isFetching && options.length === 0 && (
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {query
+              ? t('tasks.projects.noCandidatesSearch', 'Ничего не найдено')
+              : t('tasks.projects.noCandidates', 'Все проекты уже есть в задачах')}
+          </p>
+        )}
+        {options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
+            onClick={() => { onPick(option); setTerm(''); }}
+          >
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">{option.code}</span>
+            <span className="flex-1 truncate">{option.name}</span>
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t('tasks.projects.createInProjects',
+          'Нужного проекта нет в списке — его заводят в разделе «Проекты» модуля закупок.')}{' '}
+        <Link to="/bpp/projects" className="underline">
+          {t('tasks.projects.openProjects', 'Открыть «Проекты»')}
+        </Link>
+      </p>
+    </div>
+  );
+};
 
 /* ─────────────────────────── Owner picker ─────────────────────────── */
 
@@ -410,9 +508,20 @@ const HRProjects: React.FC = () => {
   const { activeProfile } = useActiveProfile();
   const permissions = usePermissions();
   const elevated = permissions.atLeast('tasks', 'admin');
+  // Без кадровых прав сюда пускает только «Доска задач проекта» (ссылка с
+  // карточки «Проекта» БЗО, решение 01.10) — такой гость доски только смотрит:
+  // сервер открывает ему доски своих «Проектов» на чтение.
+  const canReadHr = permissions.atLeast('hr', 'read');
+  const boardVisitor = !elevated && !canReadHr;
   const myId = Number(activeProfile?.id);
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // `?board=<id>` — доска, открытая ссылкой с карточки «Проекта».
+  const [searchParams] = useSearchParams();
+  const boardParam = Number(searchParams.get('board')) || null;
+  const [selectedId, setSelectedId] = useState<number | null>(boardParam);
+  useEffect(() => {
+    if (boardParam) setSelectedId(boardParam);
+  }, [boardParam]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [siteFilter, setSiteFilter] = useState('all');
@@ -431,8 +540,10 @@ const HRProjects: React.FC = () => {
     queryFn: () => fetchProjects(),
   });
   const { data: sites = [] } = useQuery({ queryKey: ['sites'], queryFn: () => fetchSites() });
+  // Справочник отделов — кадровый: гостю доски без кадровых прав он ответил
+  // бы 403, а нужен лишь форме правки, которой у гостя нет.
   const { data: departments = [] } = useQuery({
-    queryKey: ['hr-departments'], queryFn: fetchDepartments,
+    queryKey: ['hr-departments'], queryFn: fetchDepartments, enabled: canReadHr,
   });
 
   /**
@@ -451,18 +562,28 @@ const HRProjects: React.FC = () => {
 
   const saveMutation = useMutation({
     mutationFn: (payload: FormState) => {
-      const body: Partial<Project> = {
-        name: payload.name.trim(),
+      // Свои поля доски — они правятся здесь всегда.
+      const own = {
         description: payload.description,
-        status: payload.status,
         color: payload.color,
-        start_date: payload.start_date || null,
-        end_date: payload.end_date || null,
         department_id: payload.department_id ? Number(payload.department_id) : null,
         use_production_calendar: payload.use_production_calendar,
       };
+      if (!editing) {
+        return createProject({ project_ref: payload.project?.id ?? '', ...own });
+      }
+      // У связанной доски название, статус, сроки и владелец — копия
+      // «Проекта»: их не шлём, сервер ответил бы 409.
+      if (editing.linked) return updateProject(editing.id, own);
+      const body: Partial<Project> = {
+        ...own,
+        name: payload.name.trim(),
+        status: payload.status,
+        start_date: payload.start_date || null,
+        end_date: payload.end_date || null,
+      };
       if (payload.owner_id) body.owner_id = Number(payload.owner_id);
-      return editing ? updateProject(editing.id, body) : createProject(body);
+      return updateProject(editing.id, body);
     },
     onSuccess: (saved) => {
       invalidate();
@@ -496,14 +617,18 @@ const HRProjects: React.FC = () => {
   }), [projects, search, statusFilter, siteFilter]);
 
   const selected = projects.find((p) => p.id === selectedId) ?? null;
+  // Название, статус, сроки и владелец в форме — только у доски без связи с
+  // «Проектом»; на создании их даёт выбранный «Проект».
+  const mirrorLocked = !editing || Boolean(editing.linked);
   // Mirrors `_project_for_write` on the server: inside their own scope a
   // regular employee may still only touch a project they own.
-  const canWrite = (project: Project) => elevated || project.owner_id === myId;
+  const canWrite = (project: Project) => elevated || (!boardVisitor && project.owner_id === myId);
 
   const openCreate = () => { setEditing(null); setForm(emptyForm); setDialogOpen(true); };
   const openEdit = (project: Project) => {
     setEditing(project);
     setForm({
+      project: null,
       name: project.name,
       description: project.description ?? '',
       status: project.status,
@@ -541,7 +666,7 @@ const HRProjects: React.FC = () => {
             {elevated && (
               <Button onClick={openCreate} size="sm">
                 <Plus className="mr-1 h-4 w-4" />
-                {t('tasks.projects.newProject', 'Новый проект')}
+                {t('tasks.projects.addProjectShort', 'Добавить проект')}
               </Button>
             )}
           </div>
@@ -654,19 +779,33 @@ const HRProjects: React.FC = () => {
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold">{selected.name}</h2>
+                    {selected.linked && selected.project_ref && (
+                      <Link
+                        to={platformProjectHref(selected.project_ref)}
+                        className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        <Badge variant="outline" className="font-mono">
+                          {selected.project_code ?? t('tasks.projects.platformProject', 'Проект')}
+                        </Badge>
+                        {t('tasks.projects.openInProjects', 'карточка проекта')}
+                      </Link>
+                    )}
                     {selected.description && (
                       <p className="mt-1 text-sm text-muted-foreground">{selected.description}</p>
                     )}
                   </div>
                   <div className="flex shrink-0 gap-2">
                     {/* План/факт доступен всем, кто видит проект: это
-                        отчётный экран, а не управление. */}
-                    <Button asChild size="sm" variant="outline">
-                      <Link to={`/tasks/projects/${selected.id}/plan-fact`}>
-                        <Gauge className="mr-1 h-4 w-4" />
-                        {t('tasks.planFact.title', 'План и факт')}
-                      </Link>
-                    </Button>
+                        отчётный экран, а не управление. Кроме гостя доски
+                        без кадровых прав: экран закрыт гейтом `hr:read`. */}
+                    {!boardVisitor && (
+                      <Button asChild size="sm" variant="outline">
+                        <Link to={`/tasks/projects/${selected.id}/plan-fact`}>
+                          <Gauge className="mr-1 h-4 w-4" />
+                          {t('tasks.planFact.title', 'План и факт')}
+                        </Link>
+                      </Button>
+                    )}
                   </div>
                   {canWrite(selected) && (
                     <div className="flex shrink-0 gap-2">
@@ -772,19 +911,59 @@ const HRProjects: React.FC = () => {
             <DialogTitle>
               {editing
                 ? t('tasks.projects.edit', 'Изменить проект')
-                : t('tasks.projects.newProject', 'Новый проект')}
+                : t('tasks.projects.addProject', 'Добавить проект в задачи')}
             </DialogTitle>
           </DialogHeader>
 
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="project-name">{t('tasks.projects.name', 'Название')}</Label>
-              <Input
-                id="project-name"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+            {!editing && (
+              <ProjectRefPicker
+                value={form.project}
+                onPick={(project) => setForm({ ...form, project })}
               />
-            </div>
+            )}
+            {!editing && form.project && (
+              <dl className="grid gap-2 rounded-md border bg-muted/40 p-3 text-sm sm:grid-cols-3">
+                <div>
+                  <dt className="text-xs text-muted-foreground">{t('tasks.projects.status.title', 'Статус')}</dt>
+                  <dd>{projectStatusLabel(BOARD_STATUS[form.project.status], t)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">{t('tasks.projects.start', 'Начало')}</dt>
+                  <dd>{form.project.date_start || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">{t('tasks.projects.end', 'Завершение')}</dt>
+                  <dd>{form.project.date_end || '—'}</dd>
+                </div>
+              </dl>
+            )}
+            {mirrorLocked && (
+              <p className="text-xs text-muted-foreground">
+                {t('tasks.projects.mirroredHint',
+                  'Название, статус, сроки и руководитель берутся из проекта и меняются в разделе «Проекты» — здесь они только для чтения.')}
+                {editing?.project_ref && (
+                  <>
+                    {' '}
+                    <Link to={platformProjectHref(editing.project_ref)} className="underline">
+                      {t('tasks.projects.openInProjects', 'карточка проекта')}
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
+
+            {editing && (
+              <div className="grid gap-2">
+                <Label htmlFor="project-name">{t('tasks.projects.name', 'Название')}</Label>
+                <Input
+                  id="project-name"
+                  value={form.name}
+                  disabled={mirrorLocked}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </div>
+            )}
 
             <div className="grid gap-2">
               <Label htmlFor="project-description">{t('tasks.projects.description', 'Описание')}</Label>
@@ -817,22 +996,25 @@ const HRProjects: React.FC = () => {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label>{t('tasks.projects.status.title', 'Статус')}</Label>
-                <Select
-                  value={form.status}
-                  onValueChange={(v) => setForm({ ...form, status: v as ProjectStatus })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {PROJECT_STATUS_ORDER.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {projectStatusLabel(status, t)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {editing && (
+                <div className="grid gap-2">
+                  <Label>{t('tasks.projects.status.title', 'Статус')}</Label>
+                  <Select
+                    value={form.status}
+                    disabled={mirrorLocked}
+                    onValueChange={(v) => setForm({ ...form, status: v as ProjectStatus })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PROJECT_STATUS_ORDER.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {projectStatusLabel(status, t)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="grid gap-2">
                 <Label htmlFor="project-color">{t('tasks.projects.color', 'Цвет')}</Label>
                 <Input
@@ -845,36 +1027,40 @@ const HRProjects: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="project-start">{t('tasks.projects.start', 'Начало')}</Label>
-                <DateInput
-                  id="project-start"
-                  value={form.start_date}
-                  invalid={brokenDates.start}
-                  onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, start: bad }))}
-                  onChange={(value) => setForm({ ...form, start_date: value })}
-                />
-                {brokenDates.start && (
-                  <p className="text-sm text-destructive">{INVALID_DATE}</p>
-                )}
+            {editing && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="project-start">{t('tasks.projects.start', 'Начало')}</Label>
+                  <DateInput
+                    id="project-start"
+                    disabled={mirrorLocked}
+                    value={form.start_date}
+                    invalid={brokenDates.start}
+                    onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, start: bad }))}
+                    onChange={(value) => setForm({ ...form, start_date: value })}
+                  />
+                  {brokenDates.start && (
+                    <p className="text-sm text-destructive">{INVALID_DATE}</p>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="project-end">{t('tasks.projects.end', 'Завершение')}</Label>
+                  <DateInput
+                    id="project-end"
+                    disabled={mirrorLocked}
+                    value={form.end_date}
+                    invalid={brokenDates.end || reversedDates}
+                    onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, end: bad }))}
+                    onChange={(value) => setForm({ ...form, end_date: value })}
+                  />
+                  {brokenDates.end ? (
+                    <p className="text-sm text-destructive">{INVALID_DATE}</p>
+                  ) : reversedDates && (
+                    <p className="text-sm text-destructive">{DATES_OUT_OF_ORDER}</p>
+                  )}
+                </div>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="project-end">{t('tasks.projects.end', 'Завершение')}</Label>
-                <DateInput
-                  id="project-end"
-                  value={form.end_date}
-                  invalid={brokenDates.end || reversedDates}
-                  onValidityChange={(bad) => setBrokenDates((prev) => ({ ...prev, end: bad }))}
-                  onChange={(value) => setForm({ ...form, end_date: value })}
-                />
-                {brokenDates.end ? (
-                  <p className="text-sm text-destructive">{INVALID_DATE}</p>
-                ) : reversedDates && (
-                  <p className="text-sm text-destructive">{DATES_OUT_OF_ORDER}</p>
-                )}
-              </div>
-            </div>
+            )}
 
             <div className="grid gap-2">
               <Label>{t('tasks.projects.department', 'Отдел')}</Label>
@@ -903,11 +1089,19 @@ const HRProjects: React.FC = () => {
               />
             </div>
 
-            <OwnerPicker
-              value={form.owner_id}
-              displayName={form.owner_name}
-              onPick={(id, name) => setForm({ ...form, owner_id: id, owner_name: name })}
-            />
+            {editing && !mirrorLocked && (
+              <OwnerPicker
+                value={form.owner_id}
+                displayName={form.owner_name}
+                onPick={(id, name) => setForm({ ...form, owner_id: id, owner_name: name })}
+              />
+            )}
+            {editing && mirrorLocked && (
+              <div className="grid gap-2">
+                <Label>{t('tasks.projects.owner', 'Владелец')}</Label>
+                <p className="text-sm">{form.owner_name || '—'}</p>
+              </div>
+            )}
           </div>
 
           <DialogFooter>
@@ -916,7 +1110,11 @@ const HRProjects: React.FC = () => {
             </Button>
             <Button
               onClick={() => {
-                if (!form.name.trim()) {
+                if (!editing && !form.project) {
+                  toast.error(t('tasks.projects.projectRequired', 'Выберите проект'));
+                  return;
+                }
+                if (editing && !mirrorLocked && !form.name.trim()) {
                   toast.error(t('tasks.projects.nameRequired', 'Укажите название проекта'));
                   return;
                 }

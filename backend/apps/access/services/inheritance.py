@@ -66,24 +66,14 @@ def ancestors_of(company: str) -> list[str]:
     но выше по дереву может быть действующий предок, и обход не должен
     останавливаться на архивной ступени).
 
-    Защита от цикла — тем же приёмом, что ``hierarchy.companies_below``:
-    множество уже пройденных слагов. ``Company.parent`` — self-FK без
-    проверки ацикличности (``PROTECT`` её не даёт), и цикл, заведённый в
-    обход приложения (прямой ``UPDATE`` в БД), не должен вешать разрешение
-    прав — оно выполняется на каждом запросе с гейтом.
+    Сам обход (с защитой от цикла — ``Company.parent`` self-FK без проверки
+    ацикличности, а разрешение прав идёт на каждом запросе с гейтом) живёт в
+    ``companies.interface.ancestor_slugs`` — правило обхода вверх одно на
+    платформу, им же пользуется кросс-компанейское согласование (B8.1).
     """
     from apps.companies import interface as companies
 
-    result: list[str] = []
-    seen = {company}
-    row = companies.get_company(company)
-    cursor = row.get("parent_slug") if row else None
-    while cursor is not None and cursor not in seen:
-        seen.add(cursor)
-        result.append(cursor)
-        row = companies.get_company(cursor)
-        cursor = row.get("parent_slug") if row else None
-    return result
+    return companies.ancestor_slugs(company, include_archived=True)
 
 
 def inherit(user_id: int, company: str) -> Inherited:

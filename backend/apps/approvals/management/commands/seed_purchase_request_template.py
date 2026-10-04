@@ -184,6 +184,10 @@ class Command(BaseCommand):
     help = "Завести шаблон «Заявка на закуп» (форма из записки CFO)"
 
     def add_arguments(self, parser):
+        parser.add_argument(
+            "--company", default=None,
+            help="slug компании: маршрут (signoff) живёт в её схеме. Обязателен, "
+                 "пока в реестре есть компании; без заведённых — работает в public.")
         parser.add_argument("--slug", default=DEFAULT_SLUG)
         parser.add_argument("--name", default=DEFAULT_NAME)
         parser.add_argument("--buyer", type=int, default=None,
@@ -195,10 +199,37 @@ class Command(BaseCommand):
         parser.add_argument("--cfo-user", type=int, default=None,
                             help="user_id финдиректора — когда должностей в HR ещё нет")
 
+    def handle(self, *args, company: str | None = None, **options):
+        from contextlib import nullcontext
+
+        from apps.companies import interface as companies
+
+        if company is None:
+            # Любая компания со схемой, и архивная тоже: ``public`` — не компания.
+            if companies.migratable_company_slugs(fresh=True):
+                raise CommandError(
+                    "Укажите --company <slug>: маршрут согласования лежит в схеме "
+                    "компании, а вне её контекста команда падала на "
+                    "signoff_approvalroute.scope. Умолчания нет намеренно.")
+            scope = nullcontext()
+        else:
+            if companies.get_company(company) is None:
+                raise CommandError(f"Компания {company!r} не найдена в реестре.")
+            if not companies.schema_exists(company):
+                raise CommandError(
+                    f"У компании {company!r} нет схемы Postgres — запись ушла бы в "
+                    f"public. Заведите схему: manage.py migrate_companies "
+                    f"--company {company}.")
+            from htqweb.tenancy.db import use_company
+
+            scope = use_company(company)
+        with scope:
+            self._seed(**options)
+
     @transaction.atomic
-    def handle(self, *args, slug: str, name: str, buyer: int | None,
-               cfo: int | None, buyer_user: int | None, cfo_user: int | None,
-               **options):
+    def _seed(self, *, slug: str, name: str, buyer: int | None,
+              cfo: int | None, buyer_user: int | None, cfo_user: int | None,
+              **options):
         template = RequestFormTemplate.objects.filter(slug=slug).first()
         if template is None:
             template = RequestFormTemplate.objects.create(

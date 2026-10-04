@@ -33,6 +33,8 @@ import {
 } from '@/components/ui/table';
 import { contractsApi } from '@/api/contracts';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
+import { MigratedTo } from './FrozenNotice';
 import type { AgreementStatus, CounterpartyStatus } from '@/types/contracts';
 import { isEditableState } from '@/types/signoff';
 
@@ -57,6 +59,8 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
 
   const permissions = usePermissions();
   const isAdmin = permissions.atLeast('contracts', 'admin');
+  // Раздел заморожен после переноса в БЗО (A6.2) — правки нет ни у кого.
+  const { frozen } = useContractsFreeze();
 
   const {
     data: counterparty,
@@ -108,12 +112,13 @@ const CounterpartyDetailView = ({ id: counterpartyId, embedded = false }: Props)
   // Правка карточки — админская (`CounterpartyDetailView.patch` — admin=True) и
   // только пока контрагент редактируем по оси согласования (`assert_editable`),
   // иначе сохранение упрётся в 409. Гасим кнопку заранее.
-  const canEdit = isAdmin && isEditableState(counterparty.approval_state);
+  const canEdit = !frozen && isAdmin && isEditableState(counterparty.approval_state);
 
   const Heading = embedded ? 'h2' : 'h1';
 
   return (
     <div className="space-y-6">
+      <MigratedTo targets={counterparty.migrated_to} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">

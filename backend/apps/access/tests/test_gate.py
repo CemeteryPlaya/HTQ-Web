@@ -153,6 +153,85 @@ _RBAC_APPS = frozenset(self_service.SELF_SERVICE)
 _OUT_OF_SCOPE_APPS = frozenset({"signoff", "contracts"})
 
 
+def _view_files(apps_dir: pathlib.Path) -> list[pathlib.Path]:
+    """Модули вьюх: ``views.py`` и ``views_<подмодуль>.py`` на любой глубине
+    аппки, кроме ``tests/`` и ``migrations/``.
+
+    Модуль БЗО (``apps/bpp``) держит ручки подмодулей в отдельных файлах,
+    чтобы у двух исполнителей не было одного файла на весь модуль. Сторожа,
+    читавшие только ``views.py``, таких файлов не видели бы вовсе.
+    """
+    found = []
+    for path in sorted(apps_dir.rglob("views*.py")):
+        rel = path.relative_to(apps_dir).parts
+        if "tests" in rel or "migrations" in rel:
+            continue
+        if path.stem == "views" or path.stem.startswith("views_"):
+            found.append(path)
+    return found
+
+
+def _app_of(path: pathlib.Path, apps_dir: pathlib.Path) -> str:
+    """Аппка файла — первый сегмент пути под ``apps/``: ``apps/bpp/sub/views.py``
+    принадлежит ``bpp``, а не ``sub``."""
+    return path.relative_to(apps_dir).parts[0]
+
+
+def _url_pairs(app_dir: pathlib.Path) -> list[tuple[pathlib.Path, pathlib.Path, str]]:
+    """``(urls, views, текст views)`` для каждого модуля маршрутов аппки.
+
+    Пара — по суффиксу: ``urls.py`` ↔ ``views.py``, ``urls_budget.py`` ↔
+    ``views_budget.py``. Модуль маршрутов подмодуля импортирует свои вьюхи
+    как ``from . import views_budget as views``, и разбор ``views.<имя>``
+    работает для него без изменений. Нет парного модуля — текст пуст, и
+    каждая ручка такого ``urls_*.py`` падает как «не найдена».
+    """
+    pairs = []
+    for urls in sorted(app_dir.glob("urls*.py")):
+        suffix = urls.stem[len("urls"):]
+        if suffix and not suffix.startswith("_"):
+            continue
+        views = app_dir / f"views{suffix}.py"
+        text = views.read_text(encoding="utf-8") if views.exists() else ""
+        pairs.append((urls, views, text))
+    return pairs
+
+
+def test_view_files_include_submodule_views_and_skip_tests(tmp_path):
+    """Модуль БЗО разносит ручки по ``views_<подмодуль>.py``: сторож, читающий
+    только ``views.py``, пропустил бы ручку без ``level=`` молча."""
+    apps_dir = tmp_path / "apps"
+    for rel in ("x/views.py", "x/views_budget.py", "x/sub/views.py",
+                "x/tests/views.py", "x/migrations/views_0001.py", "x/viewsets.py"):
+        (apps_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (apps_dir / rel).write_text("", encoding="utf-8")
+    found = _view_files(apps_dir)
+    assert [p.relative_to(apps_dir).as_posix() for p in found] == [
+        "x/sub/views.py", "x/views.py", "x/views_budget.py"]
+    # Аппка — первый сегмент пути, а не имя папки файла.
+    assert {_app_of(p, apps_dir) for p in found} == {"x"}
+
+
+def test_url_pairs_match_urls_and_views_by_suffix(tmp_path):
+    app_dir = tmp_path / "x"
+    app_dir.mkdir()
+    for name, text in (("urls.py", ""), ("views.py", "A = 1\n"),
+                       ("urls_budget.py", ""), ("views_budget.py", "B = 2\n"),
+                       ("urls_orphan.py", ""), ("urlsfoo.py", "")):
+        (app_dir / name).write_text(text, encoding="utf-8")
+    pairs = {urls.name: text for urls, _views, text in _url_pairs(app_dir)}
+    # Нет парного views_orphan.py — текст пуст, и каждая ручка такого файла
+    # честно упадёт как «не найдена»; urlsfoo.py — не модуль маршрутов.
+    assert pairs == {"urls.py": "A = 1\n", "urls_budget.py": "B = 2\n", "urls_orphan.py": ""}
+
+
+def test_submodule_url_view_without_api_view_is_caught():
+    urls = ('from . import views_budget as views\n'
+            'urlpatterns = [path("budgets", views.budget_list)]\n')
+    views = 'def budget_list(request):\n    return {}\n'
+    assert [name for name, _why in _url_view_offenders(urls, views)] == ["budget_list"]
+
+
 def test_gate_is_not_hung_on_apps_without_a_translation_plan():
     """Гейт не навешивается на ручку аппки, для которой это ещё не решено.
 
@@ -171,12 +250,14 @@ def test_gate_is_not_hung_on_apps_without_a_translation_plan():
     гейтированы.
     """
     backend = pathlib.Path(__file__).resolve().parents[3]
+    apps_dir = backend / "apps"
     offenders = []
-    for path in (backend / "apps").rglob("views.py"):
+    for path in _view_files(apps_dir):
         posix_path = path.relative_to(backend).as_posix()
         if posix_path in _GATE_ALLOWLIST:
             continue
-        if path.parent.name in _RBAC_APPS or path.parent.name in _OUT_OF_SCOPE_APPS:
+        app = _app_of(path, apps_dir)
+        if app in _RBAC_APPS or app in _OUT_OF_SCOPE_APPS:
             continue
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "module=" in line and "api_view" in line:
@@ -504,9 +585,10 @@ def test_every_module_gate_names_its_level():
     передают её вызовы; и он обязан быть ``read``/``write``/``admin``.
     """
     backend = pathlib.Path(__file__).resolve().parents[3]
+    apps_dir = backend / "apps"
     offenders = []
-    for path in sorted((backend / "apps").rglob("views.py")):
-        if path.parent.name in _OUT_OF_SCOPE_APPS:
+    for path in _view_files(apps_dir):
+        if _app_of(path, apps_dir) in _OUT_OF_SCOPE_APPS:
             continue
         text = path.read_text(encoding="utf-8")
         for lineno, name, why in _level_offenders(text):
@@ -547,9 +629,10 @@ def test_text_parser_sees_every_api_view_call():
     совпадает — эвристика не проглотила живой гейт (или его отсутствие).
     """
     backend = pathlib.Path(__file__).resolve().parents[3]
+    apps_dir = backend / "apps"
     mismatched = []
-    for path in sorted((backend / "apps").rglob("views.py")):
-        if path.parent.name in _OUT_OF_SCOPE_APPS:
+    for path in _view_files(apps_dir):
+        if _app_of(path, apps_dir) in _OUT_OF_SCOPE_APPS:
             continue
         text = path.read_text(encoding="utf-8")
         by_text = sum(1 for _call in _iter_api_view_calls(text))
@@ -1352,28 +1435,33 @@ def test_every_url_view_of_translated_apps_carries_api_view():
 
     Исключение не снимает проверку целиком: каждый ``return`` в теле
     исключённой функции обязан вернуть вызов гейтированной функции того же
-    файла или 405 (``_exempt_return_offenders``)."""
+    файла или 405 (``_exempt_return_offenders``).
+
+    Модуль маршрутов подмодуля (``urls_<x>.py``) проверяется в паре со своим
+    ``views_<x>.py`` (``_url_pairs``); ``include(...)`` в ``urls.py`` сторож
+    по-прежнему пропускает — подключённый файл проверяется сам, своей парой."""
     backend = pathlib.Path(__file__).resolve().parents[3]
     offenders = []
     for app in sorted(self_service.TRANSLATED_APPS):
-        urls = backend / "apps" / app / "urls.py"
-        views_text = (backend / "apps" / app / "views.py").read_text(encoding="utf-8")
+        app_dir = backend / "apps" / app
         exempt = _DISPATCHERS_WITH_OWN_LOGIC.get(app, {})
         outside = _URL_VIEWS_OUTSIDE_API_VIEW.get(app, {})
         seen: set[str] = set()
         siblings = {path.stem: path.read_text(encoding="utf-8")
-                    for path in (backend / "apps" / app).glob("*.py")
-                    if path.stem not in {"views", "urls", "__init__"}}
-        for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"), views_text,
-                                             siblings):
-            seen.add(name)
-            if name in exempt or name in outside:
-                continue
-            offenders.append(f"apps/{app}/urls.py: {name} — {why}")
+                    for path in app_dir.glob("*.py")
+                    if path.stem != "__init__"
+                    and not path.stem.startswith(("views", "urls"))}
+        for urls, views, views_text in _url_pairs(app_dir):
+            for name, why in _url_view_offenders(urls.read_text(encoding="utf-8"),
+                                                 views_text, siblings):
+                seen.add(name)
+                if name in exempt or name in outside:
+                    continue
+                offenders.append(f"{urls.relative_to(backend).as_posix()}: {name} — {why}")
+            for name, why in _exempt_return_offenders(views_text, set(exempt) & seen):
+                offenders.append(f"{views.relative_to(backend).as_posix()}: {why}")
         for name in sorted((set(exempt) | set(outside)) - seen):
             offenders.append(f"исключение устарело: {app}.{name}")
-        for name, why in _exempt_return_offenders(views_text, set(exempt) & seen):
-            offenders.append(f"apps/{app}/views.py: {why}")
     assert offenders == [], offenders
 
 

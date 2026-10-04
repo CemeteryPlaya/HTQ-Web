@@ -10,7 +10,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { toast } from 'sonner';
 
-import { errorDetail, errorStatus, explainedDetail, reportApiError } from '@/lib/apiError';
+import {
+  errorCode, errorDetail, errorStatus, explainedDetail, reportApiError,
+} from '@/lib/apiError';
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 
@@ -119,5 +121,30 @@ describe('reportApiError', () => {
   it('обычный 403 без метки показывает тост как прежде', () => {
     reportApiError(axiosError(403, 'Компания в архиве — только чтение'), 'Не удалось сохранить');
     expect(toast.error).toHaveBeenCalledWith('Компания в архиве — только чтение', undefined);
+  });
+});
+
+/** Отказ с кодом (`{detail, code, fields, details}`, мастер-план БЗО D-28) —
+ *  так отвечает файловая подсистема. `detail` там по контракту всегда готов
+ *  для человека, поэтому показывается при любом статусе, включая 404. */
+const tzError = (status: number, code: string, detail: string) => ({
+  response: { status, data: { detail, code, fields: [], details: {} } },
+});
+
+describe('ошибки с кодом', () => {
+  it('читает detail и code', () => {
+    const err = tzError(409, 'E-CON-01', 'Документ изменён пользователем Иванов А. в 14:32.');
+    expect(errorDetail(err)).toBe('Документ изменён пользователем Иванов А. в 14:32.');
+    expect(errorCode(err)).toBe('E-CON-01');
+  });
+
+  it('показывает detail даже на 404 — он уже объясняет причину', () => {
+    reportApiError(tzError(404, 'E-FIL-05', 'Документ не найден.'), 'Не удалось');
+    expect(toast.error).toHaveBeenCalledWith('Документ не найден.', undefined);
+  });
+
+  it('detail без code на 404 не показывается — политика статусов прежняя', () => {
+    reportApiError({ response: { status: 404, data: { detail: 'Not found.' } } }, 'Не удалось');
+    expect(toast.error).toHaveBeenCalledWith('Не удалось', undefined);
   });
 });

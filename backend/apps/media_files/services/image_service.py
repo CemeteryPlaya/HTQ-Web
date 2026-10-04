@@ -85,6 +85,17 @@ def _open_safely(data: bytes) -> Image.Image:
     return img
 
 
+def validate(data: bytes) -> tuple[int, int]:
+    """Проверить картинку, НЕ перекодируя её: декодируется ли и не «бомба» ли
+    (``MAX_IMAGE_PIXELS``). Для scope с ``keep_original`` — те же гарантии,
+    что даёт ``normalise``, но байты остаются как есть. Возвращает размеры."""
+    try:
+        img = _open_safely(data)
+    except Image.DecompressionBombError as exc:
+        raise ImageProcessingError(f"image too large: {exc}") from exc
+    return img.width, img.height
+
+
 def _has_alpha(img: Image.Image) -> bool:
     return img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
 

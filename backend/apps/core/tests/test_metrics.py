@@ -161,11 +161,19 @@ def test_tenant_metrics_are_collected_per_company_with_a_company_label(two_compa
 
     collected = business.collect_all()
 
-    assert set(settings.TENANT_APPS) <= set(collected)
+    from django.apps import apps as django_apps
+    from django.utils.module_loading import module_has_submodule
+
+    # Метрики есть не у каждой тенантной аппки с рождения (у bpp — с A3.2):
+    # сверка — с теми, что объявили metrics.py.
+    with_metrics = {label for label in settings.TENANT_APPS
+                    if module_has_submodule(django_apps.get_app_config(label).module,
+                                            "metrics")}
+    assert with_metrics <= set(collected)
     assert _by_company(collected, "hr", "hr_active_without_account") == {alpha: 1, beta: 0}
     assert collected["hr"]["hr_employees"]["labels"] == ["company", "status"]
     assert _by_company(collected, "hr", "hr_employees") == {alpha: 1}
-    for app in settings.TENANT_APPS:
+    for app in sorted(with_metrics):
         for name, spec in collected[app].items():
             assert spec["labels"][0] == business.COMPANY_LABEL, (app, name)
 
