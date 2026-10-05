@@ -11,7 +11,7 @@ from django.test import Client, RequestFactory
 from pydantic import BaseModel
 
 from apps.core.models import ServiceStatus
-from htqweb.http import api_view
+from htqweb.http import ApiError, api_view
 
 
 class EchoIn(BaseModel):
@@ -229,6 +229,25 @@ def test_require_service_disabled_returns_503_envelope():
     assert body["code"] == "service_disabled"
     assert body["service"] == "hr"
     assert "detail" in body
+
+
+class _Rejected(ApiError):
+    status_code = 422
+    detail = "Файл не загружен: антивирус обнаружил угрозу «Eicar»."
+
+
+@api_view(methods=("GET",), auth=None)
+def api_error_view(request):
+    raise _Rejected()
+
+
+def test_api_error_keeps_its_status_and_text():
+    """Отказ соседа, прошедший сквозь чужую вьюху (отказ пайплайна media из
+    договорного контура), — своим статусом и текстом, а не 500."""
+    resp = api_error_view(RequestFactory().get("/x/"))
+    assert resp.status_code == 422
+    assert json.loads(resp.content) == {
+        "detail": "Файл не загружен: антивирус обнаружил угрозу «Eicar»."}
 
 
 def test_http404_mapped_to_404_envelope():

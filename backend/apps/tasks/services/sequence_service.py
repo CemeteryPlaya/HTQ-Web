@@ -18,19 +18,14 @@ create.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 from django.db import transaction
 
-from ..models import ProductionDay, TaskSequence
-from .production_calendar import WORKING_DAY_TYPES, base_day_type
+from apps.refdata import interface as refdata
 
-# Потолок обхода в ``due_date_from_working_days``. Календарных дней на N
-# рабочих нужно ~1.4·N (выходные) плюс праздники; тройной запас и месяц сверху
-# покрывают любой реальный отрезок, но не дают циклу уйти в бесконечность,
-# если оверрайды объявят рабочими нулевое количество дней.
-_SCAN_FACTOR = 3
-_SCAN_SLACK_DAYS = 30
+from ..models import TaskSequence
+
 # ~10 рабочих лет. Схема ``estimated_working_days`` — голый ``int | None``, а
 # обход теперь идёт по дням, так что запрос с 10_000_000 крутил бы цикл
 # впустую и упирался в переполнение ``date``. Прежняя версия была защищена
@@ -71,10 +66,9 @@ def due_date_from_working_days(start_date: date, working_days: int) -> date | No
     day starting Monday is Monday, not Tuesday (the original's ``+ working
     days - 1`` offset against the cumulative counter).
 
-    Считается по СГЕНЕРИРОВАННОМУ календарю с оверрайдами поверх, а не по
-    таблице ``ProductionDay`` — по той же причине, что и в
-    ``calendar_service.working_days_between``: ``ProductionDay`` это таблица
-    переопределений, а не календарь, и в обычной базе строк в ней нет вообще.
+    Календарь — общий справочник группы (``refdata``, A7.1): сгенерированный
+    базовый календарь РК с ручными переопределениями поверх, а не таблица
+    переопределений сама по себе — в обычной базе строк в ней нет вообще.
     Прежняя версия брала ``working_days_since_epoch`` из строки за
     ``start_date`` и без неё возвращала ``None`` — то есть на любой не
     размеченной вручную базе ``estimated_working_days`` при создании задачи
@@ -88,18 +82,5 @@ def due_date_from_working_days(start_date: date, working_days: int) -> date | No
     """
     if working_days is None or not 1 <= working_days <= _MAX_WORKING_DAYS:
         return None
-    limit = start_date + timedelta(
-        days=working_days * _SCAN_FACTOR + _SCAN_SLACK_DAYS)
-    overrides = dict(ProductionDay.objects
-                     .filter(date__gte=start_date, date__lte=limit)
-                     .values_list("date", "day_type"))
-    seen = 0
-    day = start_date
-    while day <= limit:
-        day_type = overrides.get(day) or base_day_type(day)
-        if day_type in WORKING_DAY_TYPES:
-            seen += 1
-            if seen == working_days:
-                return day
-        day += timedelta(days=1)
-    return None
+    return refdata.add_working_days(start_date, working_days,
+                                    max_count=_MAX_WORKING_DAYS)

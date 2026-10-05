@@ -45,7 +45,9 @@ export const protectedRoutes: RouteConfig[] = [
   // (admins + staff) rather than ``editor`` — with ``editor`` an admin
   // without the editors role could not reach it at all, while a content
   // editor who can reach it would get 403 from every write.
-  { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
+  // Доски задач — и держателям «Доски задач проекта» (ТД, ОД, АДМ, ПМ) без
+  // кадровых прав: ссылка с карточки «Проекта» БЗО (решение 01.10).
+  { path: '/manage/projects', component: lazyPages.HRProjects, requiresAuth: true, requires: { module: 'hr', level: 'read', orNode: { node: 'project.board', flag: 'view' } } },
 
   // ─── Personal / messenger / tasks (any logged-in user) ────────────────
   // Экран выбора компании на голом домене (блок I.2): сюда RequireAuth уводит
@@ -57,6 +59,8 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/settings', component: lazyPages.Settings, requiresAuth: true },
   { path: '/messenger', component: lazyPages.Messenger, requiresAuth: true },
   { path: '/notifications', component: lazyPages.NotificationsHistory, requiresAuth: true },
+  // Каналы уведомлений (центр уведомлений) — свои настройки, гейта модуля нет.
+  { path: '/settings/notifications', component: lazyPages.NotificationSettings, requiresAuth: true },
   { path: '/calendar', component: lazyPages.HRCalendar, requiresAuth: true },
   { path: '/files', component: lazyPages.DepartmentFiles, requiresAuth: true },
   { path: '/conference', component: lazyPages.ConferencePage, requiresAuth: true },
@@ -149,8 +153,17 @@ export const protectedRoutes: RouteConfig[] = [
   { path: '/signoff', component: lazyPages.SignoffInbox, requiresAuth: true },
   { path: '/signoff/processes', component: lazyPages.SignoffProcessList, requiresAuth: true },
   { path: '/signoff/processes/:id', component: lazyPages.SignoffProcessDetail, requiresAuth: true },
+  // Процесс дочерней компании, открытый из холдинга (B8.1): доступ решает сервер — 404, если задача не ваша.
+  { path: '/signoff/companies/:company/processes/:id', component: lazyPages.SignoffForeignProcessDetail, requiresAuth: true },
   { path: '/signoff/routes', component: lazyPages.SignoffRouteList, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
   { path: '/signoff/routes/:id', component: lazyPages.SignoffRouteEditor, requiresAuth: true, requires: { module: 'signoff', level: 'admin' } },
+
+  // ─── Модуль БЗО (apps.bpp): раздел «Закупки и оплаты» ─────────────────
+  // Один маршрут на весь раздел: меню и экраны приносят подмодули
+  // (`features/bpp/<модуль>/module.tsx`), `BppLayout` раскладывает их у себя.
+  // Сюда же ведут ссылки согласования и уведомлений (`/bpp/requests/<id>`,
+  // `/bpp/accountable/<id>`). Права на сам документ проверяет бэкенд.
+  { path: '/bpp/*', component: lazyPages.BppLayout, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
 
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },

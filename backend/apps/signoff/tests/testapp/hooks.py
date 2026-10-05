@@ -10,14 +10,20 @@ from __future__ import annotations
 
 from apps.signoff import interface as signoff
 
-from .models import ProbeDoc
+from .models import ProbeDoc, UuidProbeDoc
 
 CALLS: list[tuple[str, int]] = []
+# Журнал колбэков UUID-предмета: по нему видно, в каком ТИПЕ ключ дошёл до
+# предметной аппки (UUID, а не строка из ApprovalProcess.subject_id).
+UUID_CALLS: list[tuple[str, object]] = []
 
 
 def reset() -> None:
     CALLS.clear()
     EVENTS.clear()
+    OPTIONS.clear()
+    OPTION_VOTES.clear()
+    UUID_CALLS.clear()
 
 
 def _on_started(subject_id: int) -> None:
@@ -131,8 +137,56 @@ def _check_requirement(subject_id: int, key: str) -> str | None:
 EVENTS: list[tuple[int, str, dict]] = []
 
 
+# ── варианты голоса (исходный документ и его альтернативы) ─────────────
+#
+# ``OPTIONS`` — какие варианты объявлены у документа: {pk: [{key, label}]}.
+# Пусто — выбирать не из чего (так у всех документов, пока тест не
+# объявил варианты). ``OPTION_VOTES`` — доменная запись голосов (D-26).
+
+OPTIONS: dict[object, list[dict]] = {}  # ключ — pk документа (int или UUID)
+OPTION_VOTES: list[tuple[object, int, int, str]] = []
+OPTION_BLOCKED = "blocked"
+
+
+def _options(subject_id: int) -> list[dict]:
+    return OPTIONS.get(subject_id, [])
+
+
+def _check_option(subject_id: int, key: str) -> str | None:
+    return "за этот вариант голосовать нельзя" if key == OPTION_BLOCKED else None
+
+
+def _on_option(subject_id: int, stage_order: int, user_id: int, option_key: str) -> None:
+    OPTION_VOTES.append((subject_id, stage_order, user_id, option_key))
+
+
 def _on_event(subject_id: int, kind: str, payload: dict) -> None:
     EVENTS.append((subject_id, kind, payload))
+
+
+def _uuid_on_started(subject_id) -> None:
+    UUID_CALLS.append(("started", subject_id))
+
+
+def _uuid_on_approved(subject_id) -> None:
+    UUID_CALLS.append(("approved", subject_id))
+
+
+def _uuid_describe(subject_id) -> dict | None:
+    doc = UuidProbeDoc.objects.filter(pk=subject_id).first()
+    if doc is None:
+        return None
+    return {"title": doc.title, "url": f"/probe-uuid/{doc.pk}"}
+
+
+def _uuid_options(subject_id) -> list[dict]:
+    # Ключ словаря — UUID: придёт строка — вариантов не найдётся.
+    return OPTIONS.get(subject_id, [])
+
+
+def _uuid_on_option(subject_id, stage_order: int, user_id: int, option_key: str) -> None:
+    UUID_CALLS.append(("option", subject_id))
+    OPTION_VOTES.append((subject_id, stage_order, user_id, option_key))
 
 
 def register() -> None:
@@ -155,4 +209,17 @@ def register() -> None:
         on_event=_on_event,
         requirement_fields=_requirement_fields,
         check_requirement=_check_requirement,
+        options=_options,
+        check_option=_check_option,
+        on_option=_on_option,
+    )
+    signoff.register_subject(
+        UuidProbeDoc.SIGNOFF_SUBJECT_TYPE,
+        label="Пробный документ с UUID",
+        model=UuidProbeDoc,
+        on_started=_uuid_on_started,
+        on_approved=_uuid_on_approved,
+        describe=_uuid_describe,
+        options=_uuid_options,
+        on_option=_uuid_on_option,
     )

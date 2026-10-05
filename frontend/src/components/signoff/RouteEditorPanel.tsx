@@ -50,6 +50,8 @@ import { toast } from 'sonner';
 
 import { EmployeePicker } from '@/components/common/EmployeePicker';
 import { PositionPicker } from '@/components/signoff/PositionPicker';
+import { refKey } from '@/components/signoff/crossCompany';
+import { RouteFlagsCard } from '@/components/signoff/RouteFlagsCard';
 import { ConditionEditor } from '@/components/signoff/ConditionEditor';
 import { conditionText } from '@/components/signoff/format';
 import { APPROVER_KIND_LABELS, QUORUM_LABELS } from '@/components/signoff/labels';
@@ -90,9 +92,17 @@ import { signoffApi } from '@/api/signoff';
 import type {
   ApproverKind,
   Condition,
+  PositionRef,
   Quorum,
+  RouteRole,
   RouteStage,
 } from '@/types/signoff';
+
+/** Подпись должности этапа; должность вышестоящей компании (B8.1) — с её
+ *  названием: «Финансовый директор · Hi-Tech Group». */
+const roleLabel = (role: RouteRole): string =>
+  [role.title, role.department_name, role.company ? role.company_name || role.company : null]
+    .filter(Boolean).join(' · ') || `Должность #${role.position_id}`;
 
 /** Черновик этапа в диалоге. `id === null` — этап ещё не создан. */
 interface StageDraft {
@@ -100,7 +110,8 @@ interface StageDraft {
   order: number;
   name: string;
   quorum: Quorum;
-  positionIds: number[];
+  /** Должности парами — своей компании и вышестоящих (B8.1). */
+  positions: PositionRef[];
   /** `users` — согласующие поимённо; `subject` — ключ, по которому их
    *  назовёт сам объект (`approver_fields` его типа). */
   userIds: number[];
@@ -110,6 +121,8 @@ interface StageDraft {
   approverKind: ApproverKind;
   requiresAttachment: boolean;
   requiresComment: boolean;
+  /** Выбирает вариант при альтернативах (D-25). */
+  votesOption: boolean;
   /** Что этап требует от ОБЪЕКТА (ключ из `requirement_fields` типа);
    *  пусто — ничего. */
   requirementKey: string;
@@ -120,7 +133,7 @@ const emptyDraft = (order: number): StageDraft => ({
   order,
   name: '',
   quorum: 'all',
-  positionIds: [],
+  positions: [],
   userIds: [],
   approverKey: '',
   condition: [],
@@ -128,6 +141,7 @@ const emptyDraft = (order: number): StageDraft => ({
   approverKind: 'position',
   requiresAttachment: false,
   requiresComment: false,
+  votesOption: false,
   requirementKey: '',
 });
 
@@ -210,7 +224,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         quorum: stage.quorum,
         // У каждого вида согласующих — своя настройка, и чужую бэкенд
         // отвергнет как противоречие, а не «поймёт, что имелось в виду».
-        position_ids: stage.approverKind === 'position' ? stage.positionIds : [],
+        // Должности — парами (B8.1): своей компании с пустым `company`.
+        position_ids: [],
+        positions: stage.approverKind === 'position' ? stage.positions : [],
         user_ids: stage.approverKind === 'users' ? stage.userIds : [],
         approver_key: stage.approverKind === 'subject' ? stage.approverKey : '',
         // Условие шлём всегда, в том числе пустым: для PATCH пустой массив —
@@ -220,6 +236,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         approver_kind: stage.approverKind,
         requires_attachment: stage.requiresAttachment,
         requires_comment: stage.requiresComment,
+        votes_option: stage.votesOption,
         requirement_key: stage.requirementKey,
       };
       return stage.id === null
@@ -249,7 +266,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
       order: stage.order,
       name: stage.name,
       quorum: stage.quorum,
-      positionIds: stage.roles.map((role) => role.position_id),
+      positions: stage.roles.map((role) => ({
+        company: role.company ?? '', position_id: role.position_id,
+      })),
       userIds: stage.user_ids ?? [],
       approverKey: stage.approver_key ?? '',
       condition: stage.condition ?? [],
@@ -257,15 +276,16 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
       approverKind: stage.approver_kind,
       requiresAttachment: stage.requires_attachment,
       requiresComment: stage.requires_comment,
+      votesOption: stage.votes_option ?? false,
       requirementKey: stage.requirement_key ?? '',
     });
 
   const knownNames = useMemo(() => {
-    const names: Record<number, string> = {};
+    const names: Record<string, string> = {};
     for (const stage of route?.stages ?? []) {
       for (const role of stage.roles) {
-        if (role.title) names[role.position_id] = [role.title, role.department_name]
-          .filter(Boolean).join(' · ');
+        if (role.title) names[refKey({ company: role.company ?? '', position_id: role.position_id })] =
+          roleLabel(role);
       }
     }
     return names;
@@ -278,7 +298,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
         + 'ролей у платформы нет.');
       return;
     }
-    if (draft.approverKind === 'position' && draft.positionIds.length === 0) {
+    if (draft.approverKind === 'position' && draft.positions.length === 0) {
       setDraftError('Нужна хотя бы одна должность: этап без неё движок не '
         + 'запустит.');
       return;
@@ -363,6 +383,8 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
               <Loader2 className="h-4 w-4 animate-spin mb-3 text-muted-foreground" />
             )}
           </div>
+
+          <RouteFlagsCard route={route} />
 
           {(route.coverage_gaps?.length ?? 0) > 0 && (
             <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3">
@@ -595,12 +617,11 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                           ) : (
                             stage.roles.map((role) => (
                               <Badge
-                                key={role.position_id}
+                                key={refKey({ company: role.company ?? '', position_id: role.position_id })}
                                 variant="secondary"
                                 className={role.is_active ? '' : 'opacity-60'}
                               >
-                                {[role.title, role.department_name].filter(Boolean).join(' · ')
-                                  || `Должность #${role.position_id}`}
+                                {roleLabel(role)}
                                 {!role.is_active && ' (неактивна)'}
                               </Badge>
                             ))
@@ -706,7 +727,7 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                         setDraft({
                           ...draft,
                           approverKind: value as ApproverKind,
-                          positionIds: value === 'position' ? draft.positionIds : [],
+                          positions: value === 'position' ? draft.positions : [],
                           userIds: value === 'users' ? draft.userIds : [],
                           approverKey: value === 'subject' ? draft.approverKey : '',
                         })
@@ -780,6 +801,26 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                       }
                     />
                   </div>
+                  <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="stage-votes" className="text-sm">
+                        Выбирает вариант
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Если к документу поданы альтернативы, согласующий этапа
+                        выбирает исходный документ или альтернативу. Решает голос
+                        последнего такого этапа. Не отмечено ни у одного этапа —
+                        выбирает каждый.
+                      </p>
+                    </div>
+                    <Switch
+                      id="stage-votes"
+                      checked={draft.votesOption}
+                      onCheckedChange={(checked) =>
+                        setDraft({ ...draft, votesOption: checked })
+                      }
+                    />
+                  </div>
 
                   {/* Требование к ОБЪЕКТУ — третье рядом с документом и
                       пояснением, но о другом: не что принесёт согласующий,
@@ -821,9 +862,9 @@ export function RouteEditorPanel({ routeId }: { routeId: number }) {
                     <div className="space-y-1.5">
                       <Label>Должности согласующих</Label>
                       <PositionPicker
-                        value={draft.positionIds}
+                        value={draft.positions}
                         knownNames={knownNames}
-                        onChange={(ids) => setDraft({ ...draft, positionIds: ids })}
+                        onChange={(refs) => setDraft({ ...draft, positions: refs })}
                       />
                       {draft.id !== null && (
                         <p className="text-xs text-muted-foreground">

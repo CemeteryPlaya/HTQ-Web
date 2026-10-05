@@ -207,6 +207,20 @@ def get_users_brief(user_ids: Iterable[int]) -> list[dict]:
     return [_brief_from_values(row) for row in rows]
 
 
+def active_user_ids() -> list[int]:
+    """Id всех пользователей с ДЕЙСТВУЮЩЕЙ учёткой (``status=ACTIVE``), по id.
+
+    Адресаты ежедневной сводки центра уведомлений
+    (``apps.notifications.services.digest``): кому писать, решает сводка —
+    пустой список ожиданий письма не порождает. Неподтверждённая или
+    отключённая учётка исключена: токена ей не выдадут, и ссылки из сводки
+    она не откроет.
+    """
+    require_service("users")
+    return list(User.objects.filter(status=UserStatus.ACTIVE)
+                .order_by("id").values_list("id", flat=True))
+
+
 def staff_user_ids() -> list[int]:
     """Id пользователей с ``is_staff=True``, кроме суперпользователей, с
     ДЕЙСТВУЮЩЕЙ учёткой.

@@ -30,6 +30,8 @@ import {
     notificationTargetUrl,
 } from '@/api/tasks';
 import { MessengerToast } from '@/components/MessengerToast';
+import { getMessengerSocket } from '@/features/messenger/api/socket';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { playNotificationSound } from '@/lib/sound/soundService';
 import { useToastHostMounted } from '@/lib/notifications/toastHost';
 import {
@@ -66,11 +68,21 @@ const writeSeen = (set: Set<string>) => {
     }
 };
 
+/** В «показанных» только числовые id — список остался от старой ленты
+ *  (`tasks.Notification`). С переезда в центр уведомлений id — UUID, и те же
+ *  уведомления приходят под новыми id: показывать их заново значило бы
+ *  засыпать человека карточками со звуком в день выкатки. Пустой список —
+ *  это не переезд, а первое открытие на устройстве: там всё как раньше. */
+const isLegacySeen = (seen: Set<string>): boolean =>
+    seen.size > 0 && Array.from(seen).every((key) => /^\d+$/.test(key));
+
 export const NotificationToasts: React.FC = () => {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const toastHostMounted = useToastHostMounted();
+    const { activeProfile } = useActiveProfile();
+    const isAuth = Boolean(activeProfile);
 
     // Опрос раз в 30 секунд: именно он приносит уведомления, созданные, пока
     // страница открыта.
@@ -85,6 +97,21 @@ export const NotificationToasts: React.FC = () => {
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
     });
 
+    // Мгновенный показ: центр уведомлений, записав новое, шлёт «notification»
+    // с `type: 'notification'` в персональную комнату сокета мессенджера — лента
+    // перечитывается сразу, а не при следующем опросе через 30 секунд. Другие
+    // события того же канала (старт конференции) слушает ConferenceNotifier.
+    useEffect(() => {
+        if (!isAuth) return;
+        const socket = getMessengerSocket();
+        const onNotification = (raw: unknown) => {
+            if ((raw as { type?: string })?.type !== 'notification') return;
+            queryClient.invalidateQueries({ queryKey: ['notifications'] });
+        };
+        socket.on('notification', onNotification);
+        return () => { socket.off('notification', onNotification); };
+    }, [isAuth, queryClient]);
+
     useEffect(() => {
         if (notifications.length === 0) return;
         // Приёмника тостов ещё нет — не трогаем НИЧЕГО: ни звука, ни отметки
@@ -95,6 +122,12 @@ export const NotificationToasts: React.FC = () => {
         if (!toastHostMounted) return;
 
         const seen = readSeen();
+        if (isLegacySeen(seen)) {
+            // Переезд: текущую ленту молча считаем показанной.
+            for (const n of notifications) seen.add(String(n.id));
+            writeSeen(seen);
+            return;
+        }
         for (const n of notifications) {
             const key = String(n.id);
             if (seen.has(key)) continue;

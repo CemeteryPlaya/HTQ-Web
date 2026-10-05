@@ -87,9 +87,11 @@ const CounterpartyCreate = () => {
   const [status, setStatus] = useState<CounterpartyStatus>('active');
 
   const [searchParams] = useSearchParams();
+  // Этап 6: контрагент «Договоров» не переносится, связать с ним партнёра
+  // нечем — сервер ответил бы 409. Выбор партнёра и `?from_contractor=` выключены.
   const [contractorId, setContractorId] = useState<number | null>(() => {
     const fromUrl = Number(searchParams.get('from_contractor'));
-    return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : null;
+    return PARTNER_CHOICE_ENABLED && Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : null;
   });
 
   // Партнёры модуля задач. Ошибка запроса (модуль выключен, нет доступа) —
@@ -104,7 +106,7 @@ const CounterpartyCreate = () => {
   // (бэкенд ответит 409), это делается в карточке партнёра.
   const partnerOptions = useMemo(
     () => partners
-      .filter((row) => row.counterparty_id === null)
+      .filter((row) => row.bpp_counterparty_id === null)
       .map((row) => ({
         id: row.id,
         label: row.name,
@@ -147,7 +149,7 @@ const CounterpartyCreate = () => {
     if (!partnersQuery.isSuccess) return;
     prefilledFromUrl.current = true;
     const partner = partners.find((row) => row.id === contractorId);
-    if (partner && partner.counterparty_id === null) fillFromPartner(partner);
+    if (partner && partner.bpp_counterparty_id === null) fillFromPartner(partner);
     else setContractorId(null);
     // fillFromPartner читает текущие поля формы — на первом проходе они пусты.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -245,7 +247,7 @@ const CounterpartyCreate = () => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {partnersQuery.isSuccess && (partnerOptions.length > 0 || contractorId !== null) && (
+          {PARTNER_CHOICE_ENABLED && partnersQuery.isSuccess && (partnerOptions.length > 0 || contractorId !== null) && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
@@ -439,5 +441,7 @@ const CounterpartyCreate = () => {
     </ContractsShell>
   );
 };
+
+const PARTNER_CHOICE_ENABLED = false;
 
 export default CounterpartyCreate;

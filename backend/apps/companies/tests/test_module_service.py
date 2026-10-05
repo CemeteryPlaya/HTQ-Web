@@ -18,7 +18,7 @@ def company(db):
 @pytest.mark.django_db
 def test_list_covers_every_known_service_and_defaults_to_enabled(company):
     rows = module_service.list_modules(company)
-    assert [r["app_label"] for r in rows] == list(KNOWN_SERVICES)
+    assert [r["app_label"] for r in rows if r["parent"] is None] == list(KNOWN_SERVICES)
     assert all(r["enabled"] for r in rows)
     assert {r["app_label"] for r in rows if r["is_core"]} == set(CORE_MODULES) & set(KNOWN_SERVICES)
 
@@ -26,7 +26,8 @@ def test_list_covers_every_known_service_and_defaults_to_enabled(company):
 @pytest.mark.django_db
 def test_disable_writes_row_and_interface_sees_it(company):
     row = module_service.set_module(company, "tasks", enabled=False, message="Пока закрыто")
-    assert row == {"app_label": "tasks", "enabled": False, "message": "Пока закрыто", "is_core": False}
+    assert row == {"app_label": "tasks", "enabled": False, "message": "Пока закрыто",
+                   "is_core": False, "parent": None}
     cache.clear()  # interface кэширует ответ на 5 секунд
     assert interface.module_enabled("htq", "tasks") == (False, "Пока закрыто")
 

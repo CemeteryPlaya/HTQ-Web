@@ -39,6 +39,7 @@ import {
   Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { errorStatus, explainedDetail } from '@/lib/apiError';
+import { BppGroupSection } from '@/features/bpp/holding/BppGroupSection';
 
 const DASH = '—';
 
@@ -330,6 +331,10 @@ const GroupSummary = () => {
                 )}
               </Table>
             </section>
+
+            {/* Бюджет, закупки и оплаты — свой замок (узел bpp.holding: ФД, ГД);
+                нет права — раздела нет, остальная сводка не страдает. */}
+            <BppGroupSection />
           </>
         )}
       </main>

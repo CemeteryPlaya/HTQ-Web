@@ -472,6 +472,24 @@ class CounterpartyFullCreate(BaseModel):
     contractor_id: Optional[int] = None
 
 
+class MigratedTarget(BaseModel):
+    """Куда запись переехала в модуль БЗО (A6.2) — «перенесён в ДГ-…».
+
+    ``number`` — у документов с номером; у контрагента ``None``."""
+
+    target_type: str
+    target_id: str
+    number: Optional[str] = None
+
+
+class FreezeRead(BaseModel):
+    """``GET contracts/v1/freeze`` — заморожен ли раздел у компании (A6.2)."""
+
+    frozen: bool
+    frozen_at: Optional[datetime] = None
+    comment: str = ""
+
+
 class CounterpartyContractorRef(BaseModel):
     """Партнёр из модуля задач, связанный с контрагентом, — для бейджа
     «работает на объектах» со ссылкой на карточку партнёра."""
@@ -504,6 +522,8 @@ class CounterpartyRead(BaseModel):
     #: Та же организация в модуле задач (партнёр на объектах), если связана.
     #: Кладётся атрибутом ``counterparty_service.attach_contractors``.
     contractor: Optional[CounterpartyContractorRef] = None
+    #: Только в карточке (``GET counterparties/<id>``); в списках — пусто.
+    migrated_to: list[MigratedTarget] = []
     created_at: datetime
     updated_at: datetime
 
@@ -717,6 +737,8 @@ class AgreementRead(BaseModel):
     # на каждую строку.
     request_id: Optional[int] = None
     items: list[AgreementItemRead] = []
+    #: Только в карточке (``GET agreements/<id>``); в списках — пусто.
+    migrated_to: list[MigratedTarget] = []
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime
@@ -819,6 +841,8 @@ class InvoiceRead(BaseModel):
     approval_state: str
     request_id: Optional[int] = None
     document_date: Optional[date]
+    #: Только в карточке (``GET invoices/<id>``); в списках — пусто.
+    migrated_to: list[MigratedTarget] = []
     created_by: Optional[int]
     created_at: datetime
     updated_at: datetime

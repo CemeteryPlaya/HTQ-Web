@@ -20,10 +20,11 @@ from apps.signoff.models import (
     ApprovalProcess,
     ApprovalProcessStage,
     ApprovalTask,
+    ProcessState,
     StageState,
     TaskState,
 )
-from apps.signoff.services import attachments, registry
+from apps.signoff.services import attachments, positions, registry
 from apps.users import interface as users
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
     stages = list(process.stages.prefetch_related("tasks"))
 
     names: dict[int, dict] = {}
+    labels: dict = {}
     if enrich:
         # Инициатор в карту имён идёт наравне с согласующими: карточка
         # показывает, кто отправил объект, а не только безымянный id.
@@ -44,6 +46,11 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         if process.initiator_id is not None:
             name_ids.append(process.initiator_id)
         names = _name_map(name_ids)
+        # Подписи должностей задач — пачкой, по компании за раз: должность
+        # может быть в штате вышестоящей компании (B8.1).
+        refs = [key for stage in stages for task in stage.tasks.all()
+                for key in positions.task_keys(task)[:1] if key is not None]
+        labels = _position_labels(refs)
 
     requirement_labels = _requirement_labels(process)
     card = {
@@ -57,6 +64,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
         "created_at": process.created_at,
         "finished_at": process.finished_at,
         "subject_facts": process.subject_facts or {},
+        "route_flags": process.route_flags or {},
         "stages": [
             {
                 "id": stage.pk,
@@ -68,21 +76,36 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
                 "matched_by": stage.matched_by,
                 "approver_kind": stage.approver_kind,
                 "role_ids": stage.role_ids or [],
+                "role_refs": positions.dump_many(positions.process_stage_refs(stage)),
                 "user_ids": stage.user_ids or [],
                 "approver_key": stage.approver_key or "",
                 "requires_attachment": stage.requires_attachment,
                 "requires_comment": stage.requires_comment,
+                "votes_option": stage.votes_option,
                 "requirement_key": stage.requirement_key or "",
                 "requirement_label": requirement_labels.get(stage.requirement_key or ""),
+                "activated_at": stage.activated_at,
                 "decided_at": stage.decided_at,
                 "tasks": [
-                    serialize_task(task, names=names, urls=enrich)
+                    serialize_task(task, names=names, urls=enrich, labels=labels)
                     for task in stage.tasks.all()
                 ],
             }
             for stage in stages
         ],
     }
+
+    if enrich and process.state == ProcessState.PENDING:
+        # Между чем выбирает тот, чей ход: без этого кнопке «Согласовать»
+        # нечего предложить. Только у идущего процесса — у завершённого
+        # выбор уже сделан и лежит в голосах.
+        # Только если текущая группа выбирает вариант (``votes_option``,
+        # D-25): остальным этапам предлагать выбор незачем — движок его и
+        # не спросит.
+        from apps.signoff.services import engine
+
+        card["options"] = (registry.options_for(process.subject_type, process.subject_id)
+                           if engine.voting_stages_now(process) else [])
 
     if enrich:
         described = describe_many([(process.subject_type, process.subject_id)])
@@ -98,7 +121,7 @@ def serialize_process(process: ApprovalProcess, *, enrich: bool = False) -> dict
 
 
 def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
-                   urls: bool = False) -> dict:
+                   urls: bool = False, labels: dict | None = None) -> dict:
     """Карточка одного запроса на согласование.
 
     Вынесена из ``serialize_process`` не ради красоты, а потому что её отдаёт
@@ -112,15 +135,23 @@ def serialize_task(task: ApprovalTask, *, names: dict[int, dict] | None = None,
     задачу каждого процесса.
     """
     names = names or {}
+    key = positions.task_keys(task)[0]
     card = {
         "id": task.pk,
         "user_id": task.user_id,
         "position_id": task.position_id,
+        "position_company": task.position_company or "",
+        "position_label": (labels or {}).get(key, {}).get("label") if key else None,
+        "also_positions": list(task.also_positions or []),
         "full_name": names.get(task.user_id, {}).get("full_name", ""),
         "state": task.state,
         "comment": task.comment,
         "acted_at": task.acted_at,
         "file_id": task.file_id or None,
+        # За какой вариант отдан голос, если был выбор (исходный документ или
+        # альтернатива) — следующие этапы видят голоса предыдущих (ТЗ §12.4).
+        "option_key": task.option_key or None,
+        "option_label": task.option_label or None,
     }
     if urls and task.file_id:
         card["file_url"] = attachments.file_url(task.file_id)
@@ -218,7 +249,7 @@ def _stage_counts(process_ids: set[int]) -> dict[int, int]:
                 .values_list("process_id", "n"))
 
 
-def describe_many(pairs) -> dict[tuple[str, int], dict]:
+def describe_many(pairs) -> dict[tuple[str, str], dict]:
     """``{(subject_type, subject_id): {title, url}}`` через колбэки аппок.
 
     ``describe`` предметной аппки принимает по одному id, поэтому пачка
@@ -227,7 +258,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
     список «ждёт решения» у человека — это единицы строк, и лишний метод в
     контракте каждой предметной аппки стоил бы дороже.
     """
-    out: dict[tuple[str, int], dict] = {}
+    out: dict[tuple[str, str], dict] = {}
     for subject_type, subject_id in dict.fromkeys(pairs):
         try:
             subject = registry.get_subject(subject_type)
@@ -245,7 +276,7 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
             continue
 
         try:
-            info = subject.describe(subject_id) or {}
+            info = subject.describe(registry.native_id(subject_type, subject_id)) or {}
         except Exception:
             logger.warning("signoff: describe() для %s#%s упал",
                            subject_type, subject_id, exc_info=True)
@@ -255,6 +286,23 @@ def describe_many(pairs) -> dict[tuple[str, int], dict]:
             "url": info.get("url"),
         }
     return out
+
+
+def _position_labels(refs) -> dict:
+    """Подписи должностей для карточки. До B8.1 карточка процесса в ``hr``
+    не ходила вовсе, поэтому выключенный кадровый модуль её и теперь не
+    роняет: подписей нет — предусмотренная деградация."""
+    if not refs:
+        return {}
+    from apps.core.services import ServiceDisabled
+    from htqweb.fallback import fallback
+
+    try:
+        return positions.briefs(refs)
+    except ServiceDisabled as exc:
+        return fallback("signoff.presentation.position_labels_unavailable", {},
+                        reason="кадровый модуль выключен — подписи должностей не показаны",
+                        exc=exc, expected=True)
 
 
 def _name_map(user_ids) -> dict[int, dict]:

@@ -66,7 +66,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from apps.core.models import ServiceStatus
 from htqweb.date_rules import DATE_PAIRS, OrderedDates
 from htqweb.admin_gate import ServiceGatedAdminMixin
-from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, service_name_for_app_label
+from htqweb.middleware.service_gate import PREFIX_TO_SERVICE, prefix_matches, service_name_for_app_label
 
 # ─────────────────────────────────────────────────────────────────────────
 # Shared discovery: "domain app" = anything under apps.* except apps.core,
@@ -99,26 +99,39 @@ def _domain_app_configs():
 # ═══════════════════════════════════════════════════════════════════════
 
 
+#: Related-names ``htqweb/celery.py`` autodiscovers tasks under, beyond the
+#: default ``tasks``. ``tasks_export`` — bpp: печать/экспорт (A2.2, задача
+#: 6), отдельный файл от ``apps/bpp/tasks.py`` (ночная сверка «Задействовано»,
+#: зона B), чтобы задачи модуля не конфликтовали правками в одном файле,
+#: пока обе части пишутся параллельно (см. докстринг ``tasks_export.py``).
+#: ``tasks_bank`` — bpp: разбор выписки (этап 3 A, задача 3), по той же
+#: причине. Список держим в паре с ``htqweb/celery.py``: новый related_name там —
+#: новое имя и здесь, иначе его задачи молча выпадут из обоих сторожей ниже.
+_TASK_MODULE_RELATED_NAMES = ("tasks", "tasks_export", "tasks_bank")
+
+
 def _iter_domain_tasks():
     """Yield (app_label, service, task) for every ``@shared_task`` DEFINED
-    (not merely imported) in ``apps/<domain>/tasks.py``, for every domain
-    app that has a ``tasks.py`` at all.
+    (not merely imported) in ``apps/<domain>/tasks.py`` or one of
+    ``_TASK_MODULE_RELATED_NAMES``'s other modules, for every domain app
+    that has one at all.
 
     ``importlib.util.find_spec`` (not a bare try/import/except ImportError)
-    tells apart "this app has no tasks.py" (skip — legitimately nothing to
-    check, e.g. apps.users today) from "tasks.py exists but blows up on
+    tells apart "this app has no such module" (skip — legitimately nothing
+    to check, e.g. apps.users today) from "module exists but blows up on
     import" (let it raise — that is a real bug, not something to swallow
     into a silent skip).
     """
     for config in _domain_app_configs():
-        tasks_module_name = f"{config.name}.tasks"
-        if importlib.util.find_spec(tasks_module_name) is None:
-            continue
-        tasks_module = importlib.import_module(tasks_module_name)
         service = service_name_for_app_label(config.label)
-        for _name, obj in inspect.getmembers(tasks_module):
-            if isinstance(obj, CeleryTask) and obj.__module__ == tasks_module_name:
-                yield config.label, service, obj
+        for related_name in _TASK_MODULE_RELATED_NAMES:
+            tasks_module_name = f"{config.name}.{related_name}"
+            if importlib.util.find_spec(tasks_module_name) is None:
+                continue
+            tasks_module = importlib.import_module(tasks_module_name)
+            for _name, obj in inspect.getmembers(tasks_module):
+                if isinstance(obj, CeleryTask) and obj.__module__ == tasks_module_name:
+                    yield config.label, service, obj
 
 
 def _first_executable_stmt(func) -> ast.stmt | None:
@@ -259,6 +272,33 @@ def test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers():
     assert violations == [], (
         "Tenant-app Celery tasks without @company_task and without an "
         "explicit dispatcher marker:\n  " + "\n  ".join(violations)
+    )
+
+
+def test_company_tasks_accept_company_slug_by_signature():
+    """Celery checks ``.delay()``/``.apply_async()`` arguments against the
+    task's signature before queueing. On Python 3.14 it reads it with
+    ``inspect.signature``, which follows ``__wrapped__`` (set by ``@wraps``)
+    down to the undecorated function — without ``company_slug`` — so every
+    ``.delay(company_slug=…)`` died with ``TypeError`` in prod and CI while
+    passing on a 3.13 dev venv. ``inspect.signature`` follows ``__wrapped__``
+    on every Python, so this check catches the regression on any of them."""
+    tenant_apps = frozenset(django_settings.TENANT_APPS)
+    violations = []
+    tasks_seen = 0
+    for app_label, _service, task in _iter_domain_tasks():
+        fn = getattr(task, "run", None) or inspect.unwrap(task)
+        if app_label not in tenant_apps or _company_marker(fn) != "company_task":
+            continue
+        tasks_seen += 1
+        try:
+            inspect.signature(fn).bind_partial(company_slug="probe")
+        except TypeError as exc:
+            violations.append(f"{task.name}: {exc}")
+    assert tasks_seen > 0, "discovered zero @company_task tasks — the sweep itself is broken"
+    assert violations == [], (
+        "@company_task tasks whose signature rejects company_slug (Celery would "
+        "refuse .delay(company_slug=…)):\n  " + "\n  ".join(violations)
     )
 
 
@@ -408,7 +448,7 @@ def _sweep_targets() -> list[tuple[str, str]]:
         if prefix.startswith("/ws/"):
             continue
         for full, _callback in all_leaves:
-            if not full.startswith(prefix):
+            if not prefix_matches(full, prefix):
                 continue
             if (service, full) in _SWEEP_SKIP:
                 continue

@@ -12,6 +12,8 @@
  * эндпоинт предметной аппки (`contractsApi.submitBudget` и соседи).
  */
 
+import type { SubjectId } from '@/components/signoff/subjectId';
+
 import api from './client';
 import { apiPath } from './endpoints';
 import type {
@@ -19,9 +21,14 @@ import type {
   ApprovalProcess,
   ApprovalRoute,
   DecisionInput,
+  ForeignProcess,
+  InboxAllItem,
   InboxItem,
+  PositionCompany,
+  PositionOption,
   ProcessTask,
   ReworkInput,
+  RouteFlagsInput,
   RouteStage,
   SignoffEnums,
   StageInput,
@@ -33,7 +40,7 @@ const path = (suffix: string) => apiPath('signoff', suffix);
 
 export interface ProcessListParams {
   subject_type?: string;
-  subject_id?: number;
+  subject_id?: SubjectId;
   state?: string;
   initiator_id?: number;
 }
@@ -51,9 +58,10 @@ export const signoffApi = {
   listRoutes: (params?: { subject_type?: string; is_active?: boolean; scope?: string }) =>
     api.get<ApprovalRoute[]>(path('routes'), { params }),
   getRoute: (id: number) => api.get<ApprovalRoute>(path(`routes/${id}`)),
-  createRoute: (data: { subject_type: string; name: string; is_active?: boolean; scope?: string }) =>
+  createRoute: (data: { subject_type: string; name: string; is_active?: boolean; scope?: string }
+    & RouteFlagsInput) =>
     api.post<ApprovalRoute>(path('routes'), data),
-  updateRoute: (id: number, data: { name?: string; is_active?: boolean }) =>
+  updateRoute: (id: number, data: { name?: string; is_active?: boolean } & RouteFlagsInput) =>
     api.patch<ApprovalRoute>(path(`routes/${id}`), data),
   deleteRoute: (id: number) => api.delete(path(`routes/${id}`)),
 
@@ -67,6 +75,14 @@ export const signoffApi = {
   updateStage: (id: number, data: StageUpdateInput) =>
     api.patch<RouteStage>(path(`stages/${id}`), data),
   deleteStage: (id: number) => api.delete(path(`stages/${id}`)),
+
+  // ─── Должности для этапов (B8.1) ───────────────────────────────────────
+  /** Из каких компаний можно брать должности: своя и вышестоящие. */
+  positionCompanies: () => api.get<PositionCompany[]>(path('positions/companies')),
+  /** Справочник должностей компании; `''` — своей. Кадровый API отдаёт
+   *  только компанию запроса, поэтому должности холдинга — здесь. */
+  positions: (company: string) =>
+    api.get<PositionOption[]>(path('positions'), { params: company ? { company } : {} }),
 
   // ─── Процессы ──────────────────────────────────────────────────────────
   listProcesses: (params?: ProcessListParams) =>
@@ -88,11 +104,25 @@ export const signoffApi = {
    */
   reworkProcess: (id: number, data: ReworkInput = {}) =>
     api.post<ApprovalProcess>(path(`processes/${id}/rework`), data),
+  /** Ещё раз поискать исполнителей этапам «Нет исполнителя» (администратор). */
+  retryExecutors: (id: number) =>
+    api.post<{ found: number; process: ApprovalProcess }>(
+      path(`processes/${id}/retry-executors`)),
 
   // ─── Решения ───────────────────────────────────────────────────────────
   /** Персональная очередь спрашивающего. Чужую бэкенд не отдаёт ни по
    *  какому параметру — для надзора есть `listProcesses`. */
   inbox: () => api.get<InboxItem[]>(path('tasks/mine')),
+  /** Очередь по всем компаниям пользователя (B8.1): текущая, где есть
+   *  членство, и ниже по дереву владения. */
+  inboxAll: () => api.get<InboxAllItem[]>(path('tasks/mine/all')),
+  /** Карточка процесса дочерней компании — для решения из холдинга. */
+  foreignProcess: (company: string, id: number) =>
+    api.get<ForeignProcess>(path(`companies/${company}/processes/${id}`)),
+  /** Решение по своей задаче дочерней компании прямо из холдинга — если
+   *  маршрут это разрешает; иначе 403/409 с причиной. */
+  decideForeign: (company: string, taskId: number, data: DecisionInput) =>
+    api.post<ForeignProcess>(path(`companies/${company}/tasks/${taskId}/decision`), data),
   /** Решает текущий сотрудник, которому HR-должность маршрута была
    * разрешена при запуске, а не тот, у кого есть админский
    *  флаг: админский токен на чужой задаче получит 409. */

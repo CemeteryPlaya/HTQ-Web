@@ -166,7 +166,14 @@ def update_draft(instance_id: int, data, *, token) -> RequestInstance:
     и единственный ключ — вернуть его на доработку (``reopen``), после чего
     заявка правится как возвращённая и отправляется заново.
     """
-    instance = get_or_404(instance_id)
+    # FOR UPDATE и сохранение только своих полей: без блокировки PATCH,
+    # прочитавший черновик до параллельной отправки, полным save() вернул бы
+    # отправленной заявке status=draft и submitted_at=None — заявка «забыла»
+    # бы, что уже уходила на согласование.
+    instance = (RequestInstance.objects.select_for_update()
+                .filter(pk=instance_id).first())
+    if instance is None:
+        raise Http404("Request not found")
     if instance.initiator_id != token.user_id:
         raise PermissionDenied("only the initiator can edit")
 
@@ -184,7 +191,7 @@ def update_draft(instance_id: int, data, *, token) -> RequestInstance:
         instance.title = data.title
     if data.form_values is not None:
         instance.form_values_json = _derived(_schema_json(instance), data.form_values)
-    instance.save()
+    instance.save(update_fields=["title", "form_values_json", "updated_at"])
 
     from .template_data_table import sync_row_for_instance
     sync_row_for_instance(instance)

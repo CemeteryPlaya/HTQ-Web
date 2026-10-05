@@ -20,6 +20,7 @@ export const lazyPages = {
   Settings: React.lazy(() => import('@/pages/Settings')),
   Messenger: React.lazy(() => import('@/features/messenger/MessengerPage')),
   NotificationsHistory: React.lazy(() => import('@/pages/NotificationsHistory')),
+  NotificationSettings: React.lazy(() => import('@/pages/NotificationSettings')),
 
   ContractsOverview: React.lazy(() => import('@/pages/contracts/ContractsOverview')),
   ContractsMyTasks: React.lazy(() => import('@/pages/contracts/ContractsMyTasks')),
@@ -60,8 +61,12 @@ export const lazyPages = {
   SignoffInbox: React.lazy(() => import('@/pages/signoff/SignoffInbox')),
   SignoffProcessList: React.lazy(() => import('@/pages/signoff/ProcessList')),
   SignoffProcessDetail: React.lazy(() => import('@/pages/signoff/ProcessDetail')),
+  SignoffForeignProcessDetail: React.lazy(() => import('@/pages/signoff/ForeignProcessDetail')),
   SignoffRouteList: React.lazy(() => import('@/pages/signoff/RouteList')),
   SignoffRouteEditor: React.lazy(() => import('@/pages/signoff/RouteEditor')),
+
+  // Модуль БЗО: раздел «Закупки и оплаты» (`/bpp/*`) с меню подмодулей.
+  BppLayout: React.lazy(() => import('@/features/bpp/BppLayout')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   ManageHomeSections: React.lazy(() => import('@/pages/ManageHomeSections')),

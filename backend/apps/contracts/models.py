@@ -1268,3 +1268,37 @@ class AdvancePayment(signoff.Approvable, models.Model):
 
     def __str__(self) -> str:
         return f"Предоплата по договору {self.agreement.number}: {self.amount}"
+
+
+class FreezeState(models.Model):
+    """Заморозка раздела после переноса в модуль БЗО (A6.2, D-S6-4).
+
+    Одна строка на схему компании (``pk`` всегда 1). Раздел заморожен, пока
+    ``frozen_at`` заполнено: запись под ``/api/contracts/`` отвечает 403
+    (``apps/contracts/middleware.py``), чтение остаётся — закрытые документы
+    живут здесь навсегда (ответ Q-B36). Нет строки — не заморожен: так
+    выглядит каждая компания до ``manage.py contracts_freeze``.
+
+    Морозит человек после проверки переноса, а не сам перенос: пока ФД не
+    сверил сальдо, старый раздел должен оставаться живым.
+    """
+
+    SINGLETON_PK = 1
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=SINGLETON_PK)
+    frozen_at = models.DateTimeField(null=True, blank=True)
+    frozen_by_id = models.IntegerField(null=True, blank=True)
+    comment = models.TextField(blank=True, default="", db_default="")
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(id=1),
+                                   name="ck_ctr_freeze_singleton"),
+        ]
+        verbose_name = "Заморозка раздела «Договоры»"
+        verbose_name_plural = "Заморозка раздела «Договоры»"
+
+    def __str__(self) -> str:
+        return ("Заморожен с " + f"{self.frozen_at:%d.%m.%Y %H:%M}"
+                if self.frozen_at else "Не заморожен")

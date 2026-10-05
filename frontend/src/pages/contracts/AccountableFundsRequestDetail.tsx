@@ -23,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { useHRLevel } from '@/hooks/useHRLevel';
 
 const ACCOUNTANT_PERMISSION = 'contracts.accountable_funds_request.mark_paid';
@@ -36,7 +37,8 @@ export default function AccountableFundsRequestDetail() {
   const permissions = usePermissions();
   const { hasPerm } = useHRLevel();
   const isAdmin = permissions.atLeast('contracts', 'admin');
-  const canMarkPaid = isAdmin || hasPerm(ACCOUNTANT_PERMISSION);
+  const { frozen } = useContractsFreeze(); // A6.2: архив — без правки
+  const canMarkPaid = !frozen && (isAdmin || hasPerm(ACCOUNTANT_PERMISSION));
   const [budgetLineId, setBudgetLineId] = useState('');
   const [expenseName, setExpenseName] = useState('');
   const [reportAmount, setReportAmount] = useState('');
@@ -44,8 +46,8 @@ export default function AccountableFundsRequestDetail() {
   const { data: request, isLoading, isError } = useQuery({ queryKey: ['contracts', 'accountable-funds-request', requestId], queryFn: () => contractsApi.getAccountableFundsRequest(requestId).then((r) => r.data), enabled: Number.isFinite(requestId) });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['contracts'] });
   const markPaid = useMutation({ mutationFn: () => contractsApi.markAccountableFundsRequestPaid(requestId).then((r) => r.data), onSuccess: () => { refresh(); toast.success('Оплата отмечена бухгалтерией'); }, onError: (error) => reportApiError(error, 'Не удалось отметить оплату') });
-  const canAssignBudgetLine = request != null && (isAdmin || Number(activeProfile?.id) === request.accountable_user_id);
-  const canManageReports = request != null && (isAdmin || Number(activeProfile?.id) === request.accountable_user_id);
+  const canAssignBudgetLine = !frozen && request != null && (isAdmin || Number(activeProfile?.id) === request.accountable_user_id);
+  const canManageReports = !frozen && request != null && (isAdmin || Number(activeProfile?.id) === request.accountable_user_id);
   const { data: reports = [], isLoading: reportsLoading } = useQuery({
     queryKey: ['contracts', 'accountable-funds-request', requestId, 'advance-reports'],
     queryFn: () => contractsApi.listAdvanceReports(requestId).then((r) => r.data),

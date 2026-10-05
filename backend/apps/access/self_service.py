@@ -127,7 +127,8 @@ from __future__ import annotations
 #: одной аппке на задачу; у ``media_files`` модуль прав называется ``media``.
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
                                              "media_files", "conference", "messenger", "mail",
-                                             "cms", "approvals"})
+                                             "cms", "approvals", "files",
+                                             "project", "refdata", "notifications", "bpp"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -145,9 +146,10 @@ TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "
 REASONS: frozenset[str] = frozenset({"self", "open", "scoped"})
 
 #: аппка -> {имя ручки: причина из REASONS} (см. докстринг модуля). Ключи —
-#: все одиннадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
+#: все шестнадцать аппок TRANSLATED_APPS ("access", "users", "hr", "tasks",
 #: "companies", "media_files", "conference", "messenger", "mail", "cms",
-#: "approvals") — всегда присутствуют (даже с пустым словарём), чтобы сторож
+#: "approvals", "files" и аппки модуля БЗО "project", "refdata",
+#: "notifications", "bpp") — всегда присутствуют (даже с пустым словарём), чтобы сторож
 #: проверял их единообразно. Имя ручки — голое, без модуля: сторож собирает
 #: ручки со всех модулей аппки, не только из views.py.
 SELF_SERVICE: dict[str, dict[str, str]] = {
@@ -599,4 +601,35 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
     # can_manage_data_table. Заведение проекта и справочников (бывшие
     # admin=True) — под level="admin". Записей самообслуживания нет.
     "approvals": {},
+    # files (файловая подсистема ТЗ §21; мастер-план БЗО, §3: у ручек новых
+    # аппок — гейт или запись здесь). Документы — не модуль прав: кто видит
+    # и меняет файлы, решает ВЛАДЕЛЕЦ объекта своими колбэками can_view/
+    # can_modify («все с правом просмотра объекта», ТЗ §21) — scoped.
+    # Справочник типов читают все, у кого есть форма загрузки, проверок у
+    # него нет — open; правка справочника — под гейтом files:write.
+    "files": {
+        "_folder_get": "scoped",
+        "_folder_post": "scoped",
+        "_versions_post": "scoped",
+        "_document_delete": "scoped",
+        "_link_get": "scoped",
+        "_types_get": "open",
+    },
+    # Модуль БЗО (docs/plans/2026-09-26-bpp-master-plan.md): аппки рождаются
+    # под гейтом — каждая ручка с первого дня под api_view(module=…, level=…).
+    "project": {},
+    "refdata": {
+        # Чтение производственного календаря РК — всем вошедшим сотрудникам
+        # (A7.1, D-S7-1): у employee-basic модуля refdata нет, а виджет
+        # календаря нужен каждому. Проверок нет, данные общие для группы.
+        "production_calendar": "open",
+    },
+    # Центр уведомлений (задача A1.5): лента, прочтение и каналы — строго
+    # свои, получатель всегда request.token.user_id, параметра «чей» нет.
+    "notifications": {
+        "feed": "self", "feed_history": "self", "read_one": "self",
+        "unread_one": "self", "read_all": "self", "delete_one": "self",
+        "_prefs_get": "self", "_prefs_patch": "self", "telegram_link": "self",
+    },
+    "bpp": {},
 }

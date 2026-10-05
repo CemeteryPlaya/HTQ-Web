@@ -34,6 +34,7 @@ from apps.companies import interface as companies
 
 from . import schemas
 from .services import block_service
+from .services import board_scope
 from .services import calendar_service
 from .services import contractor_service
 from .services import daily_report_service
@@ -43,6 +44,7 @@ from .services import holding_service
 from .services import link_service
 from .services import notification_service
 from .services import plan_fact_service
+from .services import project_link
 from .services import project_service
 from .services import reference_service as ref_svc
 from .services import resource_service
@@ -68,6 +70,10 @@ def _param_error(name: str, message: str):
     return json_error(
         [{"type": "value_error", "loc": ["query", name], "msg": message}], 422
     )
+
+
+def _company_slug(request) -> str | None:
+    return (getattr(request, "company", None) or {}).get("slug")
 
 
 def _int_param(request, name: str, default=None, *, minimum=None, maximum=None):
@@ -1166,6 +1172,24 @@ def contractors_collection(request):
     return _method_not_allowed(request)
 
 
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def contractor_counterparty_search(request):
+    """Выбор контрагента в карточке партнёра (A6.1): поиск по реестру модуля
+    «Закупки и оплаты» — только «Активен». Своя ручка, а не реестр ``bpp``:
+    карточку партнёра правит администратор задач, у которого ролей модуля
+    закупок может не быть, а выбрать контрагента ему нужно. Уровень — как у
+    правки партнёра: искать незачем тому, кто не может связать.
+    Выключенный модуль — 503 (``ServiceDisabled``)."""
+    from apps.bpp import interface as bpp
+
+    try:
+        limit = _int_param(request, "limit", 20, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    return [schemas.BppCounterpartyOption.model_validate(card)
+            for card in bpp.search_counterparties(_str_param(request, "q"), limit=limit)]
+
+
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_contractor(request, contractor_id: int):
     return schemas.ContractorResponse.model_validate(
@@ -1276,13 +1300,38 @@ def _list_engagements(request):
           status=201, admin=True, module="tasks", level="admin")
 def _create_engagement(request, data: schemas.ContractorEngagementCreate):
     try:
-        row = contractor_service.create_engagement(data.model_dump())
+        row = contractor_service.create_engagement(
+            data.model_dump(), token=request.token, company=_company_slug(request))
     except contractor_service.CounterpartyLinkConflict as exc:
         return json_error(str(exc), 409)
+    except contractor_service.AgreementLinkInvalid as exc:
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
         contractor_service.build_engagement(row))
+
+
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def engagement_agreement_search(request):
+    """Выбор договора модуля «Закупки и оплаты» в привлечении партнёра
+    (хвост этапа 6, M-5): ``?contractor_id=&q=&limit=`` — договоры контрагента
+    этого партнёра, «Действует»/«Исполнен», с учётом ПРАВ пользователя на
+    договоры (узлы ``bpp.agreements``/``bpp.agreements.all``, как в реестре):
+    нет права — пустой список. Гейт — как у правки привлечения. Выключенный
+    модуль — 503."""
+    try:
+        contractor_id = _int_param(request, "contractor_id")
+        limit = _int_param(request, "limit", 20, minimum=1, maximum=100)
+    except _ParamError as exc:
+        return exc.response
+    if contractor_id is None:
+        return json_error("Укажите contractor_id", 422)
+    company = _company_slug(request)
+    return [schemas.BppAgreementOption.model_validate(card)
+            for card in contractor_service.search_agreements(
+                contractor_id, _str_param(request, "q"), token=request.token,
+                company=company, limit=limit)]
 
 
 def engagements_collection(request):
@@ -1299,12 +1348,15 @@ def _update_engagement(request, engagement_id: int,
                        data: schemas.ContractorEngagementUpdate):
     try:
         row = contractor_service.update_engagement(
-            engagement_id, data.model_dump(exclude_unset=True))
+            engagement_id, data.model_dump(exclude_unset=True),
+            token=request.token, company=_company_slug(request))
     except date_rules.DatesOutOfOrder as exc:
         # 422, а не 500: до правила дат раньше добиралась только БД.
         return json_error(str(exc), 422)
     except contractor_service.CounterpartyLinkConflict as exc:
         return json_error(str(exc), 409)
+    except contractor_service.AgreementLinkInvalid as exc:
+        return json_error(str(exc), 422)
     except ValueError as exc:
         return json_error(str(exc), 400)
     return schemas.ContractorEngagementResponse.model_validate(
@@ -1562,13 +1614,27 @@ def project_sites(request, project_id: int):
 def _list_projects(request):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_responses(project_service.list_projects(
-        employee_scope=employee_scope, department_id=department_id))
+        employee_scope=employee_scope, department_id=department_id,
+        refs=board_scope.refs_for_request(request),
+        project_ref=request.GET.get("project_ref", "").strip() or None))
 
 
 @api_view(methods=("POST",), body=schemas.ProjectCreate, status=201, admin=True, module="tasks", level="admin")
 def _create_project(request, data: schemas.ProjectCreate):
-    return project_service.build_response(project_service.create_project(
-        data.model_dump(), creator_id=request.token.user_id))
+    try:
+        project = project_service.create_project(data.model_dump())
+    except project_link.ProjectLinkError as exc:
+        return json_error(str(exc), exc.status)
+    return project_service.build_response(project)
+
+
+@api_view(methods=("GET",), admin=True, module="tasks", level="admin")
+def project_link_candidates(request):
+    """«Проекты» БЗО, к которым ещё можно завести доску, — выбор в диалоге
+    создания доски. Уровень — как у самого создания доски."""
+    return [schemas.ProjectLinkCandidate.model_validate(row)
+            for row in project_link.candidates(request.GET.get("q", "").strip(),
+                                               user_id=request.token.user_id)]
 
 
 def projects_collection(request):
@@ -1584,7 +1650,7 @@ def _get_project(request, project_id: int):
     employee_scope, department_id = project_service.scope_for(request.token)
     return project_service.build_response(project_service.get_project(
         project_id, employee_scope=employee_scope,
-        department_id=department_id))
+        department_id=department_id, refs=board_scope.refs_for_request(request)))
 
 
 def _project_for_write(request, project_id: int):
@@ -1614,6 +1680,8 @@ def _update_project(request, project_id: int, data: schemas.ProjectUpdate):
     try:
         project = project_service.update_project(
             project_id, data.model_dump(exclude_unset=True))
+    except project_link.ProjectLinkError as exc:
+        return json_error(str(exc), exc.status)
     except date_rules.DatesOutOfOrder as exc:
         # У проекта нет ни CheckConstraint, ни валидатора до этой правки:
         # перепутанные даты просто сохранялись.
@@ -1662,7 +1730,8 @@ def _list_roadmaps(request):
                 roadmap_service.list_roadmaps(
                     employee_scope=employee_scope, department_id=department_id,
                     project_id=project_id, site_id=site_id, block_id=block_id,
-                    status=_str_param(request, "status")))]
+                    status=_str_param(request, "status"),
+                    refs=board_scope.refs_for_request(request)))]
 
 
 @api_view(methods=("POST",), body=schemas.RoadmapCreate, status=201, admin=True, module="tasks", level="admin")
@@ -1786,9 +1855,12 @@ def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
     employee_scope, department_id = project_service.scope_for(request.token)
     # 404s first if the project is out of scope, so this cannot be used to
-    # enumerate tasks of a project the caller may not see.
+    # enumerate tasks of a project the caller may not see. Доска своего
+    # «Проекта» (``board_scope``) — в зоне видимости; задачи внутри — ниже,
+    # по своим правилам.
     project_service.get_project(project_id, employee_scope=employee_scope,
-                                department_id=department_id)
+                                department_id=department_id,
+                                refs=board_scope.refs_for_request(request))
     # Seeing the project is NOT seeing every task in it: narrowing by
     # department alone still handed over tasks the caller has no part in.
     # Same visibility triple as the flat list endpoint.
@@ -1992,13 +2064,13 @@ def notification_history(request):
 
 
 @api_view(methods=("POST",), status=204)
-def notification_mark_read(request, notification_id: int):
+def notification_mark_read(request, notification_id: str):
     notification_service.mark_read(notification_id, request.token.user_id)
     return _no_content()
 
 
 @api_view(methods=("POST",), status=204)
-def notification_mark_unread(request, notification_id: int):
+def notification_mark_unread(request, notification_id: str):
     notification_service.mark_unread(notification_id, request.token.user_id)
     return _no_content()
 
@@ -2010,7 +2082,7 @@ def notifications_mark_all_read(request):
 
 
 @api_view(methods=("DELETE",), status=204)
-def notification_detail(request, notification_id: int):
+def notification_detail(request, notification_id: str):
     notification_service.delete(notification_id, request.token.user_id)
     return _no_content()
 
@@ -2149,15 +2221,14 @@ def equipment_usage(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Calendar — /calendar/ and /production-calendar/
+# Calendar — /calendar/ (производственный календарь переехал в refdata)
 # ─────────────────────────────────────────────────────────────────────────
 
 def _bounded_range(request, start_key: str, end_key: str):
-    """Shared window parsing for the timeline and the production calendar.
+    """Окно дат для ленты календаря (timeline).
 
-    Both default to "this month plus 31 days" and both reject an inverted or
-    over-long range with the original's 400 (not 422 — these are range
-    *semantics*, which FastAPI could not express as a type either).
+    По умолчанию «этот месяц плюс 31 день»; перевёрнутое или слишком длинное окно — 400 (не 422: это семантика диапазона,
+    а не тип параметра).
     """
     start = _date_param(request, start_key)
     end = _date_param(request, end_key)
@@ -2293,29 +2364,6 @@ def calendar_user_options(request):
         for row in list_users_brief(search=query or None, limit=limit)
         if row.get("is_active", True)
     ]
-
-
-@api_view(methods=("GET",), module="tasks", level="read")
-def production_calendar(request):
-    try:
-        start, end = _bounded_range(request, "date__gte", "date__lte")
-    except _ParamError as exc:
-        return exc.response
-    return [schemas.ProductionDayResponse.model_validate(row)
-            for row in calendar_service.list_production_days(start, end)]
-
-
-@api_view(methods=("PATCH",), body=schemas.ProductionDayUpdate, module="tasks", level="write")
-def production_day_detail(request, target_date: str,
-                          data: schemas.ProductionDayUpdate):
-    try:
-        parsed = date.fromisoformat(target_date)
-    except ValueError:
-        return _param_error("target_date",
-                            "Input should be a valid date in YYYY-MM-DD format")
-    return schemas.ProductionDayResponse.model_validate(
-        calendar_service.update_production_day(parsed, day_type=data.day_type,
-                                               note=data.note))
 
 
 # ── /holding/projects — сводка по группе (блок H) ────────────────────────────

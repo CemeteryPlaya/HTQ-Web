@@ -194,6 +194,26 @@ def get_positions_brief(position_ids: list[int]) -> list[dict]:
     ]
 
 
+def list_positions_brief() -> list[dict]:
+    """Все должности ТЕКУЩЕЙ схемы компании — справочник для редактора
+    маршрута согласования.
+
+    Тот же набор ключей, что у ``get_positions_brief``, по всей схеме сразу.
+    Нужен signoff (БЗО, B8.1): этап маршрута дочерней компании вправе стоять
+    на должности холдинга, а кадровый API отдаёт должности только компании
+    запроса — signoff входит в схему холдинга (``use_company``) и спрашивает
+    её справочник здесь. Неактивные — тоже, с признаком: старый маршрут
+    должен показывать, на какой должности стоит, а не терять её.
+    """
+    require_service("hr")
+    rows = (Position.objects.select_related("department")
+            .order_by("title", "id")
+            .values("id", "title", "department__name", "is_active"))
+    return [{"id": row["id"], "title": row["title"],
+             "department_name": row["department__name"],
+             "is_active": row["is_active"]} for row in rows]
+
+
 def list_positions_hr_levels() -> list[dict]:
     """Должности текущей компании плюс их HR-уровень — для переноса ролей.
 
@@ -328,15 +348,23 @@ def legacy_key_nodes() -> dict[str, tuple[str, tuple[str, ...]]]:
     return {key: (node, tuple(flags)) for key, (node, flags) in KEY_TO_NODE.items()}
 
 
-def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
+def resolve_position_users(position_ids: list[int], *,
+                           on_date: date | None = None) -> dict[int, list[int]]:
     """Resolve HR positions to their current, usable platform accounts.
 
     The answer deliberately contains only employees who are active, not soft
     deleted, linked to an account, and whose account is active.  This keeps a
     route declarative ("financial controller") while a live approval task
     remains attributable to one concrete JWT identity.
+
+    Кроме держателей — временные исполнители должности, действующие на
+    ``on_date`` (по умолчанию сегодня; мастер-план БЗО, D-22): так этап
+    должности, чей держатель в отпуске или ещё не назначен, получает
+    исполнителя. Держатели идут первыми, исполнители — за ними, без дублей.
     """
     require_service("hr")
+    from apps.hr.services import acting_service
+
     ids = list(dict.fromkeys(position_ids))
     if not ids:
         return {}
@@ -350,15 +378,37 @@ def resolve_position_users(position_ids: list[int]) -> dict[int, list[int]]:
             position__is_active=True,
         ).values("position_id", "user_id")
     )
+    acting = acting_service.active_user_ids(ids, on_date or timezone.localdate())
+    candidates: dict[int, list[int]] = {position_id: [] for position_id in ids}
+    for row in rows:
+        candidates[row["position_id"]].append(row["user_id"])
+    for position_id, user_ids in acting.items():
+        candidates[position_id].extend(user_ids)
+
     briefs = {row["id"]: row for row in users.get_users_brief(
-        [row["user_id"] for row in rows]
+        [user_id for user_ids in candidates.values() for user_id in user_ids]
     )}
     resolved: dict[int, list[int]] = {position_id: [] for position_id in ids}
-    for row in rows:
-        brief = briefs.get(row["user_id"])
-        if brief and brief.get("is_active"):
-            resolved[row["position_id"]].append(row["user_id"])
+    for position_id, user_ids in candidates.items():
+        for user_id in dict.fromkeys(user_ids):
+            brief = briefs.get(user_id)
+            if brief and brief.get("is_active"):
+                resolved[position_id].append(user_id)
     return resolved
+
+
+def acting_holders(position_id: int, on_date: date) -> list[int]:
+    """Учётные записи временных исполнителей должности на дату (D-22) —
+    только активные, как у ``resolve_position_users``; держатели сюда не
+    входят. Пусто — на эту дату должность никто временно не исполняет."""
+    require_service("hr")
+    from apps.hr.services import acting_service
+
+    user_ids = acting_service.active_user_ids([position_id], on_date)[position_id]
+    if not user_ids:
+        return []
+    active = {row["id"] for row in users.get_users_brief(user_ids) if row.get("is_active")}
+    return [user_id for user_id in user_ids if user_id in active]
 
 
 def link_employee_user(employee_id: int, user_id: int) -> bool:
@@ -487,3 +537,33 @@ def participant_position() -> dict | None:
         return None
     return {"id": position.id, "title": position.title,
             "is_active": position.is_active}
+
+
+def positions_by_title(titles: list[str]) -> dict[str, int]:
+    """Активные должности компании по точному названию — для сидов и выдачи
+    ролей (``bpp_assign_roles``). Название неуникально — берётся первая по id."""
+    require_service("hr")
+    found: dict[str, int] = {}
+    for row in (Position.objects.filter(title__in=titles, is_active=True)
+                .order_by("id").values("id", "title")):
+        found.setdefault(row["title"], row["id"])
+    return found
+
+
+def mark_serving_subsidiaries(position_ids: list[int], *, dry_run: bool = False) -> dict[int, bool]:
+    """Выставить должностям признак ``serves_subsidiaries`` (роли должности
+    действуют во всех дочерних компаниях — блок C, ``bpp_group_directors``).
+
+    Идемпотентна: ``{id должности: True}`` — признак выставлен сейчас,
+    ``False`` — уже был. Неизвестные и неактивные должности в ответ не
+    попадают. ``dry_run`` — тот же ответ без записи. Работает в схеме
+    текущей компании (``use_company``)."""
+    require_service("hr")
+    ids = list(dict.fromkeys(position_ids))
+    rows = dict(Position.objects.filter(id__in=ids, is_active=True)
+                .values_list("id", "serves_subsidiaries"))
+    to_set = [pk for pk, already in rows.items() if not already]
+    if to_set and not dry_run:
+        Position.objects.filter(id__in=to_set).update(
+            serves_subsidiaries=True, updated_at=timezone.now())
+    return {pk: pk in set(to_set) for pk in rows}

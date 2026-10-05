@@ -11,6 +11,7 @@ django-redis==7.0.0
 PyJWT==2.12.0
 bcrypt==4.3.0
 httpx==0.28.1
+defusedxml==0.7.1
 django-storages[boto3]==1.14.6
 boto3==1.43.51
 uvicorn[standard]==0.34.0   # ASGI-процесс (SSE /api/requests/v1/stream + WS /ws/ messenger)
@@ -68,3 +69,15 @@ prometheus-client==0.25.0
 # openpyxl'а держит в памяти строку, а не лист целиком — книга заказчика
 # растёт, а команда всё равно идёт по ней одним проходом.
 openpyxl==3.1.5
+
+# ── bpp: печать документов в PDF (модуль БЗО, этап 2 A, задача 6) ────────
+# С 53.0 не тянет GTK/cairo/gdk-pixbuf — только Pango (с HarfBuzz) и
+# fontconfig через cffi/dlopen, поэтому в Dockerfile нужны лишь пакеты
+# Pango, harfbuzz-subset и шрифт DejaVu (см. комментарий там), а не весь
+# GTK-стек старых инструкций WeasyPrint. Актуальная стабильная на момент
+# пина — 70.0 (``pip index versions weasyprint``). На Windows-хосте без
+# системных библиотек Pango импорт падает ``OSError`` — печать импортирует
+# его лениво (services/core/printing.py), тесты PDF вне CI пропускаются с
+# явной причиной (apps/bpp/tests/test_printing.py), в Docker и CI
+# библиотеки ставятся явно.
+weasyprint==70.0

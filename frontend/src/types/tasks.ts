@@ -19,13 +19,39 @@ export type ContractorStatus = 'active' | 'suspended' | 'blacklisted' | 'archive
  */
 export type ContractorLevel = 'junior' | 'middle' | 'senior';
 
-/** Та же организация в «Договорах» — бейдж со ссылкой на карточку. */
+/** Та же организация в модуле «Закупки и оплаты» (A6.1) — бейдж со
+ *  ссылкой на карточку контрагента: наименование, БИН/ИИН, статус. */
 export interface ContractorCounterpartyRef {
-  id: number;
+  id: string;
   name: string;
-  bin_iin: string;
+  reg_number: string;
   status: string;
-  approval_state: string;
+}
+
+/** Строка поиска контрагента для формы партнёра
+ *  (`GET /tasks/v1/contractors/counterparty-search`): плюс то, что форма
+ *  подтягивает к себе при выборе. Только действующие. */
+export interface ContractorCounterpartyOption extends ContractorCounterpartyRef {
+  short_name: string;
+  country_code: string;
+  contact_person: string;
+  phone: string;
+  email: string;
+  legal_address: string;
+}
+
+/** Договор модуля «Закупки и оплаты» в строке привлечения. */
+export interface EngagementBppAgreementRef {
+  id: string;
+  number: string;
+  status: string;
+}
+
+/** Строка поиска договора модуля для выбора в привлечении. */
+export interface EngagementAgreementOption extends EngagementBppAgreementRef {
+  name: string;
+  ext_number: string;
+  ext_date: string | null;
 }
 
 /** Договор из «Договоров», по которому партнёр привлечён. */
@@ -48,11 +74,12 @@ export interface Contractor {
   address: string | null;
   notes: string;
   status: ContractorStatus;
-  /** Связь с контрагентом из «Договоров» (необязательна). */
-  counterparty_id: number | null;
-  /** `null` при заполненном `counterparty_id` — «Договоры» выключены или
-   *  контрагент удалён: связь есть, показать её нечем. */
-  counterparty: ContractorCounterpartyRef | null;
+  /** Связь с контрагентом модуля «Закупки и оплаты» (UUID, необязательна;
+   *  `null` в PATCH снимает связь). */
+  bpp_counterparty_id: string | null;
+  /** `null` при заполненном `bpp_counterparty_id` — модуль выключен: связь
+   *  есть, показать её нечем. */
+  bpp_counterparty: ContractorCounterpartyRef | null;
   /** См. API: количество активных работников и привлечений. */
   workers_count?: number;
   engagements_count?: number;
@@ -94,6 +121,9 @@ export interface ContractorEngagement {
   contract_no: string | null;
   agreement_id: number | null;
   agreement: EngagementAgreementRef | null;
+  /** Договор модуля «Закупки и оплаты» (UUID); номер `ДГ-…` ставит бэкенд. */
+  bpp_agreement_id: string | null;
+  bpp_agreement: EngagementBppAgreementRef | null;
   scope: string;
   start_date: string | null;
   end_date: string | null;
@@ -567,11 +597,41 @@ export interface Project {
    * производственному календарю, режим для офисных проектов.
    */
   use_production_calendar: boolean;
+  /**
+   * Связь с «Проектом» модуля БЗО (D-02: «Проект» главный). У связанной
+   * доски название, статус, сроки и владелец — копия «Проекта» и правятся
+   * только в «Проектах» (`/bpp/projects/<project_ref>`); сервер отвечает
+   * 409 на их правку через доску.
+   */
+  project_ref?: string;
+  project_code?: string | null;
+  linked?: boolean;
   task_count: number;
   done_count: number;
   progress: number;
   created_at: string;
   updated_at: string;
+}
+
+/** «Проект» БЗО, к которому ещё можно завести доску задач. */
+export interface ProjectLinkCandidate {
+  id: string;
+  code: string;
+  name: string;
+  /** Статус «Проекта»: `closed` у доски называется `completed`. */
+  status: 'active' | 'closed';
+  date_start: string | null;
+  date_end: string | null;
+  manager_user_id: number | null;
+}
+
+/** Тело создания доски: название, статус, сроки и владелец — из «Проекта». */
+export interface ProjectBoardCreate {
+  project_ref: string;
+  description?: string;
+  color?: string;
+  department_id?: number | null;
+  use_production_calendar?: boolean;
 }
 
 /* ---------- Task types (DB-backed) ---------- */
@@ -721,7 +781,8 @@ export type NotificationTargetType =
   | null;
 
 export interface Notification {
-  id: number;
+  /** UUID строки центра уведомлений (apps.notifications) — с переезда ленты. */
+  id: string;
   recipient: number;
   actor: number | null;
   actor_name: string | null;
@@ -730,7 +791,10 @@ export interface Notification {
   task: number | null;
   task_key: string | null;
   target_type: NotificationTargetType;
-  target_id: number | null;
+  /** Id цели любого типа — строкой (у документов модуля БЗО это UUID). */
+  target_id: string | null;
+  /** Ссылка, которую положил писатель: переход для целей без карты маршрутов. */
+  url?: string | null;
   is_read: boolean;
   read_at: string | null;
   created_at: string;

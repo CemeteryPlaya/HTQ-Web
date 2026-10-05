@@ -42,15 +42,16 @@ function LoginForm({ onLogin }) {
                 refresh: res?.data?.refresh,
             });
 
-            logUserAction({ action: 'login_success', meta: { login_id: loginId } });
+            logUserAction({ action: 'login_success' });
 
             if (onLogin) onLogin();
         } catch (err) {
             console.error('[LoginForm] Ошибка входа:', err);
             logUserAction({
                 action: 'login_failed',
+                // Логина в meta нет намеренно: телеметрия пишется в лог бэкенда
+                // (ingest_user_action), а в логе логинов быть не должно.
                 meta: {
-                    login_id: loginId,
                     status: err?.response?.status ?? err?.status ?? null,
                 },
             });
@@ -62,6 +63,25 @@ function LoginForm({ onLogin }) {
             }
 
             const status = err?.response?.status ?? err?.status;
+            if (status === 429) {
+                const seconds = Number(err?.response?.headers?.['retry-after']);
+                const hasWait = Number.isFinite(seconds) && seconds > 0;
+                if (err?.response?.data?.code === 'E-AUTH-LOCKED') {
+                    // Блокировка входа по логину: минуты — из Retry-After.
+                    setError(hasWait
+                        ? t('auth.loginLocked', {
+                            minutes: Math.ceil(seconds / 60),
+                            defaultValue: 'Слишком много неудачных попыток входа. Повторите через {{minutes}} мин.',
+                        })
+                        : t('auth.loginLockedLater',
+                            'Слишком много неудачных попыток входа. Повторите позже.'));
+                } else {
+                    // 429 без кода — лимит запросов nginx по IP, не блокировка логина.
+                    setError(t('auth.tooManyRequests',
+                        'Слишком много запросов. Повторите позже.'));
+                }
+                return;
+            }
             if (status === 401) {
                 setError('Неверный логин или пароль. Проверьте введённые данные.');
                 return;

@@ -15,21 +15,11 @@
 # Проверено 2026-09-02: все девять падают и на чистом дереве, без правок
 # наблюдаемости (сверено через git stash). С тех пор снято три строки: одна —
 # см. блок contracts, две кадровые (карточка Т-2 — тесты проверяли секцию
-# certs, снятую миграцией hr/0016) — сейчас в списке ШЕСТЬ nodeid.
-
-# ── signoff: кворум «достаточно одного» ──────────────────────────────────────
-# TODO: похоже на настоящий баг в движке, а не на устаревший тест — этап с
-# quorum=any не закрывается после первого одобрения. Если так и в проде,
-# согласования зря ждут всех участников этапа. Разбирать в первую очередь.
-apps/signoff/tests/test_engine.py::test_quorum_any_closes_the_stage_on_the_first_approval
-apps/signoff/tests/test_processes_api.py::test_quorum_any_clears_the_inbox_of_the_other_approver
-apps/signoff/tests/test_branching.py::test_inactive_approver_in_an_unrelated_branch_does_not_block
-
-# ── signoff: состояния завершённого процесса ─────────────────────────────────
-# TODO: вероятно та же первопричина, что выше (этап не закрывается, процесс не
-# переходит в терминальное состояние) — проверить после починки кворума.
-apps/signoff/tests/test_processes_api.py::test_a_skipped_approver_cannot_reopen_a_finished_process
-apps/signoff/tests/test_processes_api.py::test_returning_a_running_process_for_rework_is_409
+# certs, снятую миграцией hr/0016). 2026-09-30 сняты пять строк signoff: кворум
+# «any» с 21.08 считается по должности (engine._settle_stage), три теста ждали
+# старого «один на этап»; четвёртый ждал прежний текст RouteUnusable; пятый —
+# настоящая ошибка ручки rework (403 вместо 409 на идущем круге), исправлена.
+# Сейчас в списке ОДИН nodeid.
 
 # ── contracts ────────────────────────────────────────────────────────────────
 # TODO: про расчёт занятого бюджета — то есть про ДЕНЬГИ, и это ровно та

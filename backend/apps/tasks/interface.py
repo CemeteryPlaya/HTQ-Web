@@ -25,8 +25,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from django.utils import timezone
-
 from apps.core.services import require_service
 
 _BRIEF_FIELDS = ("id", "key", "summary", "status", "assignee_id",
@@ -132,6 +130,43 @@ def find_project_by_name(name: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def projects_without_ref() -> list[dict]:
+    """Доски без ссылки на «Проект» БЗО — для ``project_link_tasks``.
+
+    Поля доски — в словаре «Проекта» (``name``, ``status`` — ``active`` /
+    ``closed`` / ``archived``, ``date_start``, ``date_end``,
+    ``manager_user_id`` — владелец доски): команда заводит «Проект» из них,
+    и доска после связи повторяет его без правок. Своего кода у доски нет —
+    код «Проекта» команда выводит из ``id``.
+    """
+    require_service("tasks")
+    from .models import Project
+    from .services.project_link import STATUS_TO_PROJECT
+
+    return [{"id": row["id"], "name": row["name"], "status": STATUS_TO_PROJECT.get(row["status"], "active"),
+             "date_start": row["start_date"], "date_end": row["end_date"],
+             "manager_user_id": row["owner_id"]}
+            for row in Project.objects.filter(project_ref="").order_by("id")
+            .values("id", "name", "status", "start_date", "end_date", "owner_id")]
+
+
+def linked_project_refs() -> set[str]:
+    """Ключи «Проектов», у которых уже есть доска задач (одна на проект)."""
+    require_service("tasks")
+    from .models import Project
+
+    return set(Project.objects.exclude(project_ref="").values_list("project_ref", flat=True))
+
+
+def set_project_ref(project_id: int, project_ref: str) -> None:
+    """Записать ссылку доски на «Проект» БЗО (строка UUID, не FK). Поля доски
+    вызывающий уже перенёс в «Проект» (``projects_without_ref``)."""
+    require_service("tasks")
+    from .models import Project
+
+    Project.objects.filter(pk=project_id).update(project_ref=project_ref)
+
+
 class ContractorLinkConflict(Exception):
     """Связать партнёра с контрагентом нельзя: партнёр уже за другим
     контрагентом, БИН/ИИН пары расходится и т. п. Текст — для человека,
@@ -141,63 +176,102 @@ class ContractorLinkConflict(Exception):
     ``apps.tasks.services``, а ловить ему что-то нужно."""
 
 
-def get_contractors_by_counterparty(counterparty_ids) -> dict[int, dict]:
-    """Партнёры, связанные с контрагентами, — ``{counterparty_id: {id, name,
-    status}}``. Для карточки контрагента в «Договорах»: «работает у нас на
-    объектах как партнёр …». Батчем — реестр контрагентов показывает всех
-    разом. Контрагенты без партнёра в ответ не попадают."""
-    require_service("tasks")
-    from .models import Contractor
+def _bpp_counterparties_of(source_ids) -> dict[str, str]:
+    """``{ключ контрагента contracts строкой: ключ контрагента bpp}`` — по
+    связям переноса B6.1. Неперенесённых в ответе нет."""
+    from apps.bpp import interface as bpp
 
-    ids = sorted({int(cp_id) for cp_id in counterparty_ids if cp_id is not None})
+    from .services.contractor_service import MIGRATED_COUNTERPARTY
+
+    source_type, target_type = MIGRATED_COUNTERPARTY
+    out = {}
+    for source, targets in bpp.migrated_targets(source_type, source_ids).items():
+        for target in targets:
+            if target["target_type"] == target_type:
+                out[source] = target["target_id"]
+    return out
+
+
+def get_contractors_by_counterparty(source_ids) -> dict[int, dict]:
+    """Партнёры, связанные с контрагентами «Договоров», — ``{ключ
+    контрагента contracts: {id, name, status}}``. Для карточки контрагента в
+    «Договорах»: «работает у нас на объектах как партнёр …». Батчем — реестр
+    контрагентов показывает всех разом. Контрагенты без партнёра в ответ не
+    попадают.
+
+    С A6.1 партнёр ссылается на контрагента ``bpp``, поэтому контрагент
+    «Договоров» находит своего партнёра через связь переноса B6.1: не
+    перенесён — партнёра у него нет. Модуль ``bpp`` выключен —
+    ``ServiceDisabled`` (сосед его уже ловит)."""
+    require_service("tasks")
+    from .services import contractor_service
+
+    ids = sorted({int(source) for source in source_ids if source is not None})
     if not ids:
         return {}
-    return {
-        row["counterparty_id"]: {"id": row["id"], "name": row["name"],
-                                 "status": row["status"]}
-        for row in Contractor.objects.filter(counterparty_id__in=ids)
-        .values("id", "name", "status", "counterparty_id")
-    }
+    moved = _bpp_counterparties_of(ids)
+    partners = contractor_service.contractors_by_counterparty(moved.values())
+    out = {}
+    for source, key in moved.items():
+        row = partners.get(key)
+        if row is not None:
+            out[int(source)] = {"id": row.id, "name": row.name, "status": str(row.status)}
+    return out
 
 
-def link_contractor_to_counterparty(contractor_id: int,
-                                    counterparty_id: int) -> dict:
-    """Связать партнёра с контрагентом — для карточки контрагента, заведённой
-    «из партнёра». Зовётся в транзакции соседа: откатится создание
-    контрагента — откатится и связь.
+def link_contractor_to_counterparty(contractor_id: int, source_id: int) -> dict:
+    """Связать партнёра с контрагентом «Договоров» — для карточки
+    контрагента, заведённой «из партнёра». Зовётся в транзакции соседа:
+    откатится создание контрагента — откатится и связь.
 
-    Те же проверки, что у правки карточки партнёра (БИН/ИИН пары, один
-    партнёр на контрагента), плюс запрет молча перепривязать уже связанного
-    партнёра. Неизвестный партнёр — ``Http404``.
+    С A6.1 партнёр связывается с контрагентом ``bpp``, в который перенесён
+    контрагент «Договоров» (связь переноса B6.1). Неперенесённый — отказ
+    ``ContractorLinkConflict``: связывать партнёра теперь нужно на его
+    карточке, выбором контрагента «Закупок и оплат». Дальше — те же
+    проверки, что у правки карточки партнёра (БИН/ИИН пары, один партнёр на
+    контрагента), плюс запрет молча перепривязать уже связанного партнёра.
+    Неизвестный партнёр — ``Http404``.
     """
     require_service("tasks")
     from .services import contractor_service
 
+    target = _bpp_counterparties_of([source_id]).get(str(source_id))
+    if target is None:
+        raise ContractorLinkConflict(
+            "Контрагент не перенесён в модуль «Закупки и оплаты» — свяжите партнёра "
+            "с контрагентом на карточке партнёра")
     try:
-        row = contractor_service.link_counterparty(contractor_id, counterparty_id)
+        row = contractor_service.link_counterparty(contractor_id, target)
     except contractor_service.CounterpartyLinkConflict as exc:
         raise ContractorLinkConflict(str(exc)) from exc
     return {"id": row.id, "name": row.name, "status": str(row.status)}
 
 
-def unlink_counterparty(counterparty_id: int) -> None:
-    """Контрагента удалили — снять ссылку с партнёра, чтобы она не вела в
-    пустоту. Идемпотентно: нет связанного партнёра — ничего не делает."""
+def unlink_counterparty(source_id: int) -> None:
+    """Контрагента «Договоров» удалили. С A6.1 партнёр ссылается на
+    контрагента ``bpp``, а не «Договоров», поэтому снимать нечего: удаление
+    старой карточки контрагента ``bpp`` не трогает. Функция остаётся ради
+    вызова из ``apps.contracts`` (раздел заморожен, A6.2) — идемпотентно и
+    без действия."""
     require_service("tasks")
-    from .services import contractor_service
-
-    contractor_service.unlink_counterparty(counterparty_id)
+    del source_id
 
 
 def push_notification(*, recipient_id: int, verb: str,
                       actor_id: int | None = None,
                       actor_avatar_url: str | None = None,
                       target_type: str | None = None,
-                      target_id: int | None = None) -> dict | None:
+                      target_id: int | str | None = None) -> dict | None:
     """Создать уведомление в колокольчике от имени соседней аппки.
 
-    Замена подписчику ``notify_sync``: messenger («вам написали») и mail
-    («новое письмо») зовут это вместо публикации в Redis.
+    Замена подписчику ``notify_sync``: messenger («вам написали»), mail
+    («новое письмо»), конференции и кадры зовут это вместо публикации в Redis.
+
+    С задачи A1.5 модуля БЗО строка пишется в центр уведомлений
+    (``apps.notifications``, public), а не в ``tasks.Notification``: сигнатура
+    и окно дедупликации прежние, компания — из текущего контекста (без
+    контекста уведомление общее). Только колокольчик (``deliver=False``):
+    письмо о каждом сообщении было бы новым поведением, а не переездом.
 
     Идемпотентно в пределах ``_DEDUPE_WINDOW``: если такое же уведомление
     этому получателю уже создано за последние 5 минут — возвращается
@@ -205,26 +279,38 @@ def push_notification(*, recipient_id: int, verb: str,
 
     ``actor_avatar_url`` сохраняется снимком на момент записи: это
     точка-во-времени, и последующая смена аватара не должна переписывать
-    историю (см. ``apps.tasks.models.Notification``).
+    историю.
+    """
+    require_service("tasks")
+    from apps.notifications import interface as notifications
+    from htqweb.tenancy.context import current_company_or_none
+
+    ids = notifications.notify(
+        recipients=[recipient_id], event=f"tasks.{target_type or 'generic'}", title=verb,
+        company_slug=current_company_or_none(), target_type=target_type or "",
+        target_id=str(target_id) if target_id is not None else "", actor_id=actor_id,
+        actor_avatar_url=actor_avatar_url, deliver=False,
+        dedupe_window_seconds=int(_DEDUPE_WINDOW.total_seconds()))
+    if not ids:
+        return None
+    return {"id": ids[0], "recipient_id": recipient_id, "verb": verb,
+            "target_type": target_type, "target_id": target_id}
+
+
+def legacy_notifications() -> list[dict]:
+    """Все строки старой ленты ``tasks.Notification`` текущей компании — для
+    переноса в центр уведомлений (``manage.py notifications_import_tasks``).
+
+    Ключи: ``id, recipient_id, actor_id, verb, actor_avatar_url, target_type,
+    target_id, task_id, is_read, read_at, created_at``. После переноса на бою
+    модель удаляется отдельной contract-миграцией.
     """
     require_service("tasks")
     from .models import Notification
 
-    since = timezone.now() - _DEDUPE_WINDOW
-    if Notification.objects.filter(
-            recipient_id=recipient_id, actor_id=actor_id, verb=verb,
-            target_type=target_type, target_id=target_id,
-            created_at__gte=since).exists():
-        return None
-
-    row = Notification.objects.create(
-        recipient_id=recipient_id, actor_id=actor_id, verb=verb,
-        actor_avatar_url=actor_avatar_url, target_type=target_type,
-        target_id=target_id,
-    )
-    return {"id": row.id, "recipient_id": row.recipient_id, "verb": row.verb,
-            "target_type": row.target_type, "target_id": row.target_id,
-            "created_at": row.created_at}
+    return list(Notification.objects.order_by("id").values(
+        "id", "recipient_id", "actor_id", "verb", "actor_avatar_url", "target_type",
+        "target_id", "task_id", "is_read", "read_at", "created_at"))
 
 
 def _conference_payload(event, invitee_ids: list[int]) -> dict:

@@ -116,12 +116,10 @@ def test_login_updates_last_login(active_user):
 
 
 @pytest.mark.django_db
-def test_login_wrong_password_inactive_status_still_invalid_credentials(db):
-    """auth_service.authenticate checks status BEFORE password (ported
-    verbatim from the FastAPI original's obtain_token — see the docstring
-    on authenticate()). So a non-ACTIVE user gets 'Account is not activated'
-    regardless of whether the submitted password happens to be right OR
-    wrong — the status check short-circuits before check_password runs."""
+def test_login_wrong_password_inactive_status_is_invalid_credentials(db):
+    """D-S7-3: статус проверяется ПОСЛЕ пароля — неактивированная учётка с
+    неверным паролем отвечает так же, как неверный пароль (не оракул логина).
+    «Не активирована» слышит только тот, кто знает пароль."""
     u = User.objects.create(username="pending2", email="pending2@htq.test",
                             password="x", status=UserStatus.PENDING)
     u.set_password("S3cret!")
@@ -130,7 +128,7 @@ def test_login_wrong_password_inactive_status_still_invalid_credentials(db):
         "email": "pending2@htq.test", "password": "totally-wrong",
     }, content_type="application/json")
     assert resp.status_code == 401
-    assert resp.json() == {"detail": "Account is not activated"}
+    assert resp.json() == {"detail": "Invalid credentials"}
 
 
 @pytest.mark.django_db

@@ -352,7 +352,8 @@ def validate_fields(fields) -> list[dict]:
 # Отбор этапов
 # ═══════════════════════════════════════════════════════════════════════
 
-def select_stages(stages: Iterable, facts: dict) -> list[Selected]:
+def select_stages(stages: Iterable, facts: dict, *,
+                  skip_unmatched: bool = False) -> list[Selected]:
     """Какие этапы маршрута участвуют в процессе для объекта с такими фактами.
 
     Группа (этапы с одинаковым ``order``) разбирается так:
@@ -361,7 +362,10 @@ def select_stages(stages: Iterable, facts: dict) -> list[Selected]:
     2. из условных участвуют те, чьё условие сошлось;
     3. если не сошлось НИ ОДНО условное — вместо них берутся этапы «иначе»;
     4. если после этого группа пуста — ``NoBranchMatched`` (см. докстринг
-       модуля о том, почему это ошибка, а не пропуск группы).
+       модуля о том, почему это ошибка, а не пропуск группы). Исключение —
+       флаг маршрута ``skip_unmatched_groups`` (``skip_unmatched=True``,
+       D-18): там пустая группа — законный исход («без изменения суммы —
+       без этапов»), и она пропускается.
 
     Этап с непустым условием считается условным, даже если у него взведён
     ``is_fallback``: сочетание бессмысленно, ``route_service`` его не
@@ -386,6 +390,8 @@ def select_stages(stages: Iterable, facts: dict) -> list[Selected]:
             matched, matched_by = fallback, MATCH_FALLBACK
 
         if not always and not matched:
+            if skip_unmatched:
+                continue
             raise NoBranchMatched(order, facts)
 
         selected.extend(Selected(stage, MATCH_ALWAYS) for stage in always)

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from apps.companies.models import Company, CompanyModule
-from apps.core.models import KNOWN_SERVICES
+from apps.core.models import KNOWN_SERVICES, KNOWN_SUBMODULES
 from apps.core.services import CORE_MODULES
 
 
@@ -37,17 +37,26 @@ def _row(app_label: str, stored: CompanyModule | None) -> dict:
         "enabled": True if stored is None else stored.enabled,
         "message": "" if stored is None else stored.message,
         "is_core": app_label in CORE_MODULES,
+        # Подмодуль (apps.core.models.KNOWN_SUBMODULES) гаснет вместе с
+        # родителем — экрану нужно знать, под чьим рубильником он стоит.
+        "parent": KNOWN_SUBMODULES.get(app_label),
     }
 
 
 def list_modules(company: Company) -> list[dict]:
+    """Модули платформы; подмодули — сразу под своим родителем."""
     stored = {m.app_label: m for m in company.modules.all()}
-    return [_row(name, stored.get(name)) for name in KNOWN_SERVICES]
+    rows = []
+    for name in KNOWN_SERVICES:
+        rows.append(_row(name, stored.get(name)))
+        rows.extend(_row(sub, stored.get(sub))
+                    for sub, parent in KNOWN_SUBMODULES.items() if parent == name)
+    return rows
 
 
 def set_module(company: Company, app_label: str, *, enabled: bool,
                message: str | None = None) -> dict:
-    if app_label not in KNOWN_SERVICES:
+    if app_label not in KNOWN_SERVICES and app_label not in KNOWN_SUBMODULES:
         raise UnknownModule(app_label)
     if app_label in CORE_MODULES:
         raise CoreModuleLocked(app_label)

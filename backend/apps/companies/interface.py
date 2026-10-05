@@ -151,6 +151,42 @@ def is_holding(slug: str) -> bool:
     return bool(company and company["kind"] == CompanyKind.HOLDING)
 
 
+def ancestor_slugs(slug: str, *, include_archived: bool = False) -> list[str]:
+    """Компании ВЫШЕ ``slug`` по дереву владения, ближайшая первой.
+    Неизвестный слаг и компания без родителя — ``[]``.
+
+    Единственное правило обхода вверх на платформу (сведение 04.10 двух
+    одноимённых функций — B8.1 Руслана и задачи 9.4):
+
+    * по умолчанию — только ДЕЙСТВУЮЩИЕ: архивная компания в ответ не
+      попадает, но обход идёт через неё дальше (выше может стоять
+      действующий холдинг). Так её зовёт согласование между компаниями
+      (B8.1: этап маршрута дочерней вправе ссылаться на должность своей или
+      вышестоящей компании) и ``bpp_configure_routes``;
+    * ``include_archived=True`` — все предки, решение «чьи роли действуют»
+      принимает вызывающий: так её зовёт наследование ролей обслуживающих
+      должностей (``access.services.inheritance.ancestors_of``).
+
+    Цикл в данных (``Company.parent`` — self-FK без проверки ацикличности,
+    цикл заводится прямым ``UPDATE``) обрывается на уже пройденном слаге —
+    разрешение прав идёт на каждом гейтуемом запросе и не должно виснуть.
+    Каждая ступень — ``get_company`` (кэш 5 с).
+    """
+    out: list[str] = []
+    seen = {slug}
+    row = get_company(slug)
+    cursor = row.get("parent_slug") if row else None
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        row = get_company(cursor)
+        if include_archived or (row is not None and row["is_active"]):
+            out.append(cursor)
+        if row is None:
+            break
+        cursor = row.get("parent_slug")
+    return out
+
+
 def active_company_slugs(*, fresh: bool = False) -> list[str]:
     """Slug'и всех действующих компаний, в алфавитном порядке.
 
@@ -323,3 +359,53 @@ def module_enabled(slug: str, app_label: str) -> tuple[bool, str]:
         return (row["enabled"], row["message"] if not row["enabled"] else "")
 
     return _cached(f"company:module:{slug}:{app_label}", produce)
+
+
+def descendant_slugs(slug: str) -> list[str]:
+    """Слаги ДЕЙСТВУЮЩИХ компаний ниже ``slug`` по дереву владения, по
+    алфавиту (любой глубины; цикл в ``parent`` обход не вешает). Дерево
+    строится по всем компаниям: архивный промежуточный предок обход не
+    обрывает (роли через него наследуются, ``access.services.inheritance``),
+    фильтр «действующая» — только к результату."""
+    parents = dict(Company.objects.values_list("slug", "parent__slug"))
+    active = set(active_company_slugs(fresh=True))
+    below = []
+    for item in parents:
+        if item == slug or item not in active:
+            continue
+        seen = {item}
+        cursor = parents.get(item)
+        while cursor is not None and cursor not in seen:
+            if cursor == slug:
+                below.append(item)
+                break
+            seen.add(cursor)
+            cursor = parents.get(cursor)
+    return sorted(below)
+
+
+def grant_membership(slug: str, user_id: int) -> bool:
+    """Членство пользователя в компании (``True`` — создано, ``False`` —
+    уже было). Та же точка логики, что у ``company_grant`` (с базовой ролью).
+    Неизвестный слаг — ``LookupError``."""
+    from apps.companies.services import membership_service
+
+    company = Company.objects.filter(slug=slug).first()
+    if company is None:
+        raise LookupError(f"Компания {slug!r} не найдена")
+    created = membership_service.grant_membership(company, user_id)
+    try:  # кэш «в каких компаниях» живёт 5 с; недоступный Redis не помеха
+        cache.delete(f"company:member:{user_id}")
+    except Exception:
+        logger.warning("cache.delete failed for member %s", user_id, exc_info=True)
+    return created
+
+
+def missing_member_ids(slug: str, user_ids) -> list[int]:
+    """Из ``user_ids`` — те, у кого ещё нет членства в компании ``slug``."""
+    from apps.companies.services import membership_service
+
+    company = Company.objects.filter(slug=slug).first()
+    if company is None:
+        return sorted(set(user_ids))
+    return membership_service.user_ids_missing_membership(company, user_ids)

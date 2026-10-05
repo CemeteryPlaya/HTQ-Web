@@ -6,6 +6,7 @@
 только этот модуль и объявления в views/urls.
 """
 import logging
+import uuid
 from functools import wraps
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
@@ -18,11 +19,39 @@ from pydantic import BaseModel, ValidationError
 from apps.core.services import ServiceDisabled, disabled_payload
 from htqweb.authn.jwt import AuthError, decode_token
 from htqweb.authn.rbac import require_admin
+from htqweb import idempotency
+from htqweb.errors import DomainError
 from htqweb.tenancy import archive
+
+
+def uuid_or_404(value) -> uuid.UUID:
+    """UUID из пути запроса, а неверный — 404, как несуществующий объект.
+
+    Без этого фильтр ORM по UUID-полю падает ``ValidationError`` и ручка
+    отвечает 500 на опечатку в адресе.
+    """
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise Http404("Не найдено") from None
 
 
 def json_error(detail, status: int) -> JsonResponse:
     return JsonResponse({"detail": detail}, status=status)
+
+
+class ApiError(Exception):
+    """Отказ, который сам знает свой HTTP-статус и текст для человека.
+
+    ``api_view`` отдаёт его как ``{"detail": detail}`` с ``status_code``, а не
+    общим 500. Нужен там, где отказ рождается глубоко в соседе и проходит
+    сквозь чужую вьюху: отказ пайплайна загрузки media (размер, формат,
+    антивирус — ``UploadValidationError``) из вьюхи договорного контура без
+    этого становился «Internal Server Error». Наследник задаёт оба атрибута.
+    """
+
+    status_code: int = 400
+    detail: str = ""
 
 
 def validation_detail(exc: ValidationError) -> list[dict]:
@@ -72,9 +101,22 @@ def _authenticate_jwt(request):
 _AUTHENTICATORS = {"jwt": _authenticate_jwt}
 
 
+def _to_response(result, status: int):
+    if isinstance(result, BaseModel):
+        return JsonResponse(result.model_dump(mode="json"), status=status)
+    if isinstance(result, list) and result and all(isinstance(item, BaseModel) for item in result):
+        return JsonResponse(
+            [item.model_dump(mode="json") for item in result], safe=False, status=status,
+        )
+    if isinstance(result, (dict, list)):
+        return JsonResponse(result, safe=False, status=status)
+    return result  # готовый HttpResponse (файлы, 302, кастомные статусы) — status игнорируется
+
+
 def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
             status: int = 200, admin: bool = False,
-            module: str | None = None, level: str = "read"):
+            module: str | None = None, level: str = "read",
+            idempotent: bool = False):
     if admin and auth is None:
         # admin=True checks request.token, which only an authenticator
         # populates — auth=None always sets it to None (see below), so the
@@ -179,22 +221,40 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                             and request.path not in archive.TOKEN_PATHS):
                         return archive.not_found_response()
                     request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
-                if body is not None:
-                    try:
-                        kwargs["data"] = body.model_validate_json(request.body or b"{}")
-                    except ValidationError as exc:
-                        return JsonResponse({"detail": validation_detail(exc)},
-                                            status=422)
-                result = fn(request, *args, **kwargs)
-                if isinstance(result, BaseModel):
-                    return JsonResponse(result.model_dump(mode="json"), status=status)
-                if isinstance(result, list) and result and all(isinstance(item, BaseModel) for item in result):
-                    return JsonResponse(
-                        [item.model_dump(mode="json") for item in result], safe=False, status=status,
-                    )
-                if isinstance(result, (dict, list)):
-                    return JsonResponse(result, safe=False, status=status)
-                return result  # готовый HttpResponse (файлы, 302, кастомные статусы) — status игнорируется
+                # Повтор записи с тем же Idempotency-Key отдаёт первый ответ
+                # (htqweb/idempotency.py). Стоит после авторизации: ключ кэша
+                # включает пользователя и компанию.
+                idem_key = idempotency.key_of(request) if idempotent else None
+                if idem_key is not None:
+                    replayed = idempotency.replay(request, idem_key)
+                    if replayed is not None:
+                        return replayed
+                    idempotency.acquire(request, idem_key)
+                    # Повторная проверка ПОСЛЕ захвата: первый запрос мог
+                    # сохранить ответ и снять замок между replay() и acquire(),
+                    # и тогда действие выполнилось бы второй раз.
+                    replayed = idempotency.replay(request, idem_key)
+                    if replayed is not None:
+                        idempotency.release(request, idem_key)
+                        return replayed
+                try:
+                    if body is not None:
+                        try:
+                            kwargs["data"] = body.model_validate_json(request.body or b"{}")
+                        except ValidationError as exc:
+                            return JsonResponse({"detail": validation_detail(exc)},
+                                                status=422)
+                    response = _to_response(fn(request, *args, **kwargs), status)
+                    if idem_key is not None:
+                        idempotency.remember(request, idem_key, response)
+                    return response
+                finally:
+                    if idem_key is not None:
+                        idempotency.release(request, idem_key)
+            except DomainError as exc:
+                return JsonResponse(exc.payload(), status=exc.status)
+            except ApiError as exc:
+                return json_error(exc.detail or str(exc), exc.status_code)
             except ServiceDisabled as exc:
                 # require_service() у выключенного соседа — та же 503-envelope,
                 # что и внешний HTTP-гейт (ServiceGateMiddleware), иначе

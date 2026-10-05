@@ -107,6 +107,28 @@ describe('RolePermissionMatrix', () => {
     expect(select.options[0].text).toContain('видит');
   });
 
+  it('узел «все документы» без строки — «нет доступа», а не наследование', () => {
+    const registry: AccessFunctionsResponse = {
+      ...REGISTRY,
+      tree: [{
+        path: 'bpp', title: 'Закупки', kind: 'module', flags: ['view', 'create'],
+        presets: ['none', 'view', 'create'], children: [{
+          path: 'bpp.requests', title: 'Заявки', kind: 'function', flags: ['view', 'create'],
+          presets: ['none', 'view', 'create'], children: [{
+            path: 'bpp.requests.all', title: 'Все заявки', kind: 'field', flags: ['view'],
+            presets: ['none', 'view'], explicit_only: true, children: [],
+          }],
+        }],
+      }],
+    };
+    render(<RolePermissionMatrix registry={registry} onChange={vi.fn()}
+      value={[{ node: 'bpp.requests', flags: ['view', 'create'], preset: 'create' }]} />);
+
+    const select = screen.getByLabelText('Все заявки: Глубина') as HTMLSelectElement;
+    expect(select.options[0].text).toBe('нет доступа (выдаётся только явно)');
+    expect(select.options[0].text).not.toContain('наследует');
+  });
+
   it('явный запрет на поле сохраняется строкой, а не отсутствием строки', async () => {
     const onChange = renderMatrix([{ node: 'hr', flags: ['view'], preset: 'view' }]);
 

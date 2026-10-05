@@ -39,6 +39,12 @@ export const ACCESS_MODULES: readonly AccessModule[] = [
   { name: 'users', titleKey: 'access.modules.users', fallback: 'Учётные записи' },
   { name: 'companies', titleKey: 'access.modules.companies', fallback: 'Компании группы' },
   { name: 'access', titleKey: 'access.modules.access', fallback: 'Роли и права' },
+  { name: 'files', titleKey: 'access.modules.files', fallback: 'Файлы документов' },
+  // Модуль БЗО и его платформенные аппки (мастер-план §2.1).
+  { name: 'bpp', titleKey: 'access.modules.bpp', fallback: 'Закупки и оплаты' },
+  { name: 'project', titleKey: 'access.modules.project', fallback: 'Проекты' },
+  { name: 'refdata', titleKey: 'access.modules.refdata', fallback: 'Справочники' },
+  { name: 'notifications', titleKey: 'access.modules.notifications', fallback: 'Уведомления' },
 ] as const;
 
 export const MODULE_NAMES: readonly string[] = ACCESS_MODULES.map((m) => m.name);

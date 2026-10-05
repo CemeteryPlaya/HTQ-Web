@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { contractsApi } from '@/api/contracts';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { useHRLevel } from '@/hooks/useHRLevel';
 
 const ACCOUNTANT_PERMISSION = 'contracts.advance_payment.record_payment';
@@ -30,7 +31,8 @@ const AdvancePaymentDetail = () => {
   const permissions = usePermissions();
   const { hasPerm } = useHRLevel();
   const isAdmin = permissions.atLeast('contracts', 'admin');
-  const canRecord = isAdmin || hasPerm(ACCOUNTANT_PERMISSION);
+  const { frozen } = useContractsFreeze(); // A6.2: архив — без правки
+  const canRecord = !frozen && (isAdmin || hasPerm(ACCOUNTANT_PERMISSION));
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [postingNumber, setPostingNumber] = useState('');
