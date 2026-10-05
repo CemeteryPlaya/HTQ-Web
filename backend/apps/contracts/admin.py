@@ -17,6 +17,7 @@
 from django.contrib import admin
 
 from htqweb.admin_gate import ServiceGatedAdminMixin
+from htqweb.tenancy.context import current_company_or_none
 
 from .models import (
     AccountableFundsRequest,
@@ -35,16 +36,46 @@ from .models import (
     Program,
 )
 from .services import budget_calc
+from .services import freeze
+
+
+class FrozenReadOnlyAdminMixin:
+    """Замороженный раздел (A6.2) в django-admin — только чтение.
+
+    Запись в ``/api/contracts/`` закрывает middleware, но django-admin —
+    вторая дверь к тем же таблицам. Спрашивается только в контексте
+    компании: на голом домене ``search_path`` — ``public``, где тенантных
+    таблиц после ``tenancy_bootstrap`` нет, и запрос признака уронил бы
+    главную страницу админки. Признак считается раз на запрос — главная
+    страница спрашивает права у каждой модели раздела.
+    """
+
+    def _frozen(self, request) -> bool:
+        if current_company_or_none() is None:
+            return False
+        cached = getattr(request, "_contracts_frozen", None)
+        if cached is None:
+            cached = request._contracts_frozen = freeze.is_frozen()
+        return cached
+
+    def has_add_permission(self, request, *args) -> bool:
+        return not self._frozen(request) and super().has_add_permission(request, *args)
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return not self._frozen(request) and super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return not self._frozen(request) and super().has_delete_permission(request, obj)
 
 
 @admin.register(Country)
-class CountryAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class CountryAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "iso_code")
     search_fields = ("name", "iso_code")
 
 
 @admin.register(Program)
-class ProgramAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class ProgramAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "code", "name", "expense_item", "is_active")
     list_filter = ("is_active",)
     search_fields = ("name", "expense_item", "code")
@@ -52,7 +83,7 @@ class ProgramAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(Administrator)
-class AdministratorAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class AdministratorAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "project_name", "country", "user_id", "is_active")
     list_filter = ("is_active", "country")
     search_fields = ("project_name", "country__name")
@@ -79,7 +110,7 @@ class BudgetLineInline(admin.TabularInline):
 
 
 @admin.register(Budget)
-class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class BudgetAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "period_year", "currency",
                     "allocated_display", "committed_display", "remaining_display",
                     "status", "approval_state")
@@ -119,7 +150,7 @@ class BudgetAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(Counterparty)
-class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class CounterpartyAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "bin_iin", "country", "vat", "contact_name",
                     "phone", "status", "approval_state")
     list_filter = ("status", "approval_state", "country", "vat")
@@ -130,7 +161,7 @@ class CounterpartyAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(Agreement)
-class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class AgreementAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "number", "name", "counterparty", "budget_line",
                     "amount", "currency", "payment_type", "advance_share",
                     "kind", "contract_type", "status",
@@ -155,7 +186,7 @@ class AgreementAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(Invoice)
-class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class InvoiceAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "name", "counterparty", "budget_line", "amount",
                     "currency", "status", "approval_state", "document_date",
                     "created_at")
@@ -175,7 +206,7 @@ class InvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(AdvancePayment)
-class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class AdvancePaymentAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "agreement", "amount", "status", "approval_state", "posting_number",
                     "paid_by", "paid_at", "created_at")
     list_filter = ("status", "approval_state", "agreement__budget_line__budget__period_year")
@@ -186,7 +217,7 @@ class AdvancePaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(AccountableFundsRequest)
-class AccountableFundsRequestAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class AccountableFundsRequestAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "budget_line", "administrator", "program", "amount", "goal", "status",
                     "approval_state", "accounting_paid", "accountable_user_id")
     list_filter = ("status", "approval_state", "accounting_paid", "budget_line__budget__administrator", "budget_line__program")
@@ -198,7 +229,7 @@ class AccountableFundsRequestAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(AdvanceReport)
-class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class AdvanceReportAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "accountable_funds_request", "expense_name", "amount",
                     "approval_state", "created_by", "created_at")
     list_filter = ("approval_state",)
@@ -209,7 +240,7 @@ class AdvanceReportAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(ContractPayment)
-class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class ContractPaymentAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
                     "approval_state", "document_date", "posting_number",
                     "paid_by", "paid_at")
@@ -222,7 +253,7 @@ class ContractPaymentAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(CompletionAct)
-class CompletionActAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class CompletionActAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
                     "approval_state", "posting_number", "paid_by", "paid_at")
     list_filter = ("status", "approval_state", "administrator")
@@ -233,7 +264,7 @@ class CompletionActAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(GoodsInvoice)
-class GoodsInvoiceAdmin(ServiceGatedAdminMixin, admin.ModelAdmin):
+class GoodsInvoiceAdmin(FrozenReadOnlyAdminMixin, ServiceGatedAdminMixin, admin.ModelAdmin):
     list_display = ("id", "administrator", "agreement", "amount", "status",
                     "approval_state", "posting_number", "paid_by", "paid_at")
     list_filter = ("status", "approval_state", "administrator")

@@ -35,6 +35,15 @@
 целиком переехал в ``manage.py tenancy_bootstrap`` (для первой компании) и
 ``manage.py migrate_companies`` (для всех остальных случаев) — они никогда
 больше не мигрируются как часть общего ``public``.
+
+Отсюда же — периодические задачи тенантных аппок. Их заводят data-миграции
+``hr``/``tasks``/``signoff``/``bpp`` в ``django_celery_beat`` (``public``), а
+эти миграции не выполняет ни эта команда (тенантные пропущены), ни
+``migrate_companies`` (помечает применёнными без выполнения —
+``SHARED_EFFECT_MIGRATIONS``). Поэтому после общих аппок (``django_celery_beat``
+среди них, его таблицы к этому моменту есть) команда зовёт
+``apps.core.periodic_tasks.ensure_periodic_tasks``: недостающие строки
+расписания заводятся, существующие не трогаются.
 """
 
 from django.conf import settings
@@ -42,6 +51,8 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection
 from django.db.migrations.loader import MigrationLoader
+
+from apps.core.periodic_tasks import ensure_periodic_tasks
 
 
 class Command(BaseCommand):
@@ -67,4 +78,12 @@ class Command(BaseCommand):
             f"Смигрировано общих аппок: {len(shared_apps)}. Тенантные "
             f"({', '.join(sorted(tenant_apps))}) пропущены — для них "
             "manage.py migrate_companies."
+        ))
+
+        periodic = ensure_periodic_tasks(stdout=self.stdout)
+        self.stdout.write(self.style.SUCCESS(
+            f"Периодические задачи тенантных аппок: заведено "
+            f"{len(periodic['created'])}, переведено на диспетчера "
+            f"{len(periodic['repaired'])}, уже были "
+            f"{len(periodic['kept'])}."
         ))

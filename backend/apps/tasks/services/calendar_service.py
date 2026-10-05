@@ -31,13 +31,15 @@ from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 
+from apps.notifications import interface as notifications
+from apps.refdata import interface as refdata
+from htqweb.tenancy.context import current_company_or_none
+
 from ..models import (
-    CalendarEvent, CalendarEventParticipant, EventException, Notification,
-    ProductionDay, Task,
+    CalendarEvent, CalendarEventParticipant, EventException,
+    Task,
 )
 from . import hydration
-from .production_calendar import (WORKING_DAY_TYPES, base_day_type, base_note,
-                                  iter_calendar_days)
 
 MAX_RANGE_DAYS = 370
 
@@ -283,12 +285,11 @@ def _notify_invitees(event: CalendarEvent, *, actor_id: int | None,
     title = (event.title or "")[:140]
     prefix = _VERB_TEXT.get(verb)
     readable = f"{prefix} «{title}»" if prefix else f"{verb}: «{title}»"
-    Notification.objects.bulk_create([
-        Notification(recipient_id=uid, actor_id=actor_id, task=None,
-                     target_type="calendar_event", target_id=event.id,
-                     verb=readable)
-        for uid in sorted(targets)
-    ])
+    # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
+    notifications.notify(
+        recipients=sorted(targets), event=f"tasks.{verb}", title=readable,
+        company_slug=current_company_or_none(), target_type="calendar_event",
+        target_id=str(event.id), actor_id=actor_id, deliver=False)
 
 
 def _sync_is_global(payload: dict) -> None:
@@ -429,114 +430,23 @@ def delete_exception(exception_id: int) -> None:
     row.delete()
 
 
-# ── production calendar ─────────────────────────────────────────────────
-
-def _overrides(start: dt.date, end: dt.date) -> dict[dt.date, ProductionDay]:
-    return {day.date: day for day in
-            ProductionDay.objects.filter(date__gte=start, date__lte=end)}
-
-
-def list_production_days(start: dt.date, end: dt.date) -> list[dict]:
-    """Generated baseline (KZ weekends + holidays of any year) with stored rows
-    acting as manual overrides.
-
-    Overrides are fetched from 1 January so the running working-day counter
-    is correct for the first requested day, not just from ``start``.
-    """
-    return list(iter_calendar_days(start, end,
-                                   _overrides(dt.date(start.year, 1, 1), end)))
-
-
-@transaction.atomic
-def update_production_day(target_date: dt.date, *, day_type: str,
-                          note: str | None) -> ProductionDay:
-    day = ProductionDay.objects.filter(date=target_date).first()
-    if day is None:
-        day = ProductionDay(date=target_date, working_days_since_epoch=0)
-    day.day_type = day_type
-    # An explicit note wins; otherwise the holiday's own name is restored.
-    day.note = note if note is not None else base_note(target_date)
-    day.save()
-
-    _recalculate_year(target_date.year)
-    day.refresh_from_db()
-    return day
-
-
-def _recalculate_year(year: int) -> None:
-    """Re-stamp ``working_days_since_epoch`` on every stored row of the year.
-
-    Flipping one day between working and holiday shifts the running counter
-    for every later stored row, and that counter is what
-    ``due_date_from_working_days`` reads — leaving it stale would silently
-    mis-compute deadlines.
-    """
-    start, end = dt.date(year, 1, 1), dt.date(year, 12, 31)
-    overrides = _overrides(start, end)
-    if not overrides:
-        return
-    updated = []
-    for item in iter_calendar_days(start, end, overrides):
-        stored = overrides.get(item["date"])
-        if stored is not None:
-            stored.working_days_since_epoch = int(
-                item["working_days_since_epoch"])
-            updated.append(stored)
-    ProductionDay.objects.bulk_update(updated, ["working_days_since_epoch"])
-
-
-def default_day_type(target_date: dt.date) -> str:
-    return base_day_type(target_date)
-
+# ── рабочие дни (производственный календарь — в refdata, A7.1) ──────────
 
 def working_days_between(start: dt.date, end: dt.date) -> int | None:
-    """Сколько рабочих дней в отрезке ``start..end`` включительно.
-
-    Живёт здесь, а не в ``sequence_service`` рядом с
-    ``due_date_from_working_days``, по одной причине: ``ProductionDay`` — это
-    таблица ПЕРЕОПРЕДЕЛЕНИЙ, а не календарь. Базовый календарь считается на
-    лету (``iter_calendar_days``), и в обычной базе строк нет вообще. Функция,
-    считающая по таблице, вернула бы «календаря нет» почти всегда; считать
-    надо тем же способом, что и ``list_production_days`` выше.
-
-    Разность ``working_days_since_epoch`` тоже не годится, хотя была бы
-    дешевле: счётчик сбрасывается 1 января (см. докстринг
-    ``production_calendar``), и на отрезке через Новый год дал бы
-    отрицательное число. Роудмап живёт месяцами, такие отрезки для него —
-    норма.
-
-    ``None`` для перевёрнутого отрезка. Он реален: фактические границы
-    роудмапа это ``min(start_date)`` и ``max(due_date)`` по его задачам, а у
-    задачи может быть заполнено только одно из двух полей.
-    """
-    if start is None or end is None or end < start:
-        return None
-    overrides = _overrides(dt.date(start.year, 1, 1), end)
-    return sum(1 for day in iter_calendar_days(start, end, overrides)
-               if day["day_type"] in WORKING_DAY_TYPES)
+    """Рабочие дни ``start..end`` включительно (календарь группы — ``refdata``)."""
+    return refdata.working_days_between(start, end)
 
 
 def calendar_days_between(start: dt.date, end: dt.date) -> int | None:
-    """Сколько КАЛЕНДАРНЫХ дней в отрезке ``start..end`` включительно.
-
-    Пара к ``working_days_between``, а не «упрощённая версия»: на стройке,
-    которая идёт 7/7, это и есть правильная мера, а рабочие дни — режим для
-    офисных проектов (``Project.use_production_calendar``).
-
-    ``None`` на перевёрнутом отрезке — по той же причине и с тем же смыслом,
-    что у соседки: «сравнивать не с чем», а не «ноль дней».
-    """
+    """Календарные дни ``start..end`` включительно; ``None`` на перевёрнутом."""
     if start is None or end is None or end < start:
         return None
     return (end - start).days + 1
 
 
-def days_between(start: dt.date, end: dt.date, *,
-                 working: bool) -> int | None:
-    """Длительность отрезка в той мере, которую выбрал проект.
-
-    Одна точка входа вместо ``if`` в каждом вызывающем: мера длительности —
-    свойство проекта, и разъехаться у плана с фактом она не должна.
-    """
-    return (working_days_between(start, end) if working
-            else calendar_days_between(start, end))
+def days_between(start: dt.date, end: dt.date, *, working: bool) -> int | None:
+    """Длительность отрезка в мере проекта (рабочие или календарные дни)."""
+    # Календарные дни считаются без справочника: ни базы, ни гейта аппки.
+    if not working:
+        return calendar_days_between(start, end)
+    return refdata.days_between(start, end, working=True)

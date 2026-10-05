@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { bottomNavItems } from '@/app/navigation/navItems';
 import { UserCircle } from 'lucide-react';
 
@@ -13,6 +14,8 @@ export const BottomNav = () => {
         staleTime: 5 * 60 * 1000, // 5 minutes
     });
     const permissions = usePermissions();
+    // «Договоры» после переноса в БЗО — архив в меню «Закупок и оплат» (A6.2).
+    const { frozen: contractsFrozen } = useContractsFreeze();
 
     if (!isLoggedIn || !activeProfile) {
         return null;
@@ -41,6 +44,8 @@ export const BottomNav = () => {
         hasDepartment: Boolean(activeProfile.department),
         hasMessenger: permissions.atLeast('messenger', 'read'),
         hasMail: permissions.atLeast('mail', 'read'),
+        hasBpp: permissions.atLeast('bpp', 'read'),
+        contractsFrozen,
     });
 
     // Профиль — не раздел навигации, а точка входа в личный кабинет, поэтому

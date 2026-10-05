@@ -44,6 +44,7 @@ import mimetypes
 
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseRedirect
+from django.utils.http import content_disposition_header
 from django.views.decorators.csrf import csrf_exempt
 
 from htqweb.http import _authenticate_jwt, api_view, json_error
@@ -52,7 +53,7 @@ from htqweb.storage import get_storage, verify
 from apps.media_files.models import FileMetadata, FileVariant
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
-from apps.media_files.services.scope_policy import authorize_scope_write
+from apps.media_files.services.scope_policy import authorize_scope_write, get_policy
 from apps.media_files.services.upload_service import UploadValidationError, upload_file_bytes
 from apps.media_files.services.url_service import build_file_url
 
@@ -201,8 +202,16 @@ def _can_access_private(user, meta: FileMetadata) -> bool:
     (``module="media", level="admin"``) while private-file access here
     still rides on ``is_elevated`` — a ``services-admin`` holder without
     ``is_staff`` sees the list but cannot sign someone else's private file.
-    Deliberate: in-service ``is_elevated`` checks stay (spec §10)."""
+    Deliberate: in-service ``is_elevated`` checks stay (spec §10).
+
+    ``owner_gated`` scope (документы ТЗ §21): по JWT не пускает никого — ни
+    загрузившего, ни администратора. Права там решает объект-владелец, и
+    пропуск здесь был бы дверью в обход его проверки. Остаётся только
+    подписанная ссылка, которую владелец выдаёт после своей проверки; и
+    подписать такую ссылку через ``issue_signed_url`` тоже нельзя."""
     if user is None:
+        return False
+    if get_policy(meta.scope).owner_gated:
         return False
     if user.is_elevated:
         return True
@@ -223,6 +232,23 @@ def _quote_filename(name: str) -> str:
     Content-Disposition header (RFC 6266) to block header-injection — ported
     verbatim from the source's helper of the same name."""
     return name.replace('"', "").replace("\r", "").replace("\n", "")
+
+
+def _content_disposition(mime: str | None, filename: str | None) -> str:
+    """Заголовок ``Content-Disposition`` по RFC 6266 — и для кириллицы тоже.
+
+    Раньше имя подставлялось как есть: ``filename="КП поставщика.pdf"``.
+    Такое значение не помещается в latin-1, и Django кодирует ВЕСЬ заголовок
+    по RFC 2047 (``=?utf-8?b?...?=``), а браузеры это не разбирают. Итог:
+    документ скачивался под именем-UUID, а тип «inline/attachment» терялся
+    вовсе — то есть переставала работать и защита R4 ниже (HTML с русским
+    именем отдавался бы inline на нашем происхождении). Django-хелпер кладёт
+    не-ASCII имя в ``filename*=utf-8''…``, который браузеры понимают.
+    """
+    disposition = _disposition_for(mime)
+    header = content_disposition_header(disposition == "attachment",
+                                        _quote_filename(filename or ""))
+    return header or disposition
 
 
 # ─── Content-Disposition hardening (R4, stored-XSS) ─────────────────────────
@@ -309,12 +335,14 @@ def download_file(request, file_id):
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Type": meta.mime,
-        "Content-Disposition": (
-            f'{_disposition_for(meta.mime)}; '
-            f'filename="{_quote_filename(meta.original_filename)}"'
-        ),
+        "Content-Disposition": _content_disposition(meta.mime, meta.original_filename),
         "ETag": f'"{meta.id}-{meta.updated_at.timestamp()}"',
     }
+    if not meta.is_public:
+        # Как у вариантов (download_variant): приватное не кладётся в общие
+        # кэши. Иначе edge-кэш nginx (/api/media/, 7 дней) отдавал бы файл по
+        # подписанной ссылке и после истечения exp, мимо _sig_valid.
+        headers["Cache-Control"] = "private, max-age=300"
 
     range_header = request.headers.get("Range")
     if range_header:
@@ -387,10 +415,7 @@ def download_variant(request, file_id, variant):
     headers = {
         "Content-Type": fv.mime,
         "Content-Length": str(fv.size),
-        "Content-Disposition": (
-            f'{_disposition_for(fv.mime)}; '
-            f'filename="{_quote_filename(meta.original_filename)}"'
-        ),
+        "Content-Disposition": _content_disposition(fv.mime, meta.original_filename),
         "ETag": f'"{fv.id}"',
         "Cache-Control": (
             "public, max-age=31536000, immutable" if meta.is_public else "private, max-age=300"

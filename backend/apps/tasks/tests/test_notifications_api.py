@@ -4,6 +4,10 @@ Mirrors ``services/task/app/api/v1/notifications.py``. The recurring theme is
 caller-scoping: a notification belongs to its recipient, and every route
 must refuse another user's row with 404 rather than 403 (a 403 would confirm
 the row exists).
+
+С задачи A1.5 модуля БЗО строки живут в центре уведомлений
+(``apps.notifications``, public), ручки — фасад с прежним контрактом; id —
+строка UUID. Лента на поддомене — уведомления компании запроса плюс общие.
 """
 
 from unittest.mock import patch
@@ -11,16 +15,20 @@ from unittest.mock import patch
 import pytest
 from django.test import Client
 
-from apps.tasks.models import Notification, Task
+from apps.notifications.models import Notification
+from apps.tasks.models import Task
 
-from .helpers import BASE, auth, token
+from .helpers import BASE, COMPANY, auth, token
 
 USER = 7
 OTHER = 42
 
 
 def _mk(recipient=USER, **over) -> Notification:
-    fields = {"recipient_id": recipient, "verb": "task_assigned:TASK-1"}
+    fields = {"recipient_id": recipient, "title": "task_assigned:TASK-1",
+              "event": "tasks.task", "company_slug": COMPANY}
+    if "target_id" in over and over["target_id"] is not None:
+        over["target_id"] = str(over["target_id"])
     fields.update(over)
     return Notification.objects.create(**fields)
 
@@ -37,7 +45,7 @@ def test_list_returns_only_the_callers_rows_newest_first():
     _mk(recipient=OTHER)
     resp = Client().get(f"{BASE}/notifications/", **auth())
     assert resp.status_code == 200
-    assert [row["id"] for row in resp.json()] == [new.id, old.id]
+    assert [row["id"] for row in resp.json()] == [str(new.id), str(old.id)]
 
 
 @pytest.mark.django_db
@@ -55,20 +63,24 @@ def test_list_rejects_out_of_range_limit():
 
 
 @pytest.mark.django_db
-def test_task_key_resolves_through_the_legacy_fk():
-    task = Task.objects.create(key="TASK-9", summary="S")
-    _mk(task=task)
-    row = Client().get(f"{BASE}/notifications/", **auth()).json()[0]
-    assert row["task_key"] == "TASK-9"
-
-
-@pytest.mark.django_db
 def test_task_key_resolves_through_the_generic_target():
+    """Отдельного FK на задачу у центра нет: перенос старых строк
+    (``notifications_import_tasks``) превращает его в ``target_type='task'``."""
     task = Task.objects.create(key="TASK-10", summary="S")
     _mk(target_type="task", target_id=task.id)
     row = Client().get(f"{BASE}/notifications/", **auth()).json()[0]
     assert row["task_key"] == "TASK-10"
-    assert row["task_id"] is None
+    assert row["task_id"] == task.id
+    assert row["target_id"] == str(task.id)
+
+
+@pytest.mark.django_db
+def test_feed_is_this_company_plus_common():
+    _mk(title="своя")
+    _mk(title="общая", company_slug="")
+    _mk(title="чужая", company_slug="t-other-company")
+    verbs = {row["verb"] for row in Client().get(f"{BASE}/notifications/", **auth()).json()}
+    assert verbs == {"своя", "общая"}
 
 
 @pytest.mark.django_db
@@ -196,3 +208,8 @@ def test_another_users_notification_is_404_not_403(method, suffix):
         f"{BASE}/notifications/{row.id}{suffix}", **auth(token()))
     assert resp.status_code == 404
     assert Notification.objects.filter(pk=row.id).exists()
+
+
+@pytest.mark.django_db
+def test_malformed_id_is_404():
+    assert Client().post(f"{BASE}/notifications/42/mark_read/", **auth()).status_code == 404

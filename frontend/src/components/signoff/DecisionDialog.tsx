@@ -46,9 +46,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { signoffApi } from '@/api/signoff';
-import type { ApprovalProcess } from '@/types/signoff';
+import type { ApprovalProcess, DecisionInput } from '@/types/signoff';
 
 import { reportApiError } from '@/lib/apiError';
 
@@ -127,6 +128,10 @@ export interface DecisionTarget {
    *  документ и пояснение: человек должен узнать об этом до нажатия, а не
    *  из отказа сервера. */
   requirementLabel?: string | null;
+  /** Варианты, между которыми выбирает согласующий (исходный документ и
+   *  альтернативы снабженца, ТЗ §12.4) — из `ApprovalProcess.options`.
+   *  Два и больше — «Согласовать» требует выбора. */
+  options?: { key: string; label: string }[];
 }
 
 interface Props {
@@ -134,20 +139,31 @@ interface Props {
   target: DecisionTarget | null;
   onOpenChange: (open: boolean) => void;
   onDecided: (process: ApprovalProcess) => void;
+  /** Чем отправить решение. По умолчанию — обычное решение на адресе своей
+   *  компании; карточка процесса дочерней, открытая из холдинга (B8.1),
+   *  подставляет решение через холдинг. Документ к такому решению не
+   *  прикладывается: этапы с ним из холдинга не решаются. */
+  decide?: (taskId: number, input: DecisionInput) => Promise<ApprovalProcess>;
 }
 
-export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
+const decideHere = (taskId: number, input: DecisionInput) =>
+  signoffApi.decide(taskId, input).then((r) => r.data);
+
+export function DecisionDialog({ target, onOpenChange, onDecided, decide = decideHere }: Props) {
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
+  const [optionKey, setOptionKey] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
 
-  // Ни комментарий, ни файл предыдущего решения не должны утечь в следующее.
+  // Ни комментарий, ни файл, ни выбор предыдущего решения не должны утечь в
+  // следующее.
   useEffect(() => {
     if (target) {
       setComment('');
       setFile(null);
       setError('');
+      setOptionKey('');
     }
   }, [target]);
 
@@ -166,6 +182,10 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       ? 'На этом этапе согласование возможно только с пояснением к решению.'
       : undefined);
   const needsComment = Boolean(commentRequiredMessage);
+  // Выбор варианта — только у согласия и только когда есть из чего выбирать:
+  // отказ и доработка решают судьбу документа целиком, а не варианта.
+  const options = isApprove ? target?.options ?? [] : [];
+  const needsOption = options.length > 1;
 
   /** Чего требует ИМЕННО ЭТОТ этап — одной строкой, его собственным именем.
    *  Требования задаёт маршрут, а не диалог, поэтому объяснить их можно
@@ -198,8 +218,9 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
       // Порядок обязателен: решение без загруженного документа бэкенд
       // отобьёт 409 «сначала загрузите PDF».
       if (file) await signoffApi.attachDocument(taskId, file);
-      const { data } = await signoffApi.decide(taskId, { decision, comment });
-      return data;
+      return decide(taskId, {
+        decision, comment, ...(needsOption ? { option_key: optionKey } : {}),
+      });
     },
     onSuccess: (process) => {
       toast.success(kind?.toast ?? 'Решение отправлено');
@@ -227,6 +248,11 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
 
   const submit = () => {
     if (!target || !kind) return;
+    if (needsOption && !optionKey) {
+      setError('Выберите, какой вариант вы согласуете: исходный документ или '
+        + 'одну из альтернатив.');
+      return;
+    }
     if (needsComment && !comment.trim()) {
       setError(commentRequiredMessage!);
       return;
@@ -263,6 +289,31 @@ export function DecisionDialog({ target, onOpenChange, onDecided }: Props) {
             )}
           </DialogDescription>
         </DialogHeader>
+
+        {needsOption && (
+          <div className="space-y-2">
+            <Label>Какой вариант вы согласуете</Label>
+            {/* Голоса предыдущих этапов видны в ходе согласования; решающий —
+                голос последнего этапа (ТЗ §12.4). */}
+            <RadioGroup value={optionKey} onValueChange={setOptionKey} className="gap-2">
+              {options.map((option) => (
+                <div key={option.key} className="flex items-start gap-2">
+                  <RadioGroupItem
+                    value={option.key}
+                    id={`signoff-option-${option.key}`}
+                    className="mt-0.5"
+                  />
+                  <Label
+                    htmlFor={`signoff-option-${option.key}`}
+                    className="text-sm font-normal leading-snug"
+                  >
+                    {option.label}
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+          </div>
+        )}
 
         {needsDocument && (
           <div className="space-y-2">

@@ -116,6 +116,7 @@ from dataclasses import dataclass, field
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from apps.access import registry
 from apps.access.models import PositionRole, Role, RolePermission, ScopeKind
 
 #: Тот же код, что ``apps.hr.legacy_roles.ROLE_CODES`` (задача 1) — сюда
@@ -310,7 +311,13 @@ class Command(BaseCommand):
         level_rows: dict[str, dict[str, frozenset[str]]] = {
             code: {} for code in roles_by_code
         }
+        # Узлы ``EXPLICIT_ONLY`` (refdata.production_calendar, access/0022) — не
+        # часть кадровых пресетов: явная строка есть у каждой системной роли, и
+        # сравнение «список = пресет» её видеть не должно.
+        explicit_only = registry.explicit_only()
         for row in RolePermission.objects.filter(role_id__in=hr_role_ids):
+            if row.node in explicit_only:
+                continue
             level_rows[codes_by_id[row.role_id]][row.node] = row.flags
 
         all_stats = [

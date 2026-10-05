@@ -147,8 +147,10 @@ def test_migrate_does_not_touch_shared_apps(alpha):
 @pytest.mark.django_db(transaction=True)
 def test_migrate_records_version(alpha):
     migration_service.migrate_company("t-alpha")
+    from django.conf import settings
+
     rows = CompanySchemaVersion.objects.filter(company=alpha)
-    assert rows.count() == 4
+    assert rows.count() == len(settings.TENANT_APPS)
     assert all(r.applied_migration for r in rows)
     assert all(r.last_error == "" for r in rows)
     assert all(r.last_run_at is not None for r in rows)

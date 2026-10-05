@@ -193,6 +193,9 @@ def set_password(user: User, *, new_password: str, must_change_password: bool = 
     user.set_password(new_password)
     user.must_change_password = must_change_password
     user.save(update_fields=["password", "must_change_password", "updated_at"])
+    from apps.users.services import auth_service
+
+    auth_service.reset_lockout(user)
 
 
 def delete_user(user: User) -> None:

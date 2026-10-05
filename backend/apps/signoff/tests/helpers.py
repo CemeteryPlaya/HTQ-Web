@@ -93,6 +93,18 @@ def make_user(username: str, *, active: bool = True) -> User:
     return user
 
 
+def share_position(holder: User, *others: User) -> None:
+    """Пересадить ``others`` на должность ``holder``.
+
+    Кворум «any» считается по должности (``engine._settle_stage``): один
+    держатель закрывает свою должность, а не весь этап. Сценарий «решил
+    один из нескольких» поэтому требует держателей ОДНОЙ должности —
+    ``make_user`` у каждого заводит свою.
+    """
+    Employee.objects.filter(user_id__in=[user.pk for user in others]).update(
+        position_id=holder.pk)
+
+
 def make_doc(title: str = "Пробный документ", **fields) -> ProbeDoc:
     return ProbeDoc.objects.create(title=title, **fields)
 

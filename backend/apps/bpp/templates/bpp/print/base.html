@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+{% comment %}
+Базовый шаблон печати документов модуля БЗО (ТЗ §19/§21, D-32, задача 6).
+
+Место под фирменный бланк компании — колонтитулы (Q-B31, придут отдельно):
+до этого верхний и нижний блоки пустые, но зарезервированы вёрсткой
+(@page + position: running(...)), чтобы подключить бланк без переверстки
+печатных форм — блоки letterhead_header и letterhead_footer.
+Документы модуля наследуют этот шаблон и переопределяют блок body
+(таблица позиций своя у каждого типа документа), оставляя шапку, подвал и
+лист согласования общими. Без переопределения блок body рисует простую
+таблицу из контекста table.
+
+Многострочный комментарий — только тегом comment: короткий комментарий-решётка
+в шаблонах Django однострочный, и его текст попал бы в документ.
+
+Контекст:
+  document_title  — «Заявка на закупку», «Счёт на оплату» и т.п.
+  number          — номер документа
+  status_label    — статус человеком («На согласовании»)
+  author_name     — кто создал документ
+  created_at      — дата создания, отформатированная вызывающим (ДД.ММ.ГГГГ)
+  table           — {columns: [заголовки], rows: [[ячейки строки], …],
+                    total: [ячейки итоговой строки] | пусто} — таблица по
+                    умолчанию; суммы вызывающий передаёт уже строками
+                    «1 250 000,00 KZT» (services/money.py)
+  signoff_stages  — [{title, actor_name, decision, comment, decided_at}] или
+                    пусто/отсутствует — «Лист согласования» тогда не рисуется
+{% endcomment %}
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>{{ document_title|default:"Документ" }}{% if number %} № {{ number }}{% endif %}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 28mm 15mm 20mm;
+    @top-center { content: element(letterhead-header); }
+    @bottom-center { content: element(letterhead-footer); }
+  }
+  .letterhead-header { position: running(letterhead-header); min-height: 18mm; }
+  .letterhead-footer {
+    position: running(letterhead-footer); min-height: 8mm;
+    font-size: 8px; color: #666; text-align: center;
+  }
+  /* DejaVu Sans — шрифт кириллицы в образе (fonts-dejavu-core, backend/Dockerfile). */
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 11px; color: #111; margin: 0; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  .meta { margin-bottom: 14px; }
+  .meta span { margin-right: 18px; }
+  .meta strong { font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+  thead { display: table-header-group; }  /* шапка таблицы — на каждой странице */
+  tr { page-break-inside: avoid; }
+  th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; font-weight: 700; }
+  tfoot td { font-weight: 700; }
+  .signoff-sheet { page-break-inside: avoid; }
+  .signoff-sheet h2 { font-size: 13px; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<div class="letterhead-header">{% block letterhead_header %}{% endblock %}</div>
+<div class="letterhead-footer">{% block letterhead_footer %}{% endblock %}</div>
+
+<h1>{{ document_title }}{% if number %} № {{ number }}{% endif %}</h1>
+<div class="meta">
+  {% if status_label %}<span><strong>Статус:</strong> {{ status_label }}</span>{% endif %}
+  {% if author_name %}<span><strong>Автор:</strong> {{ author_name }}</span>{% endif %}
+  {% if created_at %}<span><strong>Дата:</strong> {{ created_at }}</span>{% endif %}
+</div>
+
+{% block body %}
+{% if table.columns %}
+<table class="document-table">
+  <thead>
+    <tr>{% for title in table.columns %}<th>{{ title }}</th>{% endfor %}</tr>
+  </thead>
+  <tbody>
+    {% for row in table.rows %}
+    <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </tbody>
+  {% if table.total %}
+  <tfoot>
+    <tr>{% for cell in table.total %}<td>{{ cell }}</td>{% endfor %}</tr>
+  </tfoot>
+  {% endif %}
+</table>
+{% endif %}
+{% endblock %}
+
+{% if signoff_stages %}
+<section class="signoff-sheet">
+  <h2>Лист согласования</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Этап</th>
+        <th>Согласующий</th>
+        <th>Решение</th>
+        <th>Комментарий</th>
+        <th>Дата</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stage in signoff_stages %}
+      <tr>
+        <td>{{ stage.title }}</td>
+        <td>{{ stage.actor_name }}</td>
+        <td>{{ stage.decision }}</td>
+        <td>{{ stage.comment }}</td>
+        <td>{{ stage.decided_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+</body>
+</html>

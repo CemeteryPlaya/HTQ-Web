@@ -56,17 +56,29 @@ class ContractorRef(BaseModel):
     name: str
 
 
-class CounterpartyRef(BaseModel):
-    """Контрагент из «Договоров» в карточке партнёра — бейдж со ссылкой.
+class BppCounterpartyRef(BaseModel):
+    """Контрагент модуля «Закупки и оплаты» в карточке партнёра (A6.1) —
+    бейдж со ссылкой: наименование, БИН/ИИН (``reg_number``) и статус.
 
-    ``status``/``approval_state`` — строками, а не enum'ами ``apps.contracts``:
-    импортировать чужие модели нельзя, а сверять значения здесь незачем."""
+    ``status`` — строкой, а не enum'ом ``apps.bpp``: импортировать чужие
+    модели нельзя, а сверять значения здесь незачем."""
 
-    id: int
+    id: str
     name: str
-    bin_iin: str
+    reg_number: str
     status: str
-    approval_state: str
+
+
+class BppCounterpartyOption(BppCounterpartyRef):
+    """Строка поиска контрагента для формы партнёра: плюс то, что форма
+    подтягивает к себе при выборе (краткое имя, страна, контакты)."""
+
+    short_name: str = ""
+    country_code: str = ""
+    contact_person: str = ""
+    phone: str = ""
+    email: str = ""
+    legal_address: str = ""
 
 
 class AgreementRef(BaseModel):
@@ -77,6 +89,22 @@ class AgreementRef(BaseModel):
     name: str
     status: str
     approval_state: str
+
+
+class BppAgreementRef(BaseModel):
+    """Договор модуля «Закупки и оплаты» в строке привлечения — номер и статус."""
+
+    id: str
+    number: str
+    status: str
+
+
+class BppAgreementOption(BppAgreementRef):
+    """Строка поиска договора для привлечения: плюс то, что помогает выбрать."""
+
+    name: str = ""
+    ext_number: str = ""
+    ext_date: date | None = None
 
 
 # ── labels ──────────────────────────────────────────────────────────────
@@ -253,9 +281,10 @@ class ContractorCreate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str = Field(default="", max_length=5000)
     status: ContractorStatus = Field(default=ContractorStatus.ACTIVE)
-    # Та же организация в «Договорах». Необязательно — см. докстринг
-    # ``models.Contractor``; проверки — ``contractor_service``.
-    counterparty_id: int | None = None
+    # Та же организация в модуле «Закупки и оплаты» (ключ UUID строкой).
+    # Необязательно — см. докстринг ``models.Contractor``; проверки —
+    # ``contractor_service``.
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorUpdate(BaseModel):
@@ -269,8 +298,9 @@ class ContractorUpdate(BaseModel):
     address: str | None = Field(None, max_length=500)
     notes: str | None = Field(None, max_length=5000)
     status: ContractorStatus | None = None
-    # ``null`` снимает связь (PATCH разбирается с exclude_unset).
-    counterparty_id: int | None = None
+    # ``null`` (или пустая строка) снимает связь (PATCH разбирается с
+    # exclude_unset).
+    bpp_counterparty_id: str | None = Field(None, max_length=36)
 
 
 class ContractorResponse(BaseModel):
@@ -284,8 +314,10 @@ class ContractorResponse(BaseModel):
     address: str | None = None
     notes: str
     status: ContractorStatus
-    counterparty_id: int | None = None
-    counterparty: CounterpartyRef | None = None
+    bpp_counterparty_id: str | None = None
+    # ``None`` при заполненном ``bpp_counterparty_id`` — модуль «Закупки и
+    # оплаты» выключен: связь есть, показать её нечем.
+    bpp_counterparty: BppCounterpartyRef | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -347,6 +379,8 @@ class ContractorEngagementCreate(OrderedDates):
     # Договор из «Договоров» с контрагентом этого партнёра; при выборе его
     # номер перекрывает ``contract_no`` (см. ``contractor_service``).
     agreement_id: int | None = None
+    # Договор модуля «Закупки и оплаты» (UUID); номер ``ДГ-…`` берётся у модуля.
+    bpp_agreement_id: str | None = Field(None, max_length=36)
     scope: str = Field(default="", max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -366,6 +400,7 @@ class ContractorEngagementUpdate(OrderedDates):
     roadmap_id: int | None = None
     contract_no: str | None = Field(None, max_length=100)
     agreement_id: int | None = None
+    bpp_agreement_id: str | None = Field(None, max_length=36)
     scope: str | None = Field(None, max_length=5000)
     start_date: date | None = None
     end_date: date | None = None
@@ -385,6 +420,9 @@ class ContractorEngagementResponse(BaseModel):
     contract_no: str | None = None
     agreement_id: int | None = None
     agreement: AgreementRef | None = None
+    bpp_agreement_id: str | None = None
+    # ``None`` при заполненном ``bpp_agreement_id`` — модуль выключен.
+    bpp_agreement: BppAgreementRef | None = None
     scope: str
     start_date: date | None = None
     end_date: date | None = None
@@ -667,21 +705,33 @@ class RoadmapMetricsResponse(BaseModel):
     equipment: ResourceComparison
 
 
-class ProjectCreate(OrderedDates):
-    name: str = Field(..., min_length=1, max_length=200)
+class ProjectCreate(BaseModel):
+    """Доска заводится к «Проекту» модуля БЗО (D-02): название, статус, сроки
+    и руководитель берутся из него (``services/project_link.py``), поэтому в
+    теле их нет — лишние ключи Pydantic отбрасывает."""
+
+    project_ref: str = Field(..., min_length=1, max_length=36)
     description: str = Field(default="", max_length=5000)
-    status: ProjectStatus = Field(default=ProjectStatus.ACTIVE)
     color: str = Field(default="#3b82f6", max_length=20)
-    start_date: date | None = None
-    end_date: date | None = None
-    owner_id: int | None = None
     department_id: int | None = None
     # False = календарные дни (стройка идёт 7/7), True = рабочие.
     use_production_calendar: bool = False
 
 
+class ProjectLinkCandidate(BaseModel):
+    """«Проект», к которому ещё можно завести доску задач."""
+
+    id: str
+    code: str
+    name: str
+    status: str
+    date_start: date | None = None
+    date_end: date | None = None
+    manager_user_id: int | None = None
+
+
 class ProjectUpdate(OrderedDates):
-    name: str | None = Field(None, min_length=1, max_length=200)
+    name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=5000)
     status: ProjectStatus | None = None
     color: str | None = Field(None, max_length=20)
@@ -707,6 +757,11 @@ class ProjectResponse(BaseModel):
     sites: list[ProjectSiteRef] = []
     site_ids: list[int] = []
     use_production_calendar: bool = False
+    # Связь с «Проектом» БЗО: у связанной доски название, статус, сроки и
+    # руководитель — его копия и правятся в «Проектах» (D-02).
+    project_ref: str = ""
+    project_code: str | None = None
+    linked: bool = False
     task_count: int = 0
     done_count: int = 0
     progress: float = 0.0
@@ -1033,9 +1088,13 @@ class NotificationResponse(BaseModel):
     reference; the frontend maps the type to a route, so the backend stays
     free of UI knowledge. ``task_key`` is filled when the row references a
     task (legacy ``task_id`` FK OR ``target_type='task'``) so the dropdown
-    can show «В задаче: ABC-123» without a second roundtrip."""
+    can show «В задаче: ABC-123» without a second roundtrip.
 
-    id: int
+    С переезда ленты в центр уведомлений ``id`` и ``target_id`` — строки
+    (UUID центра и id цели любого типа), ``url`` — ссылка, которую положил
+    писатель (у уведомлений модуля БЗО), для целей без карты маршрутов."""
+
+    id: str
     recipient_id: int
     actor_id: int | None = None
     actor_name: str | None = None
@@ -1044,7 +1103,8 @@ class NotificationResponse(BaseModel):
     task_id: int | None = None
     task_key: str | None = None
     target_type: str | None = None
-    target_id: int | None = None
+    target_id: str | None = None
+    url: str | None = None
     is_read: bool
     read_at: datetime | None = None
     created_at: datetime
@@ -1681,20 +1741,6 @@ class CalendarEventResponse(CalendarEventBase):
 
 class RsvpUpdate(BaseModel):
     status: RsvpStatus
-
-
-class ProductionDayUpdate(BaseModel):
-    day_type: DayType
-    note: str | None = None
-
-
-class ProductionDayResponse(BaseModel):
-    date: date
-    day_type: DayType
-    working_days_since_epoch: int
-    note: str | None = None
-
-    model_config = {"from_attributes": True}
 
 
 # ── сводка по группе (блок H) — GET /holding/projects ───────────────────────

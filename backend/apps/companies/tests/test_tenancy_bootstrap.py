@@ -131,6 +131,53 @@ def test_moves_tenant_tables_out_of_public():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_tenant_owner_files_travel_with_their_tables():
+    """Файлы тенантного владельца лежат в public-таблице ``apps.files`` и до
+    первой компании несут пустую компанию. Переезжая, его таблицы забирают их
+    в той же транзакции: компания — часть ключа файлов тенантного владельца, и
+    без неё документ в схеме компании не увидел бы своих файлов. Файлы общих
+    владельцев компанию не получают. Владельцы — пробные: настоящие (документы
+    модуля БЗО) ещё не написаны."""
+    import uuid
+
+    from apps.files import interface as files
+    from apps.files.models import FileObject, FileType
+    from apps.files.services import registry
+
+    tenant_owner = "companiestest.doc"
+    files.register_owner(
+        tenant_owner, label="Документ", service="files", tenant=True, folder="doc",
+        file_types=(files.FileTypeSpec("companiestest.doc"),),
+        can_view=lambda *a: True, can_modify=lambda *a: None,
+        was_sent=lambda *a: False, lock=lambda *a: None)
+
+    def row(owner_type: str, file_type: str) -> FileObject:
+        # Строки справочника заводит миграция, а transaction=True-тесты
+        # до этого могли вычистить таблицу целиком.
+        FileType.objects.get_or_create(code=file_type, defaults={
+            "owner_type": owner_type, "name": file_type, "formats": [".pdf"],
+            "max_mb": 20})
+        return FileObject.objects.create(
+            owner_type=owner_type, owner_id=1, file_type_id=file_type,
+            document_id=uuid.uuid4(), version_no=1, name="f.pdf",
+            mime="application/pdf", size=1, sha256="0" * 64,
+            storage_key=f"seed/{uuid.uuid4()}", media_file_id=f"seed-{uuid.uuid4()}",
+            uploaded_by_id=7)
+
+    try:
+        tenant = row(tenant_owner, "companiestest.doc")
+        shared = row("filestest.folder", "probe.kp")  # пробный общий владелец
+
+        call_command("tenancy_bootstrap", slug=SLUG, name="Корень", kind="holding")
+    finally:
+        registry._OWNERS.pop(tenant_owner, None)
+
+    tenant.refresh_from_db()
+    shared.refresh_from_db()
+    assert (tenant.company_slug, shared.company_slug) == (SLUG, "")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_leaves_shared_tables_in_public():
     call_command("tenancy_bootstrap", slug=SLUG, name="Корень", kind="holding")
     assert _schema_of("users_user") == "public"
@@ -159,7 +206,7 @@ def test_migration_state_travels_with_the_tables():
             [list(settings.TENANT_APPS)],
         )
         before = {row[0] for row in cur.fetchall()}
-    assert before == {"hr", "tasks", "contracts", "signoff"}, (
+    assert before == set(settings.TENANT_APPS), (
         "предусловие теста: до переноса тенантные аппки обязаны быть "
         "мигрированы в public — иначе тест ничего не доказывает"
     )
@@ -169,7 +216,7 @@ def test_migration_state_travels_with_the_tables():
     with connection.cursor() as cur:
         cur.execute(f"SELECT DISTINCT app FROM {SCHEMA}.django_migrations")
         apps_in_schema = {row[0] for row in cur.fetchall()}
-    assert apps_in_schema == {"hr", "tasks", "contracts", "signoff"}
+    assert apps_in_schema == set(settings.TENANT_APPS)
 
     with connection.cursor() as cur:
         cur.execute(

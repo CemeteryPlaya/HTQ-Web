@@ -120,6 +120,7 @@ same backend.
 | `/api/email/v1/webhooks/`           | `backend` (WSGI)   | Gmail Pub/Sub + Graph + Mailcow push — **no** rate limit |
 | `/api/media/v1/files/` (POST)       | `backend` (WSGI)   | Upload — hard size/rate limit, buffering off |
 | `/api/media/`                       | `backend` (WSGI)   | Read/metadata + edge cache of public variants |
+| `/api/files/v1/`                    | `backend` (WSGI)   | Файловая подсистема ТЗ §21: `client_max_body_size 21M`, зоны `files_upload` (только POST) + `api_general`, 413 — JSON `E-FIL-02` вместо HTML nginx |
 | `/api/users/v1/*`                   | `backend` (WSGI)   | Auth, profile, registrations, items, admin   |
 | `/api/hr/v1/*`                      | `backend` (WSGI)   | Employees, departments, vacancies, time      |
 | `/api/tasks/v1/*`                   | `backend` (WSGI)   | Tasks, calendar, sequences, attachments      |
@@ -130,6 +131,10 @@ same backend.
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/api/conference/v1/*`              | `backend` (WSGI)   | История видеоконференций, записи, протокол — **не** `/api/cms/v1/conference/*` (там конфиг SFU и приглашения) |
+| `/api/project/v1/*`                 | `backend` (WSGI)   | «Проект» модуля БЗО: проекты и участники |
+| `/api/refdata/v1/*`                 | `backend` (WSGI)   | Общие справочники БЗО: страны, валюты, курсы, НДС, МРП, ед. изм., статьи |
+| `/api/notifications/v1/*`           | `backend` (WSGI)   | Центр уведомлений: лента, прочтение, каналы доставки |
+| `/api/bpp/v1/*`                     | `backend` (WSGI)   | Модуль БЗО: бюджеты, заявки, план закупок, договоры, счета, выписки, альтернативы, KPI. Подмодули `budgets`/`requests`+`plan`/`agreements`/`invoices`/`bank`/`alternatives`+`kpi`/`accountable` выключаются отдельно. `history/<тип>/<id>` — журнал изменений документа |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
@@ -172,9 +177,21 @@ Content-Type: application/json
 
 { "email": "<email_or_username>", "password": "..." }
 → 200 { "access": "<jwt>", "refresh": "<jwt>", "token_type": "Bearer" }
-→ 401 { "detail": "Invalid credentials" }
-→ 401 { "detail": "Account is not activated" }   # status != ACTIVE
+→ 401 { "detail": "Invalid credentials" }       # неизвестный логин, неверный пароль,
+                                                  # неактивная учётка с неверным паролем — ответ один
+→ 401 { "detail": "Account is not activated" }   # status != ACTIVE, ТОЛЬКО при верном пароле
+→ 429 { "detail": "...", "code": "E-AUTH-LOCKED", "fields": [] }   # + Retry-After: <секунды>
 ```
+
+**Блокировка входа (D-S7-3).** После `AUTH_LOCKOUT_THRESHOLD` (5) неудач по одному
+логину за `AUTH_LOCKOUT_SECONDS` (900) вход по нему закрыт на столько же секунд:
+429 `E-AUTH-LOCKED` с заголовком `Retry-After`, даже при верном пароле. Логин —
+адрес без учёта регистра (и без пробелов по краям) либо имя пользователя как есть.
+Под блокировкой войти нельзя; её снимают смена пароля и `manage.py auth_unlock <логин>`
+(или истечение 15 минут), а успешный вход до блокировки лишь сбрасывает счётчик
+неудач. `token/refresh/` не блокируется. 429 без `code` — лимит nginx по IP, не блокировка.
+Порог `0` (умолчание в compose, пока блокировку не включили после окна выкатки) —
+блокировки нет. Недоступный кэш блокировку отключает (вход работает).
 
 JWT claims (HS256 with `JWT_SECRET`, issuer `htqweb-auth` — unchanged from
 the FastAPI generation, even though there's no separate user-service
@@ -447,6 +464,8 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 | `/api/hr/v1/positions/levels/`            | GET, POST | Level thresholds                |
 | `/api/hr/v1/positions/{id}/substitutions` | GET, POST | Substitution matrix — GET: JWT, POST: admin=True |
 | `/api/hr/v1/substitutions/{id}`          | PATCH, DELETE | Edit/delete (admin=True) |
+| `/api/hr/v1/acting-assignments`          | GET, POST | Temporary position holders (BPP D-22): who acts for a position `date_from`..`date_to` (inclusive), `basis`. GET `?position_id=&employee_id=&active_on=YYYY-MM-DD` — `hr:read`; POST — `hr:admin`. 422 with a readable reason for an inactive position, a non-working employee or one without an account, dates out of order |
+| `/api/hr/v1/acting-assignments/{id}`     | PATCH, DELETE | Edit (partial, dates re-checked) / delete — `hr:admin` |
 | `/api/hr/v1/approvals/{subject_type}/{id}/submit` | POST | Отправить кадровый объект на согласование через `apps.signoff`. JWT, БЕЗ `admin=True` — отправляет тот, кто завёл заявку, а решает маршрут. `subject_type` — один из десяти `hr.*` (матрица HR-FRM-004, список в roadmap §6.4); 404 — неизвестный тип или нет такой строки, 409 — маршрут не настроен / объект уже на согласовании / в этапе не осталось согласующих / объект заперт. Ответ — карточка процесса с этапами |
 | `/api/hr/v1/vacancies/`                   | GET, POST |                              |
 | `/api/hr/v1/applications/`                | GET, POST | Candidate applications      |
@@ -488,8 +507,9 @@ business logic).
 | `/api/tasks/v1/tasks/{id}/progress/`              | PATCH  | `{percent}`                   |
 | `/api/tasks/v1/labels/`                           | GET, POST |                           |
 | `/api/tasks/v1/versions/`                         | GET, POST | Project versions          |
-| `/api/tasks/v1/projects/`                         | GET, POST |                            |
-| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE |                  |
+| `/api/tasks/v1/projects/`                         | GET, POST | `GET ?project_ref=<uuid>` — доска этого «Проекта» (ссылка с его карточки). Держатель узла `project.board` (ТД, ОД, ПМ, АДМ) видит, кроме досок своего отдела, доски «Проектов», которые видит в БЗО — с `project.all` все связанные, иначе проекты-участия; так же карточка доски, её `tasks/` и список `roadmaps/?project_id=`; правка доски этим не открывается. Доска задач заводится только к «Проекту» БЗО (D-02: «Проект» главный): `POST {project_ref, description?, color?, department_id?, use_production_calendar?}` — название, статус, сроки и владелец (руководитель проекта) берутся из «Проекта». Нет такого — 422; в архиве, уже с доской или со старыми перевёрнутыми сроками — 409. Название, занятое другой доской, доска получает с кодом проекта: «ЖК Нурлы Жол (П-015)». В ответе `project_ref`, `project_code`, `linked` |
+| `/api/tasks/v1/projects/link-candidates`          | GET    | `?q=` — «Проекты» без доски и не в архиве (до 20), для выбора при создании доски. Гейт как у создания (`tasks:admin`) |
+| `/api/tasks/v1/projects/{id}/`                    | GET, PATCH, DELETE | У связанной доски `name`/`status`/`start_date`/`end_date`/`owner_id` — копия «Проекта»: в PATCH можно прислать только те же значения, другое — 409 (правятся в «Проектах», оттуда приезжают на доску в той же транзакции). Доска без связи правится целиком |
 | `/api/tasks/v1/projects/{id}/tasks/`              | GET    |                              |
 | `/api/tasks/v1/roadmaps/`                         | GET, POST | Пакеты работ **на блоке**: проект → площадка → блок → **роудмап** → задача. Тело принимает `site_block_id`; площадки колонкой нет, `?site_id=` фильтрует джойном |
 | `/api/tasks/v1/roadmaps/{id}/`                    | GET, PATCH, DELETE | Правка — владелец или админ. DELETE непустого пакета → 409 |
@@ -525,9 +545,15 @@ business logic).
 | `/api/tasks/v1/calendar/{id}/`                    | PATCH, DELETE | Calendar event         |
 | `/api/tasks/v1/calendar/{id}/exceptions/`         | POST   | Calendar event exception      |
 | `/api/tasks/v1/calendar/timeline/`                | GET    | `{ tasks, events }` by `start`/`end` |
-| `/api/tasks/v1/production-calendar/`              | GET, PATCH | Production days, Kazakhstan holidays |
+| `/api/tasks/v1/production-calendar/`              | GET, PATCH | Переехал в `refdata` (A7.1): nginx `rewrite` на `/api/refdata/v1/production-calendar/` на один релиз; в Django-маршрутах `tasks` нет |
 | `/api/tasks/v1/sequences/`                        | GET    | Jira-style key generators     |
-| `/api/tasks/v1/notifications/`                    | GET    |                              |
+| `/api/tasks/v1/notifications/`                    | GET    | Колокольчик — фасад над центром уведомлений (`apps.notifications`): лента компании запроса плюс общие; `id` и `target_id` — строки, `url` — ссылка писателя |
+| `/api/tasks/v1/notifications/history/`, `mark-all-read/`, `{id}/mark_read/`, `{id}/mark_unread/`, `{id}/` | GET, POST, DELETE | История и прочтение — тот же фасад; `{id}` — UUID, чужое — 404 |
+| `/api/tasks/v1/contractors/`, `contractors/{id}/` | GET, POST, PATCH, DELETE | Партнёры (подрядные организации). Связь с контрагентом модуля «Закупки и оплаты» (A6.1): ввод `bpp_counterparty_id` (UUID строкой; `null`/`""` — снять), в ответе `bpp_counterparty_id` и `bpp_counterparty {id, name, reg_number, status}` (`null` при заполненном ключе — модуль выключен). Новая связь — только с «Активен» (иначе 409), неизвестный ключ — 404, контрагент у другого партнёра или расходится БИН/ИИН — 409, выключенный модуль на записи связи — 503. Смена контрагента снимает договоры привлечений (номер в `contract_no` остаётся). Прежних `counterparty_id`/`counterparty` («Договоры») в API нет |
+| `/api/tasks/v1/contractors/counterparty-search`   | GET    | `?q=&limit=` (по умолчанию 20, до 100) — выбор контрагента в карточке партнёра: только «Активен», по наименованию или БИН/ИИН; строки `{id, name, short_name, reg_number, country_code, status, contact_person, phone, email, legal_address}`. Гейт — как у правки партнёра (`tasks:admin`, `admin=True`): ролей модуля закупок не требует; модуль выключен — 503 |
+| `/api/tasks/v1/contractor-engagements/`, `{id}/`  | GET, POST, PATCH, DELETE | Привлечения партнёра. `agreement_id` — договор «Договоров»: принимается, только если контрагент договора перенесён (B6.1) в контрагента модуля, с которым связан партнёр (иначе 409); номер ложится в `contract_no`. `bpp_agreement_id` — договор модуля «Закупки и оплаты» (UUID): тот же контрагент, что у партнёра (`bpp_counterparty_id`), статус «Действует» или «Исполнен», основной договор (не допсоглашение); ключ не UUID, договора нет, чужой контрагент, партнёр без контрагента или неподходящий статус — 422; номер `ДГ-…` берётся у модуля (`bpp.interface.agreement_brief`) и ложится в `contract_no` (из запроса не принимается). Выбор одного договора снимает другой; смена контрагента партнёра обнуляет оба ключа, номер остаётся. В ответе — `bpp_agreement {id, number, status}`. У замороженной компании (`contracts_freeze`) новая привязка `agreement_id` — 409, старая читается |
+| `/api/tasks/v1/contractor-engagements/agreement-search` | GET | `?contractor_id=&q=&limit=` (по умолчанию 20, до 100) — выбор договора модуля для привлечения: договоры контрагента партнёра в статусах «Действует»/«Исполнен» (без допсоглашений), номер / номер по документу / наименование от 2 символов. Права — как в реестре договоров (`bpp.agreements`, `bpp.agreements.all`, СН/ПМ — свои проекты): нет права — `[]`; партнёр без контрагента — `[]`. Гейт — как у правки привлечения (`tasks:admin`, `admin=True`); модуль выключен — 503. Строки `{id, number, status, name, ext_number, ext_date}` |
+
 | `/api/tasks/v1/holding/projects`                  | GET    | Сводка по группе: проекты/объекты/задачи/отчётность по каждой действующей компании (блок H, `holding.*` через `apps/tasks/holding_models.py`). JWT + гейт `module="tasks", level="admin"` (`is_staff` без роли не проходит), ПЛЮС только поддомен компании вида «холдинг» (`apps.companies.interface.is_holding`) — платформенный админ проходит всегда; 403 с чужого поддомена, 503 пока `migrate_companies` пересобирает представления |
 
 Source: `backend/apps/tasks/urls.py`. FSM transitions and the role model
@@ -746,6 +772,94 @@ calls `htqweb.storage` directly (it predates `media_files` as an app). See
 
 ---
 
+## `apps.files` — `/api/files/v1` (ТЗ §21 «Файлы и вложения»)
+
+Одна файловая подсистема на все объекты, к которым прикладываются документы
+(`UploadFile` / `DownloadFile` из ТЗ, таблица `file_object`). Владелец —
+ключ из реестра и ключ его строки — целое или UUID (документы модуля БЗО);
+неподходящий владельцу ключ — 404 `E-FIL-05`, в ответах `owner_id` — строка.
+Права решает владелец своими колбэками («все с правом просмотра объекта»,
+ТЗ §21); типы своих файлов он заводит в справочник миграцией. Владелец может
+уточнить права по типу файла (`can_view_type`/`can_modify_type`, ТЗ §21: АВР
+видят не все, кто видит счёт): документов невидимого типа нет в папке и в
+`types`, ссылка, новая версия и удаление такого документа — 404 `E-FIL-05`,
+как у несуществующего; запрет правки типа — 403 `E-ACC-01` или 409
+`E-FIL-06` (с объяснением владельца), в папке — `can_add: false` у типа.
+**Новая версия — своё правило владельца** (`can_version`, необязательно): у
+документа заявки «удаление — в Черновике / На доработке; далее только новая
+версия» (ТЗ §21), поэтому после отправки папка закрыта (`can_modify: false`),
+а новая версия приложенного документа — нет. Без `can_version` новая версия
+подчиняется тем же правилам, что добавление и удаление. В папке у каждого
+документа — `can_version` и `can_delete` (с учётом прав по типу), чтобы
+интерфейс не предлагал отвергаемое.
+**Владельцы — документы модуля БЗО**: `bpp.purchase_request` (документы
+заявки, тип `request_attachment`, до 20; новая версия — автором в любом
+статусе, кроме финальных) и `bpp.advance_report` (подтверждающий документ
+авансового отчёта) — `apps/bpp/file_owners.py`; договор, счёт и выписка —
+модули `apps/bpp/services/<подмодуль>/file_owner.py`, подключаются сами:
+`bpp.agreement` (скан договора `agreement` — обязателен для отправки, 1 +
+версии; приложения `agreement_annex` до 30; меняет автор в «Черновике» и «На
+доработке»), `bpp.invoice` (счёт `invoice` — обязателен для «Отправить ФД»,
+до 5; закрывающие `act`/`waybill`/`vat_invoice` до 10 — видят только автор,
+ФД и БУХ, вкладываются по запросу БУХ и только запрошенных типов),
+`bpp.bank_import` (выписка). Не приложен обязательный файл — 422 `E-FIL-04`
+при отправке документа. Своих ручек файлов у документов модуля нет: всё —
+через эту панель; сервисы модуля прикладывают файлы из кода
+(`apps.files.interface.attach_bytes`/`replace_bytes`) тем же путём проверок и
+журнала. Тесты подсистемы идут на пробных владельцах `apps/files/tests/testapp`.
+
+У тенантного владельца компания — часть ключа файлов (`company_slug`), до
+первой компании — `""`; `tenancy_bootstrap` проставляет её файлам вместе с
+переездом таблиц владельца.
+
+**Гейт:** правка справочника (`PATCH types/{code}/`) — `module="files"`,
+`level="write"` (узел `files.types`); остальные ручки — в
+`access/self_service.py`: папка, загрузка, версии, удаление и ссылка —
+`scoped` (решает владелец), список типов — `open`.
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | GET | Папка владельца: `storage_prefix` (`file_object/<компания или public>/<папка>/<id>/`), `can_modify` + `modify_reason`, `delete_is_physical`, `types` (справочник + правила владельца: `cardinality`, `quota_group`, `required`, `can_add`, `reason`), `quotas` (`group, max, used` — версии не в счёт), `documents` (`current` + `versions` от новой к старой, удалённые — в конце; `can_version`, `can_delete` — что можно с этим документом). Ссылок на файлы в ответе нет — только `link`. `modify_reason` — только когда менять нельзя из-за состояния владельца (подсказка автору); отказ по правам не объясняется, там `null` |
+| `/api/files/v1/{owner_type}/{owner_id}/files/` | POST | `UploadFile`: multipart `file`, `file_type`; заголовок `Idempotency-Key` (повтор отдаёт первую запись; тот же ключ для другого файла/места — 422 `E-FIL-07`) → 201, версия 1 нового документа |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/` | POST | Новая версия: multipart `file`, `base_file_id` — действующая версия, поверх которой грузят. Уже заменена → 409 `E-CON-01` («Документ изменён пользователем … в 14:32…»). Номер версии присваивается один раз и не меняется, прежняя получает «Заменён» (`is_replaced`, `replaced_by_id`) |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/` | DELETE | 204. Владелец ни разу не отправлялся — физически (строки + файл в media), повтор — 404 `E-FIL-05` (документа больше нет); иначе только `deleted_at` у всех версий, повтор — 204 |
+| `/api/files/v1/{owner_type}/{owner_id}/files/{document_id}/versions/{file_id}/link` | GET | `DownloadFile`: `{url, expires_at}` — временная ссылка после проверки прав, выдаётся на каждое скачивание. Каждая выдача — событие `file_downloaded` в журнал владельца (ТЗ §25.2: кто, когда, IP, user-agent). Удалённые после отправки версии тоже отдаются — это история документа |
+| `/api/files/v1/types/?owner_type=` | GET | Справочник «Типы файлов»: `code, owner_type, name, formats, max_mb, sort_order` + правила владельца |
+| `/api/files/v1/types/{code}/` | PATCH | Гейт `files:write`, только `{"max_mb"}`, 1…`FILES_UPLOAD_CEILING_MB` (20) — ТЗ: «Нет / размеры / нет»; отказ гейта — общий 403 `{"detail"}` |
+
+**Ошибки — в конверте модуля БЗО (D-28):** `{"detail", "code", "fields": [{"field", "message"}], "details"}`,
+`detail` — готовый текст для человека (для формата и размера — дословно ТЗ §13.2).
+Антивирус по умолчанию выключен (D-31) — `E-FIL-08`/`E-SYS-01` возможны, только
+когда задан `ANTIVIRUS_CLAMD_HOST`. Коды: `E-FIL-01` 415 формат/содержимое,
+`E-FIL-02` 413 размер (отдаёт и nginx), `E-FIL-03` 409 предел количества /
+«1 действующий» уже есть, `E-FIL-04` 422 не приложен обязательный файл (отказ
+владельца при отправке), `E-FIL-05` 404 не найдено/не видно, `E-FIL-06` 409
+не тот статус владельца, `E-FIL-07` 422 некорректный запрос, `E-FIL-08` 422
+антивирус нашёл угрозу (файл не сохраняется, событие `file_rejected` — только
+в журнал), `E-SYS-01` 503 антивирус не ответил (файл без проверки не
+принимается — повторить позже), `E-CON-01` 409 версия изменена другим,
+`E-ACC-01` 403 нет прав; неподдерживаемый метод — 405 с кодом `E-FIL-07`.
+Антивирус проверяет и документы вне подсистемы — сканы договорного контура
+(`/api/contracts/v1/*/file`, scope `generic`) и PDF шагов согласования
+(`signoff_doc`): там отказ в обычном формате, `{"detail"}` 422 (угроза) или
+503 (сканер недоступен). 401, 403 несовпадения компании токена и 503 — общий формат
+`api_view` (`{"detail"}`): это отказы платформы, а не подсистемы.
+
+Байты — в media, scope `file_object` (`owner_gated`): по JWT media такие
+файлы не отдаёт и не подписывает никому — только по ссылке подсистемы, так что
+скачивание мимо журнала невозможно. `Content-Disposition` несёт исходное имя
+(RFC 5987, кириллица сохраняется): PDF и картинки — `inline`, остальное —
+`attachment`. Журнал загрузок, замен и удалений пишет те же IP и user-agent.
+
+Журнал — `FileEvent` (django-admin «Журнал файлов», только просмотр): одна
+запись на загрузку, новую версию, удаление и выдачу ссылки у любого
+владельца; те же события уходят владельцу в `on_event` (его лента, если
+она есть). Удаляя сам объект, владелец зовёт `files.owner_deleted`: ни разу
+не отправленный уносит файлы физически, отправлявшийся оставляет их с
+`deleted_at`.
+
+---
+
 ## `apps.mail` — `/api/email/v1`
 
 Grew considerably during the port relative to the old `email-service`
@@ -957,6 +1071,39 @@ would mean approvers signed off on a document that is no longer in the card.
 Every path is registered in **both** the slashed and bare spelling
 (`APPEND_SLASH = False`). No frontend consumes this yet.
 
+**Заморозка после переноса в БЗО (A6.2, D-S6-4).** Признак — строка
+`contracts.FreezeState` в схеме компании; ставит и снимает её только
+`manage.py contracts_freeze --company <slug> [--comment …] [--actor <user_id>] [--undo]`
+— шаг ранбука после проверок `bpp_migrate_contracts` (морозит человек, когда ФД
+сверил сальдо). Повтор идемпотентен (дата первой заморозки не сдвигается),
+`--undo` возвращает запись. У замороженной компании:
+
+- любой метод, кроме `GET`/`HEAD`/`OPTIONS`, под `/api/contracts/` — **403**
+  `{"detail": "Раздел перенесён в «Закупки и оплаты». Данные доступны только для чтения.", "code": "contracts_frozen"}`
+  — до аутентификации и вьюхи, всем, включая суперпользователя
+  (`apps/contracts/middleware.py`, после `CompanyContextMiddleware` и
+  `ServiceGateMiddleware`; без компании запроса признак не спрашивается);
+- django-admin раздела — только чтение;
+- чтение (списки, карточки, файлы) работает как раньше; `ServiceStatus`
+  домена не трогается — архив обязан читаться;
+- соседние компании пишут как раньше.
+
+`GET /api/contracts/v1/freeze` → `{frozen, frozen_at, comment}` (права — как у
+остального чтения раздела: любой JWT; вне контекста компании — `frozen: false`).
+Карточки `GET agreements/{id}`, `invoices/{id}`, `counterparties/{id}` несут
+`migrated_to: [{target_type, target_id, number}]` — куда запись переехала в
+модуль (`bpp.interface.migrated_targets`, только документ того же рода:
+`bpp.agreement` / `bpp.invoice` / `bpp.counterparty`; техническая заявка
+переноса не показывается); в списках — `[]`, при выключенном `bpp` — `[]`.
+Согласования (`/api/signoff/`, мимо префикса раздела): в замороженной компании
+запуск согласования документа `contracts.*` и возврат закрытого документа на
+доработку — тоже 403 `contracts_frozen` (колбэки предметов, `approval_hooks._guard`).
+`contracts_freeze` не морозит раздел, пока есть идущие согласования его документов
+(ошибка со списком); `--revoke-pending` отзывает их (документы — в черновик) и
+замораживает одной транзакцией; документы «на согласовании» без процесса (отзывать нечем) замораживаются как есть и печатаются в отчёте команды. Пока в схеме компании нет таблицы заморозки
+(код выкачен, `migrate_companies` не прогнан) раздел считается незамороженным
+(`fallback contracts.freeze.table_missing`, expected). Фоновых задач у `contracts` нет.
+
 **Purchase requests → documents.** `Agreement` and `Invoice` carry an optional
 `request_id` — the approved request of the form builder («Запросы») they
 fulfil, a plain integer (no cross-app FK). It is accepted on create and PATCH
@@ -971,6 +1118,7 @@ is disabled. `?request_id=` filters `GET /agreements` and `GET /invoices`.
 
 | Endpoint                                          | Method | Notes                          |
 |---------------------------------------------------|--------|--------------------------------|
+| `/api/contracts/v1/freeze`                       | GET    | `{frozen, frozen_at, comment}` — раздел заморожен после переноса в БЗО (A6.2); запись тогда — 403 `contracts_frozen` |
 | `/api/contracts/v1/enums`                        | GET    | Choice labels + `committing_statuses` + status-transition table, so the frontend doesn't keep its own copy |
 | `/api/contracts/v1/countries`                    | GET, POST | Reference                   |
 | `/api/contracts/v1/countries/{id}`               | GET, PATCH, DELETE |                    |
@@ -1075,7 +1223,11 @@ Generic multi-stage approval. **Do not confuse with `apps.approvals`
 (`/api/requests/v1`)** — that one is a form *designer*: it approves
 `RequestInstance` rows holding JSON field values it owns. `signoff` approves
 rows that already exist in **another app's own table**, addressed by a
-`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. There is no
+`(subject_type, subject_id)` pair — `"contracts.budget"` + a pk. **`subject_id`
+is a string everywhere in the JSON** (responses, inbox, process cards) since
+26.09.2026: BPP documents are keyed by UUID. Requests still accept a number
+(`"subject_id": 5` and `"5"` address the same process); integer-keyed domains
+still get an `int` in their callbacks. For the BPP module `signoff.interface` also offers `decide_many`, `current_holders(subject_type, ids)` («Сейчас у»: `{stage, users[{id,name}], position, since, no_executor}` per running process), `pending_for_user(user_id)` (for the daily digest) and `start_process(..., preapproved=[{position_id, actor_id, label}])` — groups of those positions get no tasks, a stage made only of them closes at once with `stage_preapproved`; a position not on the route is `PreapprovalMismatch` (409). There is no
 `ContentType` and no cross-app FK; the domain app hands over its model class
 and callbacks at startup (`AppConfig.ready()` → `signoff.register_subject`),
 so the dependency only ever points *domain → signoff*.
@@ -1190,24 +1342,54 @@ clicking. `signoff.interface.pending_requirement_keys(user_id, subject_type,
 subject_id)` tells a domain whose working stage is running right now — that
 is how `approvals` decides who may fill approver-filled fields.
 
+**Who edits routes (`editor` below).** The platform admin (`is_elevated`) edits every route; a subject type may also name its own editors with `register_subject(route_editors=fn(token) -> bool)`. BPP does: routes of `bpp.*` documents are edited by holders of `bpp.routes` `edit` — ФД and АДМ (В-09, `access/0018`). Every route and stage handle checks the type of *its* route, so a BPP editor gets 403 on any other route.
+
 | Endpoint                                    | Method | Auth | Notes |
 |---------------------------------------------|--------|------|-------|
 | `/api/signoff/v1/enums`                     | GET    | jwt   | Choice labels for quorum, `approver_kind`, and every state enum — process, stage, task, and the subject's own `approval_state` |
 | `/api/signoff/v1/subjects`                  | GET    | jwt   | Registered subject types, their labels, `has_active_route`, and `fields[]` — the facts that type allows branching on, with `options` for `choice` fields. This is what the route builder picks from |
-| `/api/signoff/v1/routes`                    | GET    | jwt   | `?subject_type=&is_active=` |
-| `/api/signoff/v1/routes`                    | POST   | admin | 409 if the subject type isn't registered, or a second active route |
-| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | jwt / admin | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
-| `/api/signoff/v1/routes/{id}/stages`        | POST   | admin | `{order, name, quorum, position_ids[], condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). Unknown ids → 409. The current active employee/account holders are resolved only when the process starts. |
-| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | jwt / admin | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
+| `/api/signoff/v1/routes`                    | GET    | editor | `?subject_type=&is_active=` — a non-admin gets only the types they may edit (none → 403; a `subject_type` they may not edit → 403) |
+| `/api/signoff/v1/routes`                    | POST   | editor | 409 if the subject type isn't registered, or a second active route |
+| `/api/signoff/v1/routes`, `/routes/{id}`    | POST / PATCH | editor | Route flags (BPP D-21), all off by default: `forbid_self_approval`, `reject_comment_min` (0 = no minimum), `lazy_resolution`, `skip_unmatched_groups` (a group whose conditions all miss and that has no fallback is skipped instead of 409; no stage left → the process is approved at once, D-18), `no_executor_notify_position_ids[]`, `escalation_position_id`, `self_skip_notify_position_ids[]` — HR positions, checked to exist (409). PATCH applies only the sent fields; `escalation_position_id: null` clears it. The card also returns `*_positions` `{id, title}` for labels. Flags are snapshotted into `process.route_flags` at start |
+| `/api/signoff/v1/routes/{id}`               | GET / PATCH, DELETE | editor | GET also returns `coverage_gaps[]` — `choice` values with no branch in their group — and `initiator_stage_not_last`. Both are warnings for the editor, not blocks; the list endpoint omits them (too costly per row) |
+| `/api/signoff/v1/routes/{id}/stages`        | POST   | editor | `{order, name, quorum, position_ids[], positions[]?, condition?, is_fallback?, approver_kind?, requires_attachment?}`; ≥1 HR position for `position` and **none** for `initiator` — both enforced by the schema (422). `positions[]` — `{company, position_id}` pairs, a position of an ancestor company (B8.1, see below). Unknown ids or a company that is not own/ancestor → 409. The current active employee/account holders are resolved only when the process starts. |
+| `/api/signoff/v1/stages/{id}`               | GET / PATCH, DELETE | editor | PATCH replaces `position_ids` **wholesale**; omitting the key leaves them alone. Same for `condition` — omit to keep, send `[]` to clear. Switching `approver_kind` to `initiator` clears the position list; sending a non-empty list alongside it is a 409. The last stage of a route can't be deleted |
 | `/api/signoff/v1/processes`                 | GET    | jwt   | `?subject_type=&subject_id=&state=&initiator_id=` |
 | `/api/signoff/v1/processes`                 | POST   | admin | Deliberately narrow — it accepts *any* `subject_id` of any type and so would bypass domain permissions. **The real submit path is the domain endpoint** (`/api/contracts/v1/budgets/{id}/submit`, …) |
 | `/api/signoff/v1/processes/{id}`            | GET    | jwt   | Full card: stages, tasks, approver names, subject title/url, plus `subject_facts` and each stage's `condition`/`matched_by` (`always`\|`condition`\|`fallback`) — the record of *why* these approvers |
 | `/api/signoff/v1/processes/{id}/cancel`     | POST   | jwt   | Initiator **or** admin — checked on the row. Cancel ≠ reject: the object returns to `draft` |
+| `/api/signoff/v1/processes/{id}/retry-executors` | POST | admin | Re-resolve `no_executor` stages of the current group (lazy routes, ТЗ §16.1 п.5) → `{found, process}`. Beat does the same every 15 min (`signoff.retry_no_executor`) |
 | `/api/signoff/v1/processes/{id}/rework`     | POST   | jwt   | `{comment?}` — return an **already decided** object for rework, the only way to unlock an `approved`/`rejected` row for editing. **Approver of that process or admin** (initiator deliberately excluded — that would override someone else's decision); 409 while the round is still running (use the `rework` decision or cancel instead), 409 if the object is already open. The process moves to state `rework`, keeps its original `finished_at`, and the rework is journalled as a `reopened` event |
-| `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks; per-task `{task_id, ok, error?}`, no shared transaction |
+| `/api/signoff/v1/tasks/batch-decision`      | POST   | jwt   | `{task_ids[], decision, comment?}` — one decision over many tasks, **or** `{items: [{task_id, decision, comment?, option_key?}]}` — each with its own comment and vote option (BPP B1.3, `interface.decide_many`); exactly one of the two shapes, else 422; per-task `{task_id, ok, error?}`, no shared transaction |
 | `/api/signoff/v1/tasks/mine`                | GET    | jwt   | The inbox. Only `pending` tasks on **active** stages — a request on a stage the process may never reach is not "waiting on you". Each row carries `stage_order`/`stage_count` ("step 2 of 4") so a user who holds several consecutive stages — the buyer's checklist on a purchase request — can tell their tasks on one subject apart |
-| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?}`. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
+| `/api/signoff/v1/tasks/{id}/decision`       | POST   | jwt   | `{decision: "approve"\|"reject"\|"rework", comment?, option_key?}`. With route flags: `reject`/`rework` whose comment is shorter than `reject_comment_min` → **422** (BR-060); the process author deciding under `forbid_self_approval` → **403** (BR-061). **`option_key`** — when the subject offers variants (process card `options`, today: an agreement with alternative offers, ТЗ §12), `approve` must name one of their `key`s → **422** «выберите…» without it, 422 «обновите страницу» for an unknown key, 422 with the subject's reason if the variant no longer fits (withdrawn, budget exceeded); ignored for reject/rework. The vote is stored on the task (`option_key`, `option_label` in the card), handed to the subject's `on_option` in the same transaction, and the subject reads the **last stage's** vote on approval. `batch-decision` never guesses a variant — such tasks fail there with the same error. The **named approver** decides; an admin token on someone else's task gets 409. On a `requires_attachment` stage, approving before the document is uploaded is a 409 (neither negative decision needs the PDF). `reject` and `rework` both close the whole round from that stage; they differ only in the subject: rejected stays locked, reworked becomes editable again |
 | `/api/signoff/v1/tasks/{id}/attachment`     | POST   | jwt   | **multipart**, field `file` — the PDF for a `requires_attachment` stage, uploaded *before* the decision (the upload must not sit inside the transaction holding the process lock). Only the task's own addressee: **no admin override**, since uploading for someone else would forge their signature. PDF-only and ≤25 MB by media_files scope policy (`signoff_doc`, magic-byte checked) → 415/413 pass through verbatim. Re-uploading replaces the previous file while the task is still pending |
+| `/api/signoff/v1/positions/companies`       | GET    | editor | B8.1: companies whose positions a route of this company may use — `[{slug, name, own}]`, own first, then **active** ancestors by `Company.parent`, nearest first |
+| `/api/signoff/v1/positions`                 | GET    | editor | `?company=<slug>` (empty — own) → `[{id, title, department_name, is_active}]` of that company's schema. A company that is neither own nor an ancestor → 404. The route editor reads positions here, not from the HR API, which serves only the request's company |
+| `/api/signoff/v1/tasks/mine/all`            | GET    | jwt   | B8.1: the inbox across the user's companies — the current one, companies with a membership, and companies **below** the current one (a holding director's tasks live in the subsidiary's schema). Rows are `tasks/mine` rows plus `company {slug, subdomain, name, url, current}`, `can_enter` (membership — «Open in <company>»), `direct_allowed`/`direct_blocker` (may be decided right here, or why not) and `process_path`. Inactive companies, ones without a schema or with `signoff` off are skipped |
+| `/api/signoff/v1/companies/{company}/processes/{id}` | GET | jwt | B8.1: process card of a subsidiary, opened from the holding — the full process card plus `summary` (the subject's `Subject.summary`: header fields and positions as ready strings), `my_task_id`, `direct_allowed`/`direct_blocker`, `can_enter` and `company`. `{company}` not strictly **below** the request's company, or no task of this user in the process → 404 |
+| `/api/signoff/v1/companies/{company}/tasks/{id}/decision` | POST | jwt | B8.1: decide one's own task of a subsidiary **from the holding** — body as `tasks/{id}/decision`. Runs the engine in the subsidiary's schema, so the subject's status, KPI and notifications land there; the event payload records `decided_from`. Company not below / not your task → 404; `signoff` or the subject's submodule off in the subsidiary → 503; the subject type doesn't support it (`cross_company_decisions`) or the route's `allow_direct_decisions` is off → 403; the stage needs an approver's PDF or a variant vote → 409; the usual 422/409 otherwise (the BPP budget check runs as usual) |
+
+**Approval across companies (BPP B8.1).** Directors sit on the holding's
+staff, subsidiaries don't have them, so a subsidiary route's stage may stand
+on a position of an **ancestor** company: `positions[]` of `{company,
+position_id}` on stage create/update (alongside `position_ids[]` of the own
+company — the two are summed; on PATCH sending either replaces the whole
+list), and on the route `escalation_position_company`,
+`no_executor_notify_foreign[]`, `self_skip_notify_foreign[]`. Only the own
+company and active ancestors are accepted (409 otherwise); the holders —
+including acting holders — are resolved in the holding's schema, while the
+process and its tasks stay in the subsidiary's. An unavailable company of a
+position (archived, no schema, `hr` off, no longer an ancestor) refuses the
+start without `lazy_resolution` and puts the stage into «Нет исполнителя» with
+the reason (`no_executor` event `unavailable`) with it. One person holding two
+positions of a stage gets **one** task (`also_positions`) and their decision
+counts for both. Two ways to decide: by default the user opens the task in
+the subsidiary (needs a membership there — BPP A8.1); with the route flag
+`allow_direct_decisions` (live, **not** snapshotted — it takes effect at once,
+including running processes; only for subject types registered with
+`cross_company_decisions`, today the five BPP documents) right from the
+holding via the two endpoints above.
 
 `subject_title` / `subject_url` on process cards and inbox rows come from the
 domain app's `describe` callback — signoff cannot name a row it isn't allowed
@@ -1374,6 +1556,512 @@ schema the platform can run on.
 
 ---
 
+## `apps.project` — `/api/project/v1`
+
+«Проект» модуля БЗО (тенантная аппка, D-02). Гейт `module="project"`; поверх
+него — узлы: создание и правка — `project.projects` (`create`/`edit`),
+участники — `project.members` (`edit`), иначе 403 `E-ACC-01`. Видимость: без узла
+`project.all` (у роли ПМ его нет) список, карточка и участники ограничены
+проектами, где вызывающий участник; чужой проект — 404, как несуществующий.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET projects` (`?q=`, `?mine=1`) | Поиск без архива; `mine=1` — только где я участник |
+| `POST projects` | Создать; повтор кода — 422 `E-PRJ-01`, конец раньше начала — 422 `E-VAL-01` (поле `date_end`) |
+| `GET` / `PATCH projects/<id>` | Карточка (со сроками `date_start`/`date_end` и кодом записи в 1С `ext_1c_ref` — тот же ключ принимают `POST` и `PATCH`; уникален среди непустых в компании и хранится в нижнем регистре — сервис приводит GUID сам, `project/0003`; занятый — 422 `E-PRJ-01`) / правка (смена руководителя добавляет его в участники). Название, статус, сроки и руководителя повторяет доска задач проекта и принимает любую правку (D-02, решение 01.10: «Проект» главный) — название, занятое другой доской, она получает с кодом проекта. Конец раньше начала — 422 `E-VAL-01` (поле `date_end`). `409 E-PRJ-04` — отказ соседа, повторяющего поля «Проекта»; доска задач так не отказывает |
+| `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
+| `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
+| `GET user-names` (`?ids=1,2,3`, до 200) | ФИО из учёток `users` — `{id строкой: ФИО}` — только для руководителей и участников проектов, ВИДИМЫХ вызывающему (без `project.all` — где он участник; не справочник пользователей); id не из цифр ASCII или больше int4 пропускаются; чужие и невозможные id в ответ не попадают. Подписи карточки «Проекта» у ролей без кадровых прав (`hr/v1/employees` им — 403) |
+
+---
+
+## `apps.notifications` — `/api/notifications/v1`
+
+Центр уведомлений платформы (`public`). Все ручки — самообслуживание
+(`self` в `apps/access/self_service.py`): получатель всегда
+`request.token.user_id`, параметра «чьи» нет; чужое уведомление — 404. Лента
+на поддомене компании — уведомления этой компании плюс общие.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET notifications` (`?limit=`, ≤200) | Последние уведомления |
+| `GET notifications/history` (`?page=&limit=&status=all\|unread\|read&target_type=`) | Страница истории + `unread_total` |
+| `POST notifications/<id>/read`, `…/unread`, `POST notifications/read-all` | Прочтение, 204 |
+| `DELETE notifications/<id>/delete` | Удалить своё, 204 |
+| `GET` / `PATCH prefs` | Каналы `bell/email/telegram` + `telegram_linked` + `telegram_available` (бот настроен); колокольчик выключить нельзя (лента задач идёт только в него) — 422 `E-NTF-01`; Telegram без привязанного чата — 422 `E-NTF-02` |
+| `POST telegram/link` | Ссылка на бота с одноразовым кодом (15 мин); бот не настроен (нет токена, имени или секрета вебхука) — 503 `E-NTF-03` |
+| `POST telegram/webhook` | Вебхук бота, `auth=None`; без верного `X-Telegram-Bot-Api-Secret-Token` — 403 |
+
+---
+
+## `apps.refdata` — `/api/refdata/v1`
+
+Общие справочники модуля БЗО: одна копия на группу в схеме `public` (D-03).
+Чтение — `module="refdata", level="read"`; запись — `level="write"` **и**
+поддомен управляющей компании (компания вида «холдинг»), иначе 403
+`{"code": "E-REF-01"}`. Удаления нет: `DELETE` → 405, запись уходит в архив
+`PATCH {"is_active": false}` и остаётся в старых документах. Повтор кода —
+422 `E-REF-02`. Родительская статья (`parent_id` в `POST articles`) — только
+из той же группы, что и новая статья; чужая группа или несуществующий
+родитель — 422 `E-REF-05` с `fields[0].field = "parent_id"` (группу и
+родителя после создания `PATCH` не меняет). Группа проверяется раньше
+родителя: `group_id` не UUID или несуществующей группы — 422 `E-VAL-01`
+«Группа статей не найдена…» с `fields[0].field = "group_id"`; группа в архиве —
+тот же 422 `E-VAL-01` на `group_id` «Группа статей „…“ в архиве — выберите
+действующую.».
+
+| Коллекция | Методы | Запись |
+|---|---|---|
+| `countries`, `currencies`, `uoms`, `article-groups`, `articles` | `GET` (`?active=1` — без архива), `POST` | `PATCH <коллекция>/<id>` |
+| `rates` (курс к KZT на дату) | `GET`, `POST` (ручной ввод ФД, `source=manual`) | — |
+| `vat` (ставка страны на период), `mrp` (МРП с даты) | `GET`, `POST` | — |
+
+Каждая строка списка несёт `can_edit` — вычисляется один раз на запрос
+(`services/editing.can_edit`, поддомен управляющей компании) и проставляется
+всем строкам одним и тем же значением, а не гейтом на каждую (`views.py`,
+`_listing_can_edit`); ответ `PATCH` несёт `can_edit: true` — раз правка
+прошла гейт записи, значит запрос уже с поддомена управляющей компании.
+
+Курсы НБРК грузит Celery-beat `refdata.load_nbrk_rates` (10:30 Asia/Almaty);
+ручной курс на ту же дату загрузка не перезаписывает. Соседи читают значения
+только через `apps.refdata.interface`: `vat_rate`, `mrp`, `contract_threshold`
+(= 1000 × МРП), `exchange_rate` (KZT → 1), `article_brief`, `article_groups`,
+`uom_brief`, `country_brief`, `can_edit`.
+
+### Производственный календарь РК (A7.1, D-S7-1)
+
+Общий справочник группы вместо `tasks.ProductionDay` в схемах компаний:
+базовый календарь считает `apps/core/kz_holidays.py`, строки `refdata.ProductionDay` —
+ручные переопределения поверх него.
+
+| Ручка | Доступ | Описание |
+|---|---|---|
+| `GET production-calendar/?date__gte=&date__lte=` | любой вошедший сотрудник (самообслуживание `open`, `access/self_service.py`) | `[{date, day_type, working_days_since_epoch, note, can_edit}]` (`can_edit` — узел `edit` и управляющая компания, по нему фронт показывает кнопку правки дня); окно по умолчанию — «месяц плюс 31 день», больше 370 дней или перевёрнутое — 400, мусорная дата — 422 |
+| `PATCH production-calendar/<YYYY-MM-DD>/` `{day_type, note?}` | `api_view(module="refdata", level="write")` **и** узел `refdata.production_calendar` строго `edit` **и** управляющая компания | `day_type`: `working`/`weekend`/`holiday`/`short`; пересчитывает счётчик года; иначе 403 (`E-REF-03` — не управляющая компания или нет узла) |
+
+Узел `refdata.production_calendar` не наследует глубину от `refdata`
+(`EXPLICIT_ONLY`): явная строка `edit` — у `bpp-od`, `hr-senior`, `hr-lead`
+(`access/0022`), у прочих системных ролей пустая; у модульной `platform-admin` строки узла нет (только модульные строки) — правки нет (узел explicit-only); роль с `refdata:admin` без
+строки узла править не может. `hr-senior`/`hr-lead` получают уровень `refdata:write` (чтение справочников и гейт записи), но правят только календарь: запись в остальные справочники требует прав на их узлы. Расчёты рабочих дней для соседей —
+`refdata.interface`: `day_type`, `is_working_day`, `working_days_between`,
+`days_between`, `add_working_days`, `production_days`, а для расчётов оплаты (D-S7-7) — `is_bank_day`, `add_bank_days`, `bank_days_before`. Разница в счёте: `add_working_days` считает день начала (1 рабочий день от понедельника — понедельник), `add_bank_days` — нет (1 банковский день от пятницы — понедельник). Перенос строк из схем
+компаний — `manage.py refdata_import_production_days [--dry-run]`.
+
+---
+
+## `apps.bpp` — `/api/bpp/v1` (модуль БЗО)
+
+Тенантная аппка. Каждая ручка — `api_view(module="bpp", level=…)`: `read` на
+чтение, `write` на запись; права тоньше уровня — узлы `bpp.*` (роли `bpp-*`,
+`access/0014`), принадлежность и статус проверяют сервисы. Ошибки — конверт
+D-28 `{detail, code, fields}`: `detail` — текст ТЗ §26.1, `code` — `E-…` из
+каталога ТЗ и плана этапа 2 (`docs/plans/2026-09-28-bpp-stage2-executor-b.md`). Переход статуса не из таблиц ТЗ §15 — 409 `E-STS-01` «Нельзя {действие} {документ} в статусе „{статус}“». Записывающие
+ручки принимают `Idempotency-Key` (повтор отдаёт первый ответ с
+`Idempotent-Replay: true`) и `version` записи в теле (устарела — 409
+`E-CON-01`). Чужой документ — 404, как несуществующий.
+
+**Бюджет** — подмодуль `bpp_budget` (ТЗ §06, задача B2.1). Утверждает и
+корректирует ФД сам, без маршрута (D-07): узел `bpp.budgets.approve`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET budgets` (`?status=&project_id=&page=&page_size=`) | Реестр L-01 с итогами (лимит / задействовано / `paid_fact` — оплачено факт / доступно) по видимым строкам; `?format=xlsx` — выгрузка (с колонкой «Оплачено факт») |
+| `POST budgets` | Создать черновик (версия 1); второй бюджет проекта — 422 `E-BUD-03` со ссылкой в `fields[0].existing_id`, дубль статьи — `E-BUD-04` с номером строки |
+| `GET` / `PATCH` / `DELETE budgets/<id>` | Карточка F-01 (строки, итоги по группам, открытая корректировка, `allowed_actions`) / правка черновика / удаление черновика (`?version=`). `paid_fact` — «Оплачено факт» (CALC-007: Σ действующих сопоставлений выписки по счетам статьи, `bank.recon.paid_fact_by_article`) у строк, в итогах и по группам: `null` до первого утверждения (как `committed` строк) и при выключенном у компании `bpp_bank` |
+| `POST budgets/<id>/approve` | Утвердить: ≥ 1 строки и Σ > 0, иначе 422 `E-BUD-08`. СН компании и ПМ проекта получают уведомление «Бюджет проекта … утверждён» (ТЗ §16.2 п.1; получатели — `access.holders_of` + участники проекта, только члены компании); утверждённая корректировка — «…лимиты статей обновлены» |
+| `POST` / `PATCH budgets/<id>/correction` | Начать корректировку (черновик версии N+1) / сохранить её строки; строку с «Задействовано» > 0 удалить нельзя — 422 `E-BUD-09` |
+| `POST budgets/<id>/correction/approve` (`comment` ≥ 10, иначе `BR-060`) | Утвердить: лимит ниже задействованного — 422 `E-BUD-05` с суммой; проверка под блокировкой строк |
+| `POST budgets/<id>/correction/cancel` | Удалить черновик версии |
+| `POST budgets/<id>/close`, `…/reopen` (`comment` ≥ 10) | Закрыть (заявки на согласовании — 409 `E-BUD-06`) / открыть повторно |
+| `GET budgets/<id>/versions`, `…/versions/<n>` | Версии и снимок версии N |
+| `GET budgets/lines?project_id=&role=sn\|pm` | GetBudgetLines: статьи бюджета проекта в группе роли, с остатком |
+| `GET budgets/balance?project_id=&article_id=&exclude_request_id=` | GetBudgetBalance `{limit, committed, available, as_of}` по действующей версии |
+
+**Заявка на закупку и план закупок** — подмодуль `bpp_requests` (ТЗ §07, §08,
+задачи B2.2, B2.3). Согласование «ТД → ОД» — движок `signoff`, тип
+`bpp.purchase_request` (маршрут заводит `manage.py bpp_configure_routes`),
+решения — ручки `signoff`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET requests` (`?status=&project_id=&article_id=&author_id=&created_from=&created_to=&search=&awaiting_me=1`) | Реестр L-02: СН и ПМ — свои и те, что ждут их решения; держатели `bpp.requests.all` (ТД, ОД, ФД, ГД, АДМ) — все. Колонка `current_holders` («Сейчас у»); `?format=xlsx` — выгрузка |
+| `POST requests` | Черновик: номер `ЗЗ-ГГГГ-NNNNNN` сразу; обязателен только проект. Нет утверждённого бюджета — 422 `E-BUD-02`, статья чужой группы — 403 `E-REQ-04` (AC-002), проект не из участий ПМ — 403 `E-REQ-05`, > 200 позиций — 422 `E-REQ-06`, статьи нет в бюджете — 422 `E-BUD-07` |
+| `GET` / `PATCH` / `DELETE requests/<id>` | Карточка F-02 (блок «Бюджет» с «Остатком после заявки», `rework_comment`, `current_holders`, `allowed_actions`) / правка автором в черновике и на доработке / удаление черновика |
+| `POST requests/<id>/submit` | Отправить: обязательные поля — 422 `E-REQ-01`; остаток под блокировкой строки бюджета — 422 `E-BUD-01` с суммой превышения; маршрута нет — 409 `E-SGN-01` |
+| `POST requests/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STS-01` |
+| `POST requests/<id>/cancel`, `…/close-remainder` (`comment` ≥ 10, иначе `BR-060`) | Отменить (автор — черновик и доработку, ФД — утверждённую) / закрыть остаток; резерв снимается |
+| `POST requests/<id>/copy` | Новый черновик с той же шапкой и позициями |
+| `GET requests/<id>/execution` | Блок «Исполнение» по позициям |
+| `GET requests/<id>/print` | Печатная форма заявки в PDF (`inline`): реквизиты, позиции, итог и «Лист согласования» — решения последнего процесса, ждущие задачи не печатаются. Чужая заявка — 404 |
+| `GET plan` (`?role=&project_id=&article_id=&name=&search=&purchase_type=&need_from=&need_to=&overdue=1&sort=&page=&page_size=`) | План закупок: позиции утверждённых заявок пользователя в роли `role` с остатком > 0; держатель `bpp.plan.all` (ФД) — все, `read_only`; `?format=xlsx` — выгрузка |
+| `POST plan/validate` (`{item_ids, target: contract\|invoice, role?}`) | Проверка выбора: разные проект или статья — 422 `E-PLN-01`, остаток 0 — `E-PLN-02`, позиции не в плане — 409 `E-PLN-03`; ответ — заготовка мастера F-03 |
+| `POST plan/reassign` (`{item_ids, to_user_id}`) | Переназначить исполнителя позиций — АДМ (`bpp.plan.reassign` edit) |
+
+**Подотчётные средства** — подмодуль `bpp_accountable` (задача B4.1, логика
+`contracts`). Источник — статья бюджета проекта; сумма занимает бюджет с
+отправки на согласование и дальше, включая закрытую заявку. Согласование
+заявки и авансовых отчётов — движок `signoff` (типы
+`bpp.accountable_funds_request`, `bpp.advance_report`, маршрут настраивает
+администратор).
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET` / `POST accountable` (`?status=&project_id=&article_id=&date_from=&date_to=&search=&awaiting_me=1&page=&page_size=`) | Реестр — конверт реестров модуля `{items, total, page, page_size, totals: {amount}}`: свои заявки и ждущие вашего решения; ФД и бухгалтер — все. Строка — подотчётное лицо, проект, статья, цель, сумма, «Подтверждено отчётами», «Сейчас у»; поиск — по номеру и цели; `?format=xlsx` — выгрузка / заявка `ПО-ГГГГ-NNNNNN` на себя; превышение остатка — 422 `E-BUD-01` |
+| `GET` / `PATCH` / `DELETE accountable/<id>` | Карточка (проект, подотчётное лицо, выдача, остаток, отчёты с файлами и `can_submit`, «Сейчас у», `allowed_actions`: `save`/`submit`/`delete` — автору в черновике, `mark_paid` — бухгалтеру, `add_report` — автору, пока заявка ждёт отчётов) / правка и удаление черновика |
+| `POST accountable/<id>/submit` | Отправить: остаток под блокировкой строки бюджета |
+| `POST accountable/<id>/mark-paid` | Бухгалтер выдал деньги (`bpp.accountable.payment`) — заявка ждёт отчётов |
+| `POST accountable/<id>/reports` (multipart `expense_name`, `amount`, `file`) | Авансовый отчёт; сверх остатка — 422 `E-ACN-01` |
+| `POST accountable/reports/<id>/submit`, `GET …/file-link` | Отправить отчёт на согласование / ссылка на файл |
+
+Одобренные отчёты, покрывшие сумму, закрывают заявку.
+
+**Договор** — подмодуль `bpp_agreements` (ТЗ §09, §15.3, задача B3.1). Согласование
+«ФД → ТД → ОД → ГД» — движок `signoff`, тип `bpp.agreement`; допсоглашение —
+тот же тип в области `supplementary` (этап ФД только при `amount_delta > 0`,
+без изменения суммы — сразу в силе, флаг `skip_unmatched_groups`). Маршруты
+заводит `manage.py bpp_configure_routes`. Узлы: создание — `bpp.agreements`
+`create` (СН, ПМ), «Исполнен» и расторжение — `bpp.agreements.terminate` (ФД).
+Позиции закрытого договора «На согласовании»/«Действует» занимают бюджет
+(CALC-002), открытый — нет (D-09); допсоглашение занимает свой прирост на
+уровне статьи.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET agreements` (`?status=&project_id=&article_id=&counterparty_id=&date_from=&date_to=&search=&awaiting_me=1`) | Реестр L-05: СН и ПМ — свои, договоры своих проектов и групп статей и ждущие их решения; ФД, ТД, ОД, ГД, БУХ, АДМ — все. Колонки «Остаток по договору» (CALC-009) и «Сейчас у»; `?format=xlsx` — выгрузка |
+| `POST agreements` (`{item_ids, role?}`) | Черновик из плана (мастер F-03): номер `ДГ-ГГГГ-NNNNNN`; проект, статья, тип — из заявки; количество — остаток позиции, сумма — Σ плановых остатков. Выбор проверяет `plan/validate` (E-PLN-01…03) |
+| `GET` / `PATCH` / `DELETE agreements/<id>` | Карточка F-04 (контрагент, НДС, позиции с остатком, блок «Бюджет» с превышением над планом, допсоглашения, `effective_amount`, `remaining`, `allowed_actions` — у действующего основного договора и права `bpp.invoices:create` в нём `create_invoice`: `POST invoices {agreement_id}`) / правка автором в черновике и на доработке / удаление черновика. `PATCH` пересчитывает НДС (CALC-008): ставка страны контрагента на дату договора из справочника, нет — 16% и `vat_warning` (D-14); `vat_rate` — ручная ставка (`vat_source: manual`, в журнале), `null` — вернуть справочную. Заблокированный или архивный контрагент — 422 `E-CTR-01`; количество больше остатка позиции — 409 `BR-042` |
+| `POST agreements/<id>/submit` (`{version, counterparty_confirmed}`) | Отправить: обязательные поля — 422 `E-AGR-01`; не приложен скан договора (панель `/api/files/v1/bpp.agreement/<id>/files/`, тип `agreement`) — 422 `E-FIL-04`; контрагент — `E-CTR-01`; непроверенный без подтверждения — 422 `E-CTR-05` (подтверждение — в журнал, метку не ставит, D-20); дубль «контрагент + номер + дата» — 422 `BR-032` с `existing_id`; остаток позиций — 409 `BR-042`; Σ позиций ≠ сумме — 422 `BR-033`; под блокировкой строки бюджета превышение над планом > доступного остатка — 422 `BR-034`; маршрута нет — 409 `E-SGN-01` |
+| `POST agreements/<id>/withdraw` | Отозвать до первого решения, иначе 409 `E-STS-01` |
+| `POST agreements/<id>/fulfil`, `…/terminate` (`comment` ≥ 10, иначе `BR-060`) | «Исполнен» (нет неоплаченных счетов) / «Расторгнут» — ФД; неосвоенные позиции возвращаются в план, резерв снимается (Q-D02) |
+| `POST agreements/<id>/supplement` | Допсоглашение к действующему договору: реквизиты родителя, сумма — прирост (0 — без изменения суммы), свой маршрут; утверждённое продлевает срок родителя и прибавляет сумму |
+| `GET agreements/<id>/execution` | Блок «Исполнение»: счета по договору (с B3.2), `effective_amount`, `remaining` |
+| `GET agreements/search?project_id=&article_id=&q=` | Договоры для счёта (BR-046, AC-007): только «Действует», тот же проект и статья, срок не истёк, у закрытого остаток > 0 |
+
+**Счёт на оплату** — подмодуль `bpp_invoices` (ТЗ §10, §15.4, задача B3.2). Один
+счёт на оба основания — «без договора» и «по договору» (D-11). Решение ФД —
+одноэтапный маршрут `signoff` типа `bpp.invoice` (D-12) с требованием
+`bpp:budget`: «Согласовать» из общего инбокса проходит ту же проверку бюджета,
+что «Оплатить». Статусы: `draft` → `under_review` → `to_pay` / `not_payable` /
+`returned` → `partially_paid` → `paid` → `awaiting_docs` → `docs_provided` →
+`closed`; кроме того `cancelled` и `replaced`. Закрывающие документы — только
+после оплаты (D-13). Строки счетов от «На рассмотрении ФД» (кроме отменённых,
+«Не к оплате» и возвращённых) занимают бюджет (CALC-002). Узлы: создание —
+`bpp.invoices` `create` (СН, ПМ); решение ФД — `bpp.invoices.decision`;
+оплата и документы БУХ — `bpp.invoices.payment`; вложение закрывающих —
+`bpp.invoices.closing_docs`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET invoices` (`?tab=all\|fd\|to_pay\|awaiting_docs\|docs_provided\|bank_unconfirmed\|bank_mismatch&status=&project_id=&article_id=&counterparty_id=&basis=&agreement_id=&date_from=&date_to=&search=&author_id=&recon_status=&bank_date_from=&bank_date_to=&bank_wait_days=`) | Реестр L-06 с вкладками §10.5: СН и ПМ — свои и ждущие их решения; ФД, БУХ, ТД, ОД, ГД, АДМ — все. `totals` — Σ в KZT и Σ оплачено по банку; у строки — `possible_split` (D-17), `counterparty_blocked`, `overdue`, `days_waiting_docs`, «Сейчас у»; `?format=xlsx` — выгрузка. Для ссылок дашборда D-01 (D-S4-8): `author_id` — автор счёта (целое, иначе 422 `E-VAL-01`); `recon_status` — статус сверки `no_data\|partial\|full\|overpaid`, повторяемый (другое значение — 422 `E-VAL-01` на поле `recon_status`); `bank_date_from`/`bank_date_to` — есть действующее сопоставление строки выписки с датой платежа в периоде (ГГГГ-ММ-ДД, иначе 422); `bank_wait_days=N` — последняя неотменённая отметка оплаты БУХ (по дате оплаты) старше N банковских дней (D-S7-7: Пн–Пт без праздников РК, но с днём переноса праздника с субботы — 24.03.2026 банковский, 25.03.2026 нет) |
+| `POST invoices` (`{item_ids}` из плана или `{agreement_id, item_ids?}` из договора) | Черновик `СЧ-ГГГГ-NNNNNN`: срок оплаты — дата + 5 банковских дней (D-S7-7; старые счета не пересчитываются); по договору контрагент, валюта, НДС и тип — из договора |
+| `GET` / `PATCH` / `DELETE invoices/<id>` | Карточка F-05 (порог 1000 МРП и `over_threshold`, курс и сумма в KZT, остаток договора, отметки оплаты, `possible_split`, `initiator_role` — роль, от которой оформлен счёт: с ней экран создаёт договор «по этим позициям», `allowed_actions`) / правка автором в черновике и после возврата (`basis: "no_contract"` очищает договор; `rate` — фактический курс, `null` — НБРК; `vat_rate` — ручная ставка) / удаление черновика |
+| `POST invoices/<id>/submit` (`{version, counterparty_confirmed}`) | «Отправить ФД»: обязательные поля — 422 `E-INV-05`; не приложен файл счёта (панель `/api/files/v1/bpp.invoice/<id>/files/`, тип `invoice`) — 422 `E-FIL-04`; без договора — порог 1000 МРП в KZT на дату счёта (422 `E-INV-01`, текст ТЗ); по договору — договор действует и тот же проект и статья (`BR-046`, расторгнутый — текст §26.2), срок (`BR-036`), остаток закрытого договора (422 `E-INV-02`); дубль — 422 `E-INV-03` со ссылкой; количество — 409 `BR-042`; Σ строк = сумме — 422 `BR-044`; под блокировкой строки бюджета сверхплановая часть ≤ остатка статьи — 422 `BR-043`; нет курса — 422 `E-REF-05` |
+| `POST invoices/<id>/cancel` (`comment` ≥ 10) | Отменить: автор — до решения ФД, ФД — до первой отметки оплаты. Счёт, по которому сверка выписки уже держит оплату (`paid_bank_amount > 0` — действующие сопоставления), не отменяется — 409 `E-STATE-01` «сначала отмените сопоставление строки выписки» (как отмена отметки оплаты); `cancel` тогда нет в `allowed_actions` |
+| `POST invoices/<id>/decision` (`{decision: pay\|not_payable\|return, planned_pay_date?, comment}`) | Решение ФД: «Оплатить» — повторная проверка бюджета «на текущий момент» под блокировкой (422 `E-BUD-01`) и плановая дата (по умолчанию — срок оплаты); «Не оплачивать» и «Вернуть» — комментарий ≥ 10 (`BR-060`) |
+| `POST invoices/batch-decision` (`{invoice_ids, decision: pay\|not_payable, comment?}`) | Массово: каждый счёт отдельно, ответ `{ok: [id], failed: [{id, reason}]}` (§10.5) |
+| `POST invoices/<id>/select-alternative` (`{offer_id, comment, version?}`) | «Выбрать» альтернативу (B5.1, SelectAlternativeOffer ТЗ §26): ФД — держатель решения по этому счёту (`bpp.alternatives.select`; не своей задаче — 403 `E-ACC-01`), счёт «На рассмотрении ФД», комментарий ≥ 10 (`BR-060`); АП дороже исходной части больше свободного остатка статьи — 422 `BR-093` текстом ТЗ. Одной транзакцией: (1) АП «Выбрано», прочие «Не выбрано»; (2) решение ФД отзывается, счёт «Заменён альтернативой»; (3) черновик нового документа на автора заявки (D-25) — договор, если АП в KZT больше 1000 МРП (BR-094), иначе счёт без договора; контрагент, позиции и цены — из АП, КП — файлом `alternative_offer`; у частичной АП — второй черновик по остатку; (4) KPI «Предварительный». Ответ — `{invoice: карточка, result: {type, id, number}, remainder: … \| null, kpi_id}`; повторный выбор — 409/422 (BR-096). Кнопка — `select_alternative` в `allowed_actions`. Карточки счёта и договора отдают `alternative: {basis, replaced_by}` — основание нового документа и чем заменён исходный. При отправке нового документа сумма в KZT отличается от АП не больше чем на 5 %, иначе 422 `E-VAL-01` на `amount` (§12.4 п.5). **Договор** выбирают голосованием: карточка процесса signoff отдаёт `options`, решает голос ГД (`signoff.final_option`); у нового договора по такой АП этап ГД предсогласован (D-26); голос за АП, на которую не хватает остатка статьи, — 422 |
+| `POST invoices/<id>/payments` (`{pay_date, amount, pp_number?, rate?}`) | «Оплачено» — БУХ: сумма ≤ неоплаченного остатка (422 `BR-052`); частично — «Оплачено частично», полностью — «Оплачено» |
+| `POST invoices/<id>/payments/<mark_id>/cancel` (`comment` ≥ 10) | Отменить отметку — БУХ или ФД, пока банк не подтвердил (`paid_bank_amount` = 0, иначе 409) |
+| `POST invoices/<id>/request-docs` (`{avr, waybill, vat_invoice, comment}`), `…/submit-docs`, `…/accept-docs`, `…/return-docs` (`comment` ≥ 10) | Закрывающие документы после оплаты (D-13): запрос БУХ (без флажков — по типу: ТМЦ → накладная, услуги → АВР) → «Ждёт закрывающих» → автор (или ФД от его имени) вложил файлы запрошенных типов на панели (`act` — АВР, `waybill` — накладная, `vat_invoice` — счёт-фактура) → «Документы предоставлены» (нет файла запрошенного типа — 422 `E-INV-04`) → принять («Закрыт») / вернуть |
+| `GET invoices/threshold?date=` | GetMrpThreshold: 1000 × МРП на дату |
+| `GET invoices/export-queue` | Очередь к оплате в xlsx — БУХ: номер, контрагент, БИН, IBAN, сумма к оплате, плановая дата, назначение платежа «Оплата по счёту № … от …, СЧ-…» |
+
+Для соседних аппок (`bpp.interface`): `find_by_number(number)` — счёт по
+`СЧ-ГГГГ-NNNNNN` для сверки выписки (A4.2); `closing_docs_pending_for_user
+(user_id)` — счета автора в «Ждёт закрывающих» для ежедневной сводки (A3.2).
+Для привлечений `tasks` (хвост этапа 6, M-5): `agreement_brief(ids)` — `{id: {id, number, status, counterparty_id, is_annex}}` батчем и ничего больше (допсоглашение к привлечению не привязывается — 422); `search_agreements(query, *, partner_key, token, company, limit=20)` — договоры контрагента в статусах «Действует»/«Исполнен» с учётом прав `token` на договоры (как реестр; нет права или выключен подмодуль `bpp_agreements` — `[]`); `visible_agreement_brief(ids, *, token, company)` — `agreement_brief` только по видимым `token` договорам (привязка в `tasks`: невидимый — как несуществующий, 422). `agreement_brief` при выключенном `bpp_agreements` — `ServiceDisabled`. Для партнёров `tasks` (A6.1): `counterparty_brief(ids)` — `{id: {id, name,
+short_name, reg_number, country_code, status, contact_person, phone, email,
+legal_address}}` батчем (неизвестные и невозможные ключи пропускаются) и
+`search_counterparties(query, *, limit=20)` — те же карточки, только
+«Активен», по наименованию или номеру; `migrated_targets(source_type, ids)`
+— куда перенесены записи `contracts` (B6.1; у контрагентов `source_type =
+"contracts.counterparty"`, цель `bpp.counterparty`).
+
+**Контрагенты** — ядро модуля, без своего рубильника (ТЗ §18, L-08, D-20,
+задача A2.3). Без согласования; уникальна пара (страна, рег. номер), номер
+хранится без пробелов и дефисов. Казахстан и тип ЮЛ/ИП/ФЛ — БИН/ИИН с
+контрольным разрядом, нерезидент — свободный номер до 30 символов. Узлы:
+чтение — `bpp.counterparties` view; создание — `create` (ФД, БУХ, СН, ПМ);
+правка карточки и счетов — `edit` (ФД, БУХ); блокировка, разблокировка, архив
+и метка — `bpp.counterparties.block` edit (ФД). Записывающие ручки
+идемпотентны, правка сверяет `version` (409 `E-CON-01`); неверный UUID в
+адресе — 404. Карточка несёт `is_verified`, `verified_threshold`,
+`bank_accounts` и `allowed_actions`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET counterparties` (`?q=&country=&status=&sort=&page=&page_size=`) | Реестр L-08 `{items, total, page, page_size}`: поиск по наименованию и номеру, фильтры (повторяемые), `page_size` 25/50/100, по умолчанию 50; тот же адрес с `?format=xlsx` (без пагинации) — выгрузка реестра в xlsx, см. «Экспорт реестров в xlsx» ниже |
+| `POST counterparties` | Создать; неверный номер — 422 `E-CTR-03`, дубль — 422 `E-CTR-02` с `fields[0].existing_id` (и при одновременной вставке), страны нет в справочнике — 422 `E-REF-04` |
+| `GET` / `PATCH counterparties/<id>` | Карточка / правка (`{version, …поля}`); архивного — 409 `E-STATE-01` |
+| `POST counterparties/<id>/block` (`{version, reason}`) | Заблокировать; причина короче 10 — 422 `BR-060` |
+| `POST counterparties/<id>/unblock`, `…/archive` (`{version}`) | Разблокировать / в архив (soft delete) |
+| `POST counterparties/<id>/verified` (`{version, verified: true\|false\|null}`) | Метка «Проверенный» вручную; `null` — вернуть решение порогу (`ModuleSetting` `counterparty_verified_threshold`, по умолчанию 3 удачных документа) |
+| `GET` / `POST counterparties/<id>/accounts` | Банковские счета / добавить (`{iban, bic, bank_name, currency, is_primary}`); IBAN — KZ + 18 знаков, mod 97, БИК — 8 или 11 знаков, иначе 422 `E-CTR-04`; первый счёт — основной |
+| `PATCH counterparties/accounts/<account_id>` | Правка счёта; `is_active: false` — архив |
+
+Договорам и счетам (B, этап 3) — `services/counterparties/lookup.py`:
+`brief(ids)`, `assert_usable(id)` (заблокированный — `E-CTR-01` дословно
+ТЗ §26.1, архивный — свой текст), `needs_confirmation(id)` (окно
+подтверждения у непроверенного), `record_success(id)` (+1 удачный документ).
+
+**Счета организации и шаблоны выписок** — подмодуль `bpp_bank` (ТЗ §11.1,
+§18, задача A3.1). Справочник АДМ: чтение — `bpp.bank` view (ФД, БУХ) или
+`bpp.settings` view (ФД, АДМ), создание и правка — `bpp.settings` edit
+(АДМ), иначе 403 `E-ACC-01`. Удаления нет — архив `is_active: false`, из
+архива — `is_active: true`. Записывающие ручки идемпотентны, правка сверяет
+`version` (409 `E-CON-01`); неверный UUID в адресе — 404. Шаблон описывает
+чтение Excel/CSV банка: `columns` — «поле выписки → текст заголовка
+колонки», поля `date`, `doc_number`, `amount` (или `debit` + `credit` при
+`amount_mode: split`), `currency`, `payer_account`, `recipient_name`,
+`recipient_bin`, `recipient_iban`, `purpose`; обязательны дата, номер,
+сумма и назначение. Шаблону 1С колонки не нужны — поля задаёт стандарт
+1CClientBankExchange.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET bank/accounts` (`?active=1`) | Счета организации `[{id, iban, bank_name, bic, currency, template: {id, name, format}, is_active, version, …}]`; `?active=1` — без архивных (список формы загрузки выписки) |
+| `POST bank/accounts` (`{iban, bic, bank_name, currency, template_id}`) | Завести счёт; IBAN — KZ + 18 знаков, mod 97, БИК — 8 или 11 знаков, иначе 422 `E-CTR-04` (та же проверка, что у счетов контрагентов); IBAN уже заведён (и в архиве тоже) — 422 `E-BNK-01` с `fields[0].existing_id`, в том числе при одновременной вставке; шаблон не найден или в архиве — 422 `E-VAL-01` |
+| `GET` / `PATCH bank/accounts/<id>` | Карточка / правка (`{version, …поля, is_active}`); IBAN счёта, по которому уже загружали выписки, не меняется — 409 `E-STATE-01` |
+| `GET bank/templates` (`?active=1`) | Шаблоны `[{id, name, format: onec\|xlsx\|csv, encoding, delimiter, date_format, columns, amount_mode: signed\|split, is_active, active_accounts, version, …}]` |
+| `POST bank/templates` (`{name, format, columns, amount_mode?, encoding?, delimiter?, date_format?}`) | Завести шаблон; кодировка по умолчанию — `cp1251` для 1С и CSV, `utf-8` для xlsx; `date_format` — маска «ДД.ММ.ГГГГ»; неизвестное поле, повтор заголовка, нет обязательной колонки — 422 `E-VAL-01` |
+| `GET` / `PATCH bank/templates/<id>` | Карточка / правка; архив шаблона действующего счёта — 409 `E-STATE-01` |
+| `POST bank/templates/<id>/preview` (multipart `file`, до 20 МБ) | Предпросмотр образца по шаблону, ничего не сохраняет: `{header_row, columns: [{field, label, header, index}], rows: [первые 20 строк: row_no, date, doc_number, amount (строка Decimal, по модулю), direction: debit\|credit, …], errors: ["Строка N: не распознана дата „31.02.2026“", …]}`. Колонки ищутся по заголовку (регистр и пробелы не важны, лишние колонки не мешают) в первых 30 строках; нет обязательной — 422 `E-IMP-02` с её названием; расширение не того формата или файл не читается — 422 `E-IMP-01`; шаблон 1С — 422 `E-VAL-01` (предпросмотр только для Excel и CSV). Чтение — как у справочника |
+
+**Загрузка выписки** — тот же подмодуль `bpp_bank` (ТЗ §11.2, §11.3 п.1–3,
+§15.5, BR-075, L-07; этап 3 A, задача 3 — A4.1). Загружает `bpp.bank` edit
+(ФД), реестр, карточку и строки видит `bpp.bank` view (ФД, БУХ), иначе 403
+`E-ACC-01`. Разбор — в фоне (Celery `apps.bpp.tasks_bank.run_bank_import`,
+`@company_task`): экран опрашивает карточку, пока `status: processing`.
+Загружаются только списания со счёта организации (поступления и платежи
+другого плательщика считаются в `rows_total`, но строк не дают). Дубль
+(BR-075) — «счёт организации + дата + № документа + сумма + БИН
+получателя»: повторная загрузка той же выписки (и одновременная — тоже) не
+создаёт второй строки, а считает её в `duplicates` («Пропущено дублей: N»).
+Сразу за разбором, в той же задаче, идёт автосверка со счетами (этап 4,
+A4.2; ТЗ §11.3 пп.4–8): номер `СЧ-ГГГГ-NNNNNN` ищется в назначении платежа
+(регистр, латинские `C`/`X`, пробелы и дефисы внутри номера не мешают).
+Один номер — сопоставление на всю сумму строки (`matched`); на проверку
+(`needs_review`, сопоставление `review` в «Оплачено по банку» счёта не
+входит) — если БИН получателя ≠ БИН контрагента счёта (`bin_mismatch`),
+счёт не в «К оплате»/«Оплачено» с любым шагом закрывающих
+(`invoice_status`) или валюта платежа ≠ валюте счёта
+(`currency_mismatch`). Несколько номеров — сумма раскладывается по
+неоплаченным остаткам счетов в порядке номеров в назначении; делится
+неоднозначно или часть номеров не найдена — вся строка на проверку
+(`several_numbers`), переплата не раскладывается (`unallocated`). Нет
+номера, счёт не найден или все счета строки уже оплачены — `unmatched`.
+После автосверки загрузка — `reconciled` («Сверена»); упавшая автосверка
+оставляет её `loaded` со всеми строками. У счёта сверка пересчитывает
+`paid_bank_amount` (Σ действующих сопоставлений) и `recon_status`
+(CALC-010: `no_data`/`partial`/`full`/`overpaid`), изменение — в журнале
+счёта (`updated`). Повторная загрузка той же выписки ничего не удваивает:
+строки — дубли, а автосверка берёт только строки «Не сопоставлена» без
+единого сопоставления — уже сопоставленные, исключённые и те, чьё
+сопоставление ФД отменил, она не трогает (решение ФД важнее номера в
+назначении; такие строки дальше — только вручную).
+Файл выписки — в `apps.files`
+(владелец `bpp.bank_import`, тип `bank_statement`: TXT/XLSX/CSV до 20 МБ),
+после загрузки не меняется.
+
+| Метод и путь | Что делает |
+|---|---|
+| `POST bank/imports` (multipart: `account_id`, `file`, `period_from?`, `period_to?` — ГГГГ-ММ-ДД, `comment?`) | Загрузить выписку. До сохранения проверяется: счёт действующий (иначе 422 `E-VAL-01`, поле `account_id`), файл до 20 МБ (413 `E-FIL-02`), расширение — формата шаблона счёта (`.txt` — 1С, `.xlsx`, `.csv`/`.txt` — CSV; иначе 422 `E-IMP-01`), у 1С — строка `1CClientBankExchange` (422 `E-IMP-01` «Файл не распознан как выписка формата 1С: нет строки „1CClientBankExchange“. Выберите другой формат или файл.») и `РасчСчет` выбранного счёта (иначе 422 `E-VAL-01`), у Excel/CSV — обязательные колонки шаблона (422 `E-IMP-02` с названием колонки), не больше 10 000 строк/документов (422 `E-IMP-03`). Период — из заголовка файла 1С (`ДатаНачала`/`ДатаКонца`), иначе из формы; «по» ≥ «с» и не позже сегодня (422 `E-VAL-01`). Ответ 201 — карточка (`status: processing`) плюс `warnings`: «Период взят из файла выписки: … Период, указанный в форме, не учтён.» (период из файла 1С заменил другой, введённый в форме) и «Период пересекается с загрузкой ВП-2026-0003 (…) этого счёта: …». Очередь фоновых задач недоступна — загрузка сразу `failed` с причиной. Идемпотентна (`Idempotency-Key`) |
+| `GET bank/imports` (`?q=&account_id=&period_from=&period_to=&status=&page=&page_size=`) | Реестр L-07 `{items, total, page, page_size}` (по умолчанию 50, 25/50/100): `{id, number: "ВП-ГГГГ-0001", account: {id, iban, bank_name, currency}, bank_name, format, period_from, period_to, status: processing\|loaded\|reconciled\|failed\|cancelled, status_label, filename, comment, rows_total, debits, rows_done, duplicates, errors_count, lines, matched, needs_review, unmatched, excluded, author_id, author_name, created_at, finished_at}`, новые сверху. Фильтры: счёт (повторяемый `account_id`), период (пересечение с `period_from`…`period_to`), статус (повторяемый; неизвестный — 422); быстрый поиск `q` (понимается и `search`, как у контрагентов) — номер загрузки (`ВП-…`) или комментарий, по вхождению, без регистра. `?format=xlsx` — выгрузка той же выборки (`export.respond`: до 10 000 строк сразу, больше — фоном) |
+| `GET bank/imports/<id>` | Карточка — её опрашивает экран: поля реестра плюс `errors: ["Строка 17: не распознана дата „31.02.2026“", …]` (у выписки 1С без единого поля `ПлательщикСчет`/`ПлательщикИИК` первой идёт «В выписке нет счёта плательщика — списания не определены…»), `failure` (почему вся выписка не загрузилась — статус `failed`; строки такой загрузки отменены; разбор, не закончившийся за 15 минут, периодика `bpp.bank_import_reaper` (раз в 10 минут, веером по компаниям) переводит в `failed` с причиной «Загрузка прервана — повторите загрузку…»), `progress` (0–100, `rows_done / debits`), `file` (карточка файла выписки: `id`, `filename`, `size`, …; ссылка на скачивание — панель `/api/files/v1`), `totals` — итоги сверки по вкладкам: `{matched, needs_review, unmatched, excluded: {count, amount}, unallocated}` (число действующих строк и Σ их сумм; `unallocated` — Σ частей строк, не разложенных на счета) |
+| `GET bank/imports/<id>/lines` (`?tab=matched\|review\|unmatched\|excluded&match_status=&include_cancelled=&page=&page_size=`) | Строки загрузки по порядку в файле — только действующие; отменённые (строки загрузки `failed` и отменённой) — с `include_cancelled=1`. Вкладка экрана — `tab` (`review` = `needs_review`) или `match_status`; неизвестные — 422 `E-VAL-01` на своём поле; страница 25/50/100/200, по умолчанию 50: `{items: [{id, import_id, row_no, doc_date, doc_number, amount, currency, recipient_name, recipient_bin, recipient_iban, purpose, match_status: unmatched\|matched\|needs_review\|excluded, match_status_label, found_numbers, review_reason, review_reason_label (текст ТЗ §11.2), matches: [{id, invoice_id, invoice_number, invoice_url: "/bpp/invoices/<id>", invoice_status, invoice_status_label, invoice_amount, invoice_currency, paid_bank_amount («Оплачено по банку всего» счёта), recon_status, recon_status_label, amount, state: active\|review, manual, comment, review_reason, review_reason_label, confirmed_by_id, confirmed_at}], allocated, unallocated, excluded_comment, excluded_by_id, excluded_at, cancelled_at}], total, page, page_size}` |
+
+**Ручная сверка** (ТЗ §11.2, §11.4, BR-060, BR-073; этап 4 A, задача 3 —
+A4.2): `services/bank/matching.py`. Все действия — `bpp.bank` edit (ФД);
+кандидаты, охват отмены и «Экспорт результата» — `bpp.bank` view (ФД, БУХ);
+иначе 403 `E-ACC-01`. Каждое действие — одна транзакция с записью в журнал
+загрузки (`GET history/bpp.bankimport/<id>`: `line_matched`,
+`match_confirmed`, `match_cancelled`, `exclusion_cancelled`,
+`line_excluded`, `cancelled`, `reconciled` — с `line_id`, `row_no`,
+`doc_number`, суммой и счетами) и пересчётом статуса сверки затронутых
+счетов (`paid_bank_amount`/`recon_status`, запись в журнал счёта); все
+POST идемпотентны (`Idempotency-Key`: повтор отдаёт первый ответ, действие
+и запись журнала — одни). Действие над строкой загрузки не «Загружена» /
+«Сверена» или над отменённой строкой — 409 `E-STATE-01`; строка или
+загрузка не найдена — 404 `E-NOT-FOUND`. Комментарий «Подтвердить»,
+«Отменить сопоставление» и «Исключить» — не короче 10 символов, иначе 422
+`BR-060` на поле `comment` («Опишите причину: комментарий не короче 10
+символов.»); у ручного сопоставления и отмены загрузки — необязателен.
+Ответ действия над строкой — строка в виде элемента `lines`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET bank/lines/<id>/candidates` (`?q=`) | До 5 счетов для «Сопоставить вручную»: `{items: [{id, number, status, status_label, amount, currency_code, paid_bank_amount, remainder, recon_status, recon_status_label, counterparty: {id, name, reg_number}, same_bin, ext_number, ext_date}]}`. Без `q` — контрагент с БИН получателя платежа и сумма в пределах ±10 % суммы строки (у строки без БИН — пусто); с `q` — поиск по номеру счёта (часть номера или «грязный» номер, как в назначении: `сч 2026 000123`), названию или БИН контрагента и сумме, «тот же БИН и близкая сумма» — первыми. Всегда — только счета в валюте платежа и не «Отменён» / «Не к оплате» / «Заменён альтернативой»; ближе по сумме — выше |
+| `POST bank/lines/<id>/match` (`{allocations: [{invoice_id, amount?}], comment?}`) | «Сопоставить вручную» строку «Не сопоставлена» (иначе 409 `E-STATE-01`): сопоставления `manual: true` сразу действуют (`active`), строка — `matched`. У единственного счёта `amount` можно не указывать — вся строка; сумма > 0. Σ распределения больше строки — 422 `E-VAL-01` на `amount`; счёт не найден, «Отменён», «Не к оплате», «Заменён альтернативой», один счёт дважды — 422 `E-VAL-01` на `invoice_id`; счёт в другой валюте — 422 `E-VAL-01` на `invoice_id` «Валюта платежа ≠ валюте счёта» (курс для сверки ТЗ не определён). Остаток строки сверх Σ — `unallocated` |
+| `POST bank/lines/<id>/confirm` (`{comment}`) | «Подтвердить сопоставление» строки «Требует проверки» (иначе 409 `E-STATE-01`): сопоставления `review` → `active` на месте (`confirmed_by_id`, `confirmed_at`, `comment`), строка — `matched`, счета пересчитываются (AC-011). Счёт стал «Отменён» / «Не к оплате» / «Заменён альтернативой» — 422 `E-VAL-01` на `invoice_id`; причина `currency_mismatch` — 422 `E-VAL-01` на `invoice_id` «Валюта платежа ≠ валюте счёта» (такую строку — «Отменить сопоставление») |
+| `POST bank/lines/<id>/cancel-match` (`{comment}`) | «Отменить сопоставление» строки `matched` или `needs_review`: все её неотменённые сопоставления — `cancelled` (остаются в истории), строка — `unmatched`, счета пересчитываются; автосверка эту строку больше не возьмёт. У строки `excluded` снимает исключение. Строка `unmatched` — 409 `E-STATE-01` |
+| `POST bank/lines/<id>/exclude` (`{comment}`) | «Исключить — не относится к закупкам» строку «Не сопоставлена» (иначе 409 `E-STATE-01`): строка — `excluded` (`excluded_comment`, `excluded_by_id`, `excluded_at`), вне остальных вкладок и вне показателя дашборда «Не сопоставлено» (отдельного показателя «Прочие списания» из ТЗ §11.4 в D-01 нет — в таблице §11.5 его нет). Счета не затрагиваются |
+| `POST bank/imports/<id>/reconcile` | «Сверить» — автосверка загрузки `loaded` (после разбора она идёт сама; ручка — если та упала). Другой статус — 409 `E-STATE-01`. Ответ — карточка загрузки (`status: reconciled`, `totals`) |
+| `GET bank/imports/<id>/impact` | Для диалога «Отменить загрузку»: `{invoices, lines}` — сколько счетов (с действующими или проверяемыми сопоставлениями строк загрузки) и действующих строк она затронет |
+| `POST bank/imports/<id>/cancel` (`{comment?}`) | «Отменить загрузку» `reconciled` или `loaded` (иначе 409 `E-STATE-01`), мягко: строки и их сопоставления получают `cancelled_at` (сопоставления — ещё и `cancelled`), статусы сверки затронутых счетов пересчитываются, загрузка — `cancelled`. Ключи дублей строк освобождаются — та же выписка грузится и сверяется заново; отметка оплаты БУХ, которую держала сверка (`paid_bank_amount > 0`), снова отменяема. Ответ — карточка |
+| `GET bank/imports/<id>/export` | «Экспорт результата» — xlsx `Сверка ВП-….xlsx` из трёх листов: «Сопоставлены», «Требуют проверки» (+ «Причина»), «Не сопоставлены» (+ «Номера в назначении»). Колонки строки: дата, № ПП, получатель, БИН, сумма, валюта, назначение; у сопоставленных и проверяемых — по строке листа на каждое сопоставление: счёт, сумма счёта, сумма сопоставления, «Оплачено по банку всего», статус сверки, «Вручную». Суммы — числа `#,##0.00`, даты — даты. Исключённые строки в выгрузку не входят (их нет среди вкладок ТЗ §11.2) |
+
+**Дашборд D-01 «Оплаты»** (ТЗ §11.5, REQ-018; этап 4 A, задача 5 — A4.3).
+Узел `bpp.dashboard` view (ФД, ТД, ОД, ГД, БУХ), иначе 403 `E-ACC-01`;
+подмодуля нет — гасится вместе с модулем. Без кэша: цифры свежие при каждом
+открытии и после каждой загрузки выписки.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET dashboard/payments` (`?period_from=&period_to=&project_id=&article_id=&counterparty_id=&author_id=`) | `{filters, sections, authors, indicators, article_chart, weekly_paid, top_counterparties, as_of}`. `sections` — `{invoices, bank, budget}`: включены ли у компании `bpp_invoices`, `bpp_bank`, `bpp_budget` (экран пишет «подмодуль выключен», а не «данных нет»). `authors` — `[{id, name}]` для фильтра «Автор счёта»: авторы счетов, видимых пользователю по правилам реестра (`GET invoices`), без остальных фильтров дашборда, по имени; учётки нет — `name: null`; выключен `bpp_invoices` — `[]` (кадровый список сотрудников не годится: у ролей дашборда нет прав `hr`). `indicators` — `[{key, label, count, amount, link}]` в порядке ТЗ: `fd` (вкладка «На решение ФД»), `to_pay` («К оплате» + «Оплачено частично»), `awaiting_docs`, `bank_unconfirmed` (вкладка «Оплачено, банк не подтвердил» и последняя отметка БУХ старше 3 банковских дней), `full`, `underpaid` (сумма — Σ(сумма − оплачено по банку)), `overpaid` (Σ(оплачено по банку − сумма)), `no_mark` (статус сверки ≠ `no_data`, статус счёта без отметки оплаты БУХ — ссылка фильтрами `status` и `recon_status`), `unmatched` (строки выписки «Не сопоставлена» загрузок `loaded`/`reconciled`, ссылка — реестр загрузок `/bpp/bank?period_from=&period_to=` (только период: загрузки, чей период выписки с ним пересекается; без периода — `/bpp/bank`) и только держателю `bpp.bank` view — ФД, БУХ; остальным `link: null`); `amount` — в KZT (`amount_kzt`; недоплата и переплата — по курсу счёта; счёт в валюте без курса в KZT-сумму не входит — как его пустой `amount_kzt`, в `count` входит; строка выписки в валюте — по курсу НБРК на дату платежа, без курса — вне суммы). Выключен у компании `bpp_invoices` — показателей по счетам нет в ответе вовсе, графики оплат и `authors` пустые; выключен `bpp_bank` — нет `bank_unconfirmed`, `full`, `underpaid`, `overpaid`, `no_mark`, `unmatched`, графики оплат пустые, `paid_fact` — `null`; выключен `bpp_budget` — `article_chart: []`. `link` — адрес реестра счетов фронта `/bpp/invoices?…` с параметрами ручки `GET invoices`: `total` реестра по ссылке равен `count`. Фильтры проекта, статьи, контрагента и автора — у всех показателей по счетам и в ссылках (у `unmatched` — только контрагент, по БИН получателя). Период — по дате платежа в выписке и только у банковских показателей (`full`, `underpaid`, `overpaid`, `no_mark`, `unmatched`) и графиков, в ссылку — `bank_date_from`/`bank_date_to`; очереди — на текущий момент. `article_chart` — `[{article_id, code, name, limit, committed, paid_fact}]` по статьям действующей версии бюджета проекта (без `project_id` или без бюджета — `[]`); `paid_fact` — «Оплачено факт» CALC-007 (`services/bank/recon.paid_fact_by_article`): Σ действующих сопоставлений строк выписки по счетам статьи (`Invoice.article_id`), без отменённых строк и загрузок, в валюте счёта — как «Задействовано». `weekly_paid` — `[{week_start, amount}]` (неделя с понедельника, недели периода без платежей — нулём), `top_counterparties` — `[{counterparty_id, name, amount}]`, топ-10; оба — «Оплачено по банку» (действующие сопоставления, D-S4-1) в KZT. Неверная дата, «по» раньше «с», период длиннее 5 лет (1827 дней; недельный график заполняет нулями каждую неделю — поле `period_to`), не UUID, не целый автор — 422 `E-VAL-01` с полем. Период с одной открытой границей не ограничен, но шире 5 лет `weekly_paid` отдаёт только недели с платежами. Фильтр контрагента у `unmatched` сравнивает БИН без пробелов и регистра — как автосверка и кандидаты |
+
+**Обзор модуля** (ТЗ §05, §17; B, 01.10 — стартовая страница раздела по ролям). Гейт `bpp:read`; своего
+подмодуля у ручки нет. Блок приходит, только если у пользователя есть право просмотра его узла и у компании
+включён его подмодуль: нет права или рубильник `bpp_*` выключен — нет ключа (а не нули); несколько ролей —
+объединение. Числа считаются на выборках реестров (`visible` каждого: «свои» СН и ПМ, проекты-участия ПМ,
+группы статей) и совпадают с `total` реестра по его ссылке; деньги — только при `shows_money` (право
+`bpp.invoices` view: у АДМ — количества без сумм, ТЗ §17). Без кэша.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET overview` | `{shows_money, approvals, budgets?, requests?, plan?, agreements?, invoices?, accountable?, bank?, dashboard?, alternatives?, kpi?, admin?}`. `approvals` — `{pending}`: задачи signoff по документам `bpp.*`, ждущие решения пользователя (`signoff.pending_for_user`). `budgets` (`bpp.budgets` view, `bpp_budget`) — `{total, approved, draft, can_create, projects?}`, `projects` — бюджет каждого проекта отдельно (решение 01.10: суммы разных проектов не складываются): `[{budget_id, project: {id, code, name}, currency_code, limit_amount, committed, available}]` по утверждённым бюджетам, итоги — по видимым строкам (как реестр L-01: СН и ПМ — свои группы статей); проект без строк пользователя не показывается; по коду проекта. `requests` (`bpp.requests` view, `bpp_requests`) — `{total, draft, in_approval, rework, approved, can_create}`. `plan` (`bpp.plan` или `bpp.plan.all` view, `bpp_requests`) — `{open}`: открытые позиции; у СН и ПМ — свои по всем ролям инициатора (реестр показывает одну роль за раз). `agreements` (`bpp_agreements`) — `{total, draft, on_review, rework, active}`. `invoices` (`bpp_invoices`) — `{total, draft, returned, tabs}`; `tabs` — счётчики вкладок реестра L-06 по правам: `fd` (`bpp.invoices.decision` edit), `to_pay` и `docs_provided` (`bpp.invoices.payment` edit), `awaiting_docs` (`bpp.invoices` create или `bpp.invoices.closing_docs` edit), `bank_unconfirmed` (`bpp.bank` view, `bpp_bank`); число = `total` ответа `GET invoices?tab=<вкладка>`. `accountable` (`bpp_accountable`) — `{total, awaiting_report, can_create, awaiting_accounting?}` (последнее — при `bpp.accountable.payment` edit). `bank` (`bpp.bank` view, `bpp_bank`) и `dashboard` (`bpp.dashboard` view) — `{}`: раздел открыт. `alternatives` (`bpp_alternatives`) — `{feed, submitted?, mine_submitted?}`: документы ленты L-09, поданные АП в ожидании решения (ФД, ТД, ОД, ГД — `alternatives.read.sees_all`), свои поданные (с правом подавать). `kpi` (`bpp.kpi` view, `bpp_alternatives`) — `{preliminary, confirmed, saving_confirmed?}`, видимость как у отчёта R-01 (СН — свои). `admin` (`bpp.settings` или `bpp.routes` edit) — `{no_executor, routes, settings, refdata, projects}`: идущие процессы документов модуля с этапом «Нет исполнителя» (`signoff.interface.count_no_executor`) и какие разделы администрирования открыты. |
+
+**Сводка группы по БЗО (A8.1, D-S7-8)** — `GET /api/bpp/v1/holding/summary` (`views_holding.py`, `services/holding/summary.py`).
+Три замка: гейт модуля `bpp:read` → узел `bpp.holding` view (ФД и ГД; `EXPLICIT_ONLY`, `access/0023`) → поддомен
+компании вида «холдинг» (`companies.is_holding`; платформенный администратор проходит вид компании). На поддомене
+дочерней — 403 даже у директора с унаследованными ролями; во время `migrate_companies` — 503 «пересобираются».
+Ответ `{companies: [{company_slug, company_name, budgets, budgets_other_currency, limit_kzt, invoices_to_pay:
+{count, amount_kzt}, invoices_paid: {count, amount_kzt}, agreements_active}], totals}` — агрегаты SQL по
+представлениям `holding.bpp_*` (читатели `apps/bpp/holding_models.py`): `limit_kzt` — Σ строк действующей версии
+утверждённых бюджетов в KZT (бюджеты в другой валюте — отдельным счётчиком), «к оплате» — статусы «К оплате» и
+«Оплачено частично» (вкладка реестра), «оплачено» — «Оплачено», «Ждёт закрывающих», «Документы предоставлены»,
+«Закрыт»; «Задействовано» не входит. Суммы совпадают с `total`/`totals` реестров компаний.
+
+**Альтернативы (A5.1)** — подмодуль `bpp_alternatives`, префикс `/api/bpp/v1/alternatives/…` (ТЗ §12.1, §12.3,
+§12.7, BR-090…092; этап 5 A, задачи 2 и 4). Альтернативное предложение (АП, `АП-ГГГГ-NNNNNN`) — другой контрагент на часть
+или все позиции исходного документа: счёта без договора «На рассмотрении ФД» или договора «На согласовании» (окно
+подачи, BR-090; после решения ФД или конца согласования подача и отзыв — 422 `E-STATE-01`). Создаёт держатель
+`bpp.alternatives` create (по матрице — СН; ПМ — 403, D-S5-1); отзывать, править и подавать может только автор, причём
+правка и подача черновика снова требуют create (сняли роль — 403 `E-ACC-01`, `allowed_actions` — только `delete`;
+удалить черновик и отозвать поданную автор может и без неё).
+Все POST/PATCH/DELETE идемпотентны (`Idempotency-Key`), изменяющие несут `version` (устарела — 409 `E-CON-01`).
+Цена позиции — за единицу, с НДС, если он есть; суммы — строками. КП прикладывается через `/api/files/v1`
+(владелец `bpp.alternative_offer`, тип `alternative_offer`, до 5 файлов, обязателен для подачи).
+
+| Метод и путь | Что делает |
+|---|---|
+| `POST alternatives/offers` `{source_type: invoice\|agreement, source_id}` | Черновик (201): все позиции исходного документа без цен, валюта исходного; `own_document` (BR-092, автор АП = автор документа), `author_role` (`sn`/`pm` по группе статей), снимок `project_id`/`article_id`. Отказы — 422 `E-VAL-01` на `source_id`: счёт по договору («Альтернатива к счёту по договору не подаётся»), открытый договор (D-S5-5), допсоглашение, лимит документа («К документу уже подано N альтернатив — это лимит»), лимит автора (СН — одна действующая АП на документ, ПМ — до трёх); окно закрыто — 422 `E-STATE-01`; неизвестный документ или вид — 404 |
+| `GET alternatives/offers/<id>` | Карточка F-07: поля АП, `source` (`type`, `id`, `number`, `status`, `amount`, `currency_code`, `counterparty`, `author_id`/`author_name`, `alt_limit`, `window_open`, `url`), `project`, `article`, `author_name`, `counterparty`, `lines` (`source_line_id`, `item`, `name`, `qty`, `source_price`, `price`, `amount`, `deviation_pct` — (цена − исходная) / исходная × 100, плюс — дороже), `more_expensive`, `files`, `allowed_actions` (`save`/`submit`/`delete`/`withdraw`), `version`. Видимость (`read.can_view`, она же у журнала `history/bpp.alternativeoffer/<id>` и КП): автор; черновик — только он; поданную — ФД, ТД, ОД, ГД и автор исходного документа (ПМ — только к своим документам); иначе 404 |
+| `PATCH alternatives/offers/<id>` `{version, counterparty_id, lines: [{source_line_id, price}], currency_code, delivery_date, payment_terms, payment_terms_note, justification, with_vat, vat_rate}` | Правка черновика автором; пересчитываются НДС (ставка страны контрагента на сегодня, `vat_rate` вручную — `vat_source: manual`), суммы строк, `amount`, `rate`/`amount_kzt` (курс НБРК; нет курса — `null`), `source_amount_kzt` (Σ выбранных позиций исходного документа по его курсу, D-S5-3) и экономия CALC-013 (`saving_amount`, `saving_pct` — только когда у каждой позиции есть цена). `lines` — набор позиций (минимум одна, `price > 0`, `null` — цена ещё не введена). 422 `E-VAL-01` на поле: `counterparty_id` (BR-091: совпадает с исходным или с другой действующей АП; заблокирован — `E-CTR-01`), `lines`, `delivery_date` (≥ сегодня), `payment_terms` (`full_prepay`/`partial_prepay`/`postpay`), `justification` (10–2000 знаков), `vat_rate` (0–100), `currency_code`; значение вне диапазона столбца — тот же 422, не 500 |
+| `DELETE alternatives/offers/<id>?version=` | Удалить черновик (физически, вместе с файлами) |
+| `POST alternatives/offers/<id>/submit` `{version}` | Подать: под замком исходного документа проверяются окно (422 `E-STATE-01`), лимит документа («Подано» + «Выбрано» < `alt_limit`), лимит автора, обязательные поля и КП (422 `E-VAL-01` со списком `fields`: `counterparty_id`, `lines`, `delivery_date`, `payment_terms`, `justification`, `files`), курсы (422 `E-REF-05` на `rate` или `source_id`), обоснование удорожания ≥ 30 знаков. Дальше — «Подано», журнал и уведомление ФД и автору исходного документа со ссылкой на него |
+| `POST alternatives/offers/<id>/withdraw` `{version}` | Отозвать «Подано», пока окно открыто (иначе 422 `E-STATE-01`); освобождает место в лимитах и контрагента |
+| `POST alternatives/sources/<invoice\|agreement>/<id>/limit` `{limit}` | Поднять лимит АП на документ (`alt_limit`, по умолчанию 3): только автор документа — СН, окно открыто, `limit` от числа «Подано» + «Выбрано» до 10, иначе 422 на `limit`; чужой — 403. Ответ `{source_type, source_id, alt_limit}` |
+| `GET alternatives/feed` (`?kind=invoice\|agreement&author_id=&project_id=…&article_id=…&counterparty_id=&q=&amount_from=&amount_to=&sent_from=&sent_to=&without_offers=1&mine=yes\|no&source=<type>:<id>&page=&page_size=25\|50\|100`) | Лента L-09 «Закупки для альтернатив» `{items, total, page, page_size}` (ТЗ §12.2): счета без договора «На рассмотрении ФД» и договоры «На согласовании» (кроме открытых и допсоглашений — к ним АП не подаётся), в том числе свои; новые отправки сверху. Строка: `source_type`, `source_id`, `number`, `kind_label`, `url`, `author_id`/`author_name`, `project`, `article`, `counterparty` (`id`, `name`, `reg_number`), `positions` (`names` — первые 3 наименования, `more`, `count`), `amount` (в валюте документа, по ней же фильтр суммы), `currency_code`, `sent_at` (последняя запись журнала «отправлен»), `offers_count` (АП «Подано» и «Выбрано»; «Отозвано», «Аннулировано» и черновики не считаются), `alt_limit`, `my_offer` (`id`, `number`, `status`, `status_label` — последняя неаннулированная своя АП, иначе `null`). `project_id`/`article_id` повторяемые, `q` — по наименованию позиций. СН и руководство видят все документы (в пределах видимых проектов), ПМ — свои; без `bpp.alternatives` view — 403 `E-ACC-01`; неверный параметр — 422 `E-VAL-01` на нём |
+| `GET alternatives/sources/<invoice\|agreement>/<id>/comparison` | Сравнение (ТЗ §12.4 п.2): `source` (колонка исходного документа: `number`, `status`, `counterparty` со страной `country_code`/`country_name`, `amount`, `currency_code`, `amount_kzt`, НДС, `delivery_date` — самая ранняя дата потребности позиций, `author`) и `offers` — видимые АП (чужие черновики — нет; СН, не автор документа, видит только свои) с `counterparty`, суммой, НДС, `source_amount_kzt`, `saving` (`amount`, `pct`, `more_expensive`), сроком, условиями оплаты, `files` (КП), `author`, статусом. `positions`: по каждой позиции `source_price`, `source_amount` и `offers: {<offer_id>: {price, amount, deviation_pct}}`. Плюс `limit`, `submitted_count` («Подано» + «Выбрано»), `window_open`, `can_propose` (кнопка «Предложить альтернативу»: право create, окно BR-090, вид документа, лимиты документа и автора) с причиной `propose_blocked_reason`, `my_offer_id`. Документ не видно (ПМ — чужой) — 404, без `bpp.alternatives` view — 403 |
+| `GET alternatives/offers?mine=1&status=` (`status` повторяемый, `page`, `page_size`) | «Мои альтернативы» `{items, total, page, page_size}`: свои АП, новые сверху; строка — `id`, `number`, `version`, `status`, `source` (`type`, `id`, `number`, `kind_label`, `url`), `counterparty`, суммы, экономия, `more_expensive`, даты. `mine=0` или неизвестный статус — 422 |
+
+Жизненный цикл АП без отдельных ручек — по событиям исходного документа (этап 5 A, задача 3,
+`services/alternatives/lifecycle.py`; хуки стоят в сервисах счёта и договора, в той же транзакции, что смена статуса):
+
+- **Уведомление снабженцам** (ТЗ §12.2): при каждой отправке счёта без договора и договора (не открытого и не
+  допсоглашения), в том числе повторной, — всем держателям `bpp.alternatives` create, кроме автора документа (e-mail и
+  Telegram — по настройкам получателя): «ПМ Иванов А. отправил счёт СЧ-2026-000140 на 2 800 000,00 KZT, ТОО „Альфа“.
+  Можно предложить альтернативу» (у договора — «договор ДГ-…»), ссылка `/bpp/alternatives?source=<invoice|agreement>:<id>`,
+  событие `bpp.alternative_window`. Подмодуль `bpp_alternatives` выключен у компании — уведомления нет.
+- **Закрытие АП** (ТЗ §12.4 п.6–7, D-S5-6): «Оплатить» по счёту и утверждение договора в исходном варианте — «Подано» →
+  «Не выбрано», черновики → «Аннулировано»; «Не к оплате», возврат на доработку, отмена счёта, отклонение, доработка
+  и отзыв договора — «Подано» и черновики → «Аннулировано». Причина — в `closed_reason` карточки, запись журнала
+  (`not_selected`/`annulled`) и уведомление автору АП (событие `bpp.alternative_closed`, ссылка
+  `/bpp/alternatives/<id>`). Место в лимитах освобождается; при повторной отправке документа окно открывается снова и
+  АП подаётся новой строкой (тот же контрагент — можно). Подача и отзыв к уже решённому документу — 422 `E-STATE-01`
+  раньше проверки статуса АП, поэтому закрытый черновик отвечает причиной «Документ уже решён».
+- **Выбор** — ручки B5.1 поверх `lifecycle.mark_selected` (выбранная → «Выбрано» с `decided_at` и комментарием,
+  прочие → «Не выбрано»/«Аннулировано», автору выбранной — уведомление `bpp.alternative_selected`; повторная замена
+  документа — 409 `E-STATE-01` «Документ уже заменён альтернативой», BR-096). Варианты голоса договора —
+  `options_for`/`check_option` (`original` и `offer:<id>` поданных АП).
+
+**KPI (A5.2)** — подмодуль `bpp_alternatives`, префикс `/api/bpp/v1/kpi/…` (ТЗ §12.5–12.6, R-01;
+этап 5 A, задача 5). Запись KPI заводит выбор альтернативы (B5.1, `kpi.create_preliminary`), дальше её ведёт
+статус НОВОГО документа: хуки счёта и договора зовут `kpi.sync_for_document`. Права — узел `bpp.kpi`:
+`view` (ФД, ОД, ГД; СН — только свои строки и записи) и `edit` (ФД, аннулирование); ТД, БУХ, ПМ — 403 `E-ACC-01`.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET kpi/report` (`?period_from=&period_to=&buyer_id=&project_id=&article_id=`) | R-01 `{rows, total, filters}`. Строка — покупатель: `buyer_id`, `name`, `role` (`sn`/`pm`), `role_label`, `submitted` (АП «Подано», «Выбрано», «Не выбрано» по `submitted_at` в периоде; «Отозвано» и «Аннулировано» не входят), `selected` (записи любого статуса по дате выбора), `confirmed` (KPI-001), `share_pct` (KPI-004 = `confirmed / submitted × 100`, `null` при нуле «подано»), `saving` (KPI-002, Σ положительной экономии «Подтверждён»), `overspend` (KPI-003, Σ модуля отрицательной; из `saving` не вычитается), `own_document_count`. Деньги — строками; `total` — по всем покупателям. Период — включительно, в поясе платформы. СН получает только свою строку |
+| `GET kpi/records` (те же фильтры + `status=preliminary\|confirmed\|annulled`, `own_document=1\|0`, `limit` ≤ 200, `offset`) | `{items, total, filters}` — записи для перехода из ячейки отчёта: номера и ссылки (`source_url`, `result_url`, `offer_url`), суммы в KZT, экономия, статус, `own_document`. СН — только свои |
+| `GET kpi/records/<id>` | Карточка записи; чужая (для СН) и несуществующая — 404 |
+| `POST kpi/records/<id>/annul` `{comment, version}` | Ручное аннулирование ФД (`bpp.kpi` edit): комментарий ≥ 10 знаков, иначе 422 `BR-060`; уже аннулирована — 409 `E-STATE-01`; устаревшая `version` — 409 `E-CON-01`. Идемпотентна. Ответ — карточка |
+| `GET kpi/report/export` (те же фильтры отчёта) | xlsx: лист «KPI снабжения» (строки и итог) и «Записи KPI»; суммы и счётчики — числа. Права и охват — как у отчёта |
+
+Статус записи по новому документу (D-S5-7): счёт `paid`/`awaiting_docs`/`docs_provided`/`closed` — «Подтверждён» (сумма и
+экономия замораживаются), `not_payable`/`cancelled`/`replaced` — «Аннулирован»; договор `active`/`fulfilled` — «Подтверждён»,
+`rejected`/`replaced` или `terminated` без счетов «Оплачено» — «Аннулирован»; удалённый черновик нового документа —
+«Аннулирован» («Новый документ удалён»). Пока «Предварительный» — сумма нового документа и экономия пересчитываются на
+каждой смене его статуса, включая отправку (не на каждой правке черновика). «Подтверждён» не откатывается (снятая
+отметка БУХ, допсоглашение), «Аннулирован» финален. Договор, расторгнутый без оплаченных счетов, аннулирует KPI
+окончательно: счёт по нему, оплаченный уже после расторжения, запись не возвращает.
+
+**Параметры модуля** — вкладка «Параметры модуля» экрана «Настройки» (ТЗ §05
+п.10), `views_settings.py`; подмодуля нет, гасятся вместе с модулем. Реестр
+правимых ключей — на сервере (`services/core/settings.EDITABLE`); значение
+лежит в `ModuleSetting` схемы компании, строки нет — умолчание модуля.
+Служебные строки (итог ночной сверки `committed_check_last`) ручки не
+показывают и не принимают. Чтение — `bpp.settings` view (ФД, АДМ), правка —
+`bpp.settings` edit (АДМ), иначе 403 `E-ACC-01`. Смена пишется в журнал:
+`GET history/bpp.modulesetting/<ключ>` — тому, кто видит параметры.
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET settings` | Параметры `[{key, label, value, default, kind: integer, min, max, help, updated_at}]` в порядке реестра; `updated_at: null` — параметр не меняли, действует умолчание. Сейчас один — `counterparty_verified_threshold` (порог метки «Проверенный» контрагента, 1…100, по умолчанию 3) |
+| `PATCH settings/<ключ>` (`{value}`) | Сменить параметр; ответ — параметр в том же виде. Не целое или вне `min`…`max` — 422 `E-VAL-01` с полем `value`; ключ вне реестра (в том числе служебный) — 404 `E-NOT-FOUND`. То же значение — без записи и строки журнала. Идемпотентна (`Idempotency-Key`) |
+
+`GET history/<тип>/<id>` — журнал изменений документа (`bpp.budget`,
+`bpp.purchaserequest`, `bpp.accountablefundsrequest`, `bpp.counterparty`,
+`bpp.orgbankaccount`, `bpp.statementtemplate`, `bpp.bankimport` — загрузка,
+файл, итог разбора), читает тот, кто видит документ.
+
+`GET me` — ТЗ §23 GetCurrentUser: `{article_groups: [...], initiator_roles:
+["sn"|"pm", …]}` — группы статей, открытые пользователю (BR-010), и роли, в
+которых он может подать заявку на закупку (группа `supply` → `sn`, `pm` →
+`pm`); правило одно с сервисом заявки (`services/actor.py::Actor`).
+
+**Экспорт реестров в xlsx и печать в PDF** (ТЗ §19, D-32, A2.2, задача 6) —
+`services/core/export.py`/`printing.py`. Экспорт — не отдельная ручка на
+каждый реестр, а общий ответ его ручки реестра: любая `GET`-ручка реестра
+модуля принимает `?format=xlsx` (вместе со своими фильтрами, без пагинации)
+и вместо страницы `{items, …}` отвечает
+`export.respond(request, name=, columns=, rows=, count=, rebuild=)`,
+колонки — `export.Column(key, title, kind)`, `kind` —
+`text|money|decimal|date|datetime`. Подключено у **контрагентов**
+(`GET counterparties?format=xlsx`, задача 6), **бюджетов**, **заявок** и
+**плана закупок** (остаток B, B-3). У реестров с видимостью «свои» права
+заказчика едут в пересборку фоновой выгрузки: `Actor.export_identity()` →
+`{user_id, company, is_superuser}` в `rebuild`, `Actor.for_user(...)` в
+задаче:
+
+- до 10 000 строк — xlsx сразу тем же запросом (`Content-Disposition:
+  attachment`, имя — `filename*`); суммы — числа с форматом `#,##0.00`
+  (в русской локали Excel — «1 250 000,00»), даты — датой, время — в поясе
+  платформы; пустая выборка — только заголовки;
+- больше и до 50 000 — фоном: ручка реестра отвечает
+  `{"id", "status": "queued", "detail"}`, Celery-задача
+  `apps.bpp.tasks_export.build_export` пересобирает выборку функцией
+  `rebuild`, кладёт файл в `apps.media_files` (scope `generic`, приватный) и
+  шлёт заказчику уведомление центра (`target_type="bpp.export"`, ссылка —
+  экран фронта `/bpp/exports/<id>`); отказ сборки — уведомление с причиной;
+- больше 50 000 — 422 `E-EXP-01`, до всякой работы.
+
+| Путь | Метод | Заметки |
+|---|---|---|
+| `GET exports/<id>` | GET | `bpp:read`. Фоновая выгрузка `{id, name, status: queued\|done\|error, row_count, error, created_at, finished_at}`; у готовой — ещё `url` (временная подписанная ссылка на файл) и `expires_at`, и каждая выдача ссылки пишется в журнал модуля (`AuditLog`, `bpp.exportjob`, `file_downloaded` с IP и user-agent — ТЗ §25.2). Только заказчику: чужая, несуществующая и неверный UUID — 404 `E-NOT-FOUND` (не 403: существование чужой выгрузки не подтверждаем); файл пропал из хранилища — тоже 404 |
+
+Печать — `printing.render_html/render_pdf/pdf_response(template, context,
+filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
+наследуется документами модуля (заявка — `print/purchase_request.html`,
+остальные — задачи этапа 3): номер, статус, автор,
+дата, таблица (блок `body`, по умолчанию — из контекста `table`), «Лист
+согласования»; место под фирменный бланк — колонтитулы (блоки
+`letterhead_header`/`letterhead_footer`, Q-B31, ожидаются отдельно).
+`Content-Disposition: inline` — PDF открывается в браузере, а не
+скачивается.
+
+---
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
@@ -1474,7 +2162,7 @@ change:
 | 404      | Resource (or route) not found — see the routing table above; also `{"detail": "Компания не найдена"}` from `CompanyContextMiddleware` for a request to an unknown company's host, from `django-admin` on an archived company's host, or from `api_view` for anyone but a superuser reading an archived company (see the archive spec) |
 | 409      | Conflict (e.g. duplicate email on register)                          |
 | 422      | Pydantic validation error (`body=` schema on `api_view`)              |
-| 429      | Rate limit exceeded (nginx prod only)                                |
+| 429      | `POST users/v1/token/` — блокировка входа, `{"detail","code":"E-AUTH-LOCKED","fields":[]}` + заголовок `Retry-After` (секунды); также лимит nginx на выдачу токена (`limit_req_status 429` только в `location` токена, тело пустое/nginx; остальные зоны по-прежнему отвечают 503) |
 | 500      | Unhandled exception — `api_view` catches everything and logs it       |
 | 503      | A dependency's `ServiceStatus` is disabled (`{"detail","code":"service_disabled","service"}`), or upstream unhealthy at the gateway |
 

@@ -61,6 +61,8 @@ from .services import agreement_items as agreement_items_svc
 from .services import agreement_service as agr_svc
 from .services import budget_service as budget_svc
 from .services import counterparty_service as cp_svc
+from .services import freeze as freeze_svc
+from .services import migrated as migrated_svc
 from .services import invoice_service as inv_svc
 from .services import advance_payment_service as adv_svc
 from .services import accountable_funds_request_service as accountable_funds_svc
@@ -198,6 +200,31 @@ def write(method: str, body=None, status: int = 200, admin: bool = True):
     где заявку подаёт сотрудник, а решение принимает согласование."""
     return method_decorator(api_view(methods=(method,), auth="jwt",
                                      body=body, status=status, admin=admin))
+
+
+def with_migrated(out, source_type: str, source_id: int):
+    """Карточка + «перенесён в …» (A6.2): куда запись переехала в БЗО."""
+    out.migrated_to = [schemas.MigratedTarget(**row)
+                       for row in migrated_svc.migrated_to(source_type, source_id)]
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Заморозка раздела (A6.2)
+# ═══════════════════════════════════════════════════════════════════════
+
+class FreezeView(ContractsView):
+    """Заморожен ли раздел у компании запроса — фронт прячет кнопки правки
+    и уводит пункт меню в «Закупки и оплаты». Права — как у остального
+    чтения раздела (``read``): флаг нужен каждому, кто видит его экраны."""
+
+    @read
+    def get(self, request):
+        # Без компании запроса — как у middleware: заморозка — свойство
+        # компании, а в ``public`` тенантных таблиц после bootstrap нет.
+        if getattr(request, "company", None) is None:
+            return schemas.FreezeRead(frozen=False)
+        return schemas.FreezeRead(**freeze_svc.info())
 
 
 class WorkQueueView(ContractsView):
@@ -685,8 +712,9 @@ class CounterpartyDetailView(ContractsView):
     @read
     def get(self, request, counterparty_id: int):
         row = cp_svc.get_counterparty_or_404(counterparty_id)
-        return schemas.CounterpartyRead.model_validate(
+        out = schemas.CounterpartyRead.model_validate(
             cp_svc.attach_contractors([row])[0])
+        return with_migrated(out, "contracts.counterparty", counterparty_id)
 
     @write("PATCH", body=schemas.CounterpartyUpdate)
     def patch(self, request, counterparty_id: int,
@@ -743,8 +771,9 @@ class AgreementCollectionView(ContractsView):
 class AgreementDetailView(ContractsView):
     @read
     def get(self, request, agreement_id: int):
-        return schemas.AgreementRead.model_validate(
+        out = schemas.AgreementRead.model_validate(
             agr_svc.serialize_agreement(agr_svc.get_agreement_or_404(agreement_id)))
+        return with_migrated(out, "contracts.agreement", agreement_id)
 
     @write("PATCH", body=schemas.AgreementUpdate)
     def patch(self, request, agreement_id: int, data: schemas.AgreementUpdate):
@@ -898,8 +927,9 @@ class InvoiceCollectionView(ContractsView):
 class InvoiceDetailView(ContractsView):
     @read
     def get(self, request, invoice_id: int):
-        return schemas.InvoiceRead.model_validate(
+        out = schemas.InvoiceRead.model_validate(
             inv_svc.serialize_invoice(inv_svc.get_invoice_or_404(invoice_id)))
+        return with_migrated(out, "contracts.invoice", invoice_id)
 
     @write("PATCH", body=schemas.InvoiceUpdate, admin=False)
     def patch(self, request, invoice_id: int, data: schemas.InvoiceUpdate):

@@ -85,13 +85,17 @@ def test_task_create_rejects_reversed_dates(db):
 
 
 @pytest.mark.django_db
-def test_project_create_rejects_reversed_dates(db):
-    """У проекта нет и ограничения в БД: до этой проверки строка сохранялась."""
-    resp = post_json(Client(), f"{BASE}/projects/",
-                     {"name": "Тобол", "start_date": "2026-05-01",
-                      "end_date": "2026-04-01"}, **auth(admin_token()))
+def test_project_update_rejects_reversed_dates(db):
+    """У проекта нет и ограничения в БД: до этой проверки строка сохранялась.
+    Сроки своей правкой меняет только доска без «Проекта» — у связанной они
+    правятся в «Проектах» (``test_projects_api``)."""
+    board = Project.objects.create(name="Тобол")
+    resp = patch_json(Client(), f"{BASE}/projects/{board.id}/",
+                      {"start_date": "2026-05-01", "end_date": "2026-04-01"},
+                      **auth(admin_token()))
     assert resp.status_code == 422
-    assert Project.objects.filter(name="Тобол").count() == 0
+    board.refresh_from_db()
+    assert board.start_date is None
 
 
 # ── правка целиком ──────────────────────────────────────────────────────

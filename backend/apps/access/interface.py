@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from apps.access import depth
 from apps.access.services import assignment, hierarchy, holders, resolve
 from apps.access.services.errors import UnknownRole
 from apps.access.services.identity import identity
@@ -124,6 +125,22 @@ def serving_holders(company: str) -> list[int]:
     """
     require_service("access")
     return holders.serving_holder_ids(company)
+
+
+def holders_of(node: str, flag: str, company: str) -> list[int]:
+    """Id участников ``company``, у которых на узле ``node`` действует признак
+    ``flag`` (``view``/``create``/``edit``/``delete``) — через роли должности,
+    обслуживающие должности предков и личные назначения, с наследованием
+    глубины от предка узла, как в ``flags_for``
+    (``apps.access.services.holders.node_holder_ids``).
+
+    Нужна для уведомлений «всем, кто может…»: например, СН и ПМ об
+    утверждении бюджета (ТЗ БЗО §16.2 п.1).
+    """
+    require_service("access")
+    if flag not in depth.FLAGS:
+        raise ValueError(f"Неизвестный признак глубины: {flag!r}")
+    return holders.node_holder_ids(node, flag, company)
 
 
 def ensure_position_role(company_slug: str, position_id: int, role_code: str,

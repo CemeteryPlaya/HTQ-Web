@@ -64,6 +64,7 @@ test_tenant_app_tasks_use_company_task_or_are_marked_dispatchers``. У
 
 from __future__ import annotations
 
+import inspect
 import logging
 from functools import wraps
 
@@ -74,6 +75,20 @@ logger = logging.getLogger(__name__)
 
 class MissingCompanyArgument(RuntimeError):
     """Задача с @company_task вызвана без company_slug."""
+
+
+def _with_company_slug(sig: inspect.Signature) -> inspect.Signature:
+    """Сигнатура задачи плюс ``company_slug`` — только по имени, по умолчанию
+    ``None``: без него вызов доходит до обёртки и получает понятное
+    ``MissingCompanyArgument``, а не ``TypeError`` проверки аргументов."""
+    params = list(sig.parameters.values())
+    if any(param.name == "company_slug" for param in params):
+        return sig
+    slug = inspect.Parameter("company_slug", inspect.Parameter.KEYWORD_ONLY, default=None)
+    at = next((i for i, param in enumerate(params)
+               if param.kind is inspect.Parameter.VAR_KEYWORD), len(params))
+    params.insert(at, slug)
+    return sig.replace(parameters=params)
 
 
 def company_task(fn):
@@ -110,6 +125,16 @@ def company_task(fn):
 
         with use_company(slug):
             return fn(*args, **kwargs)
+
+    # Celery проверяет аргументы ``.delay()``/``.apply_async()`` по сигнатуре
+    # задачи ещё до постановки в очередь. На Python 3.14 он берёт её через
+    # ``inspect.signature``, а та по ``__wrapped__`` (его ставит ``@wraps``)
+    # доходит до ``fn`` — без ``company_slug``, и ``.delay(company_slug=…)``
+    # падал ``TypeError`` (загрузка выписки и фоновый экспорт БЗО — «очередь
+    # недоступна»). На 3.13 Celery брал ``getfullargspec``, которая
+    # ``__wrapped__`` не разворачивает, поэтому локально это не видно.
+    # Явная ``__signature__`` останавливает развёртку на обёртке.
+    wrapper.__signature__ = _with_company_slug(inspect.signature(fn))
 
     # Явный маркер для мета-теста (apps/core/tests/test_invariants.py):
     # "задача tenant-аппки задекорирована @company_task?" — по имени функции

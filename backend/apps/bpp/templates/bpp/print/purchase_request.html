@@ -1,0 +1,18 @@
+{% extends "bpp/print/base.html" %}
+{% comment %}
+Печатная форма заявки на закупку (ТЗ §07, §19; остаток B, B-3). Шапка,
+подвал и лист согласования — из общего шаблона; здесь только реквизиты
+заявки и таблица позиций. Контекст — services/requests/printing.py::context.
+{% endcomment %}
+{% block body %}
+<table class="request-header">
+  <tbody>
+    <tr><th>Проект</th><td>{{ project }}</td></tr>
+    <tr><th>Статья бюджета</th><td>{{ article }}</td></tr>
+    <tr><th>Тип закупки</th><td>{{ purchase_type }}</td></tr>
+    {% if need_date %}<tr><th>Дата потребности</th><td>{{ need_date }}</td></tr>{% endif %}
+    {% if justification %}<tr><th>Обоснование</th><td>{{ justification|linebreaksbr }}</td></tr>{% endif %}
+  </tbody>
+</table>
+{{ block.super }}
+{% endblock %}

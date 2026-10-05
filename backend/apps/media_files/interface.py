@@ -57,18 +57,41 @@ from apps.media_files.models import FileMetadata
 from apps.media_files.schemas import serialize_file
 from apps.media_files.services import audit
 from apps.media_files.services.scope_policy import authorize_scope_write
-from apps.media_files.services.upload_service import upload_file_bytes
+from apps.media_files.services.upload_service import (
+    FileInfected,
+    ScanUnavailable,
+    UploadValidationError,
+    discard,
+    read_original,
+    upload_file_bytes,
+)
+
+# Отказы пайплайна, которые соседу надо различать: заражённый файл и
+# недоступный антивирус (scope с ``ScopePolicy.antivirus``) — оба подклассы
+# ``UploadValidationError`` (ValueError) со своим ``status_code``.
+__all__ = [
+    "FileInfected", "ScanUnavailable", "UploadValidationError",
+    "store_file", "copy_file", "get_file_url", "get_file_links", "get_file_meta",
+    "delete_file", "discard_upload",
+]
 from apps.media_files.services.url_service import build_file_url
 
 logger = logging.getLogger(__name__)
 
 
 def store_file(*, data: bytes, filename: str, mime: str, scope: str,
-                owner_id: int | None, internal_authorized: bool = False) -> dict:
+                owner_id: int | None, internal_authorized: bool = False,
+                folder: str | None = None) -> dict:
     """Run the upload pipeline on behalf of a neighbour app and hand back a
     plain dict shaped like the HTTP upload response
     (``schemas.FileMetadataRead``, at least ``{id, url, mime, size,
     is_public}`` — see that schema for the full field list).
+
+    ``folder`` — папка объекта-владельца для scope с раскладкой «папка на
+    владельца» (``ScopePolicy.folder_layout``, например ``file_object``):
+    ключ ложится в ``<scope>/<folder>/<uuid>/original<ext>``, и все файлы
+    одного объекта оказываются под одним префиксом. Для такого scope папка
+    обязательна, для остальных — запрещена (422 ``UploadValidationError``).
 
     **R5 authorization contract (decision Д1):** this function goes through
     the same ``scope_policy.authorize_scope_write`` seam as the HTTP upload
@@ -80,10 +103,16 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
     mean "the calling domain has already checked its own role/ownership
     rules for this write and vouches for it". Without it, a restricted-scope
     call raises ``django.core.exceptions.PermissionDenied`` — loud failure
-    instead of a silent privileged write. Open scopes (``avatar``/``news``/
-    ``chat``/``generic``) and unknown scopes are unaffected — same seam,
-    same open/unknown behaviour as the HTTP path. The current only caller
-    (the avatar path, an open scope) never needs the flag.
+    instead of a silent privileged write. Every scope outside
+    ``RESTRICTED_SCOPES`` (``avatar``/``news``/``chat``/``generic``/
+    ``signoff_doc``/``file_object``) and unknown scopes are unaffected — same
+    seam, same open/unknown behaviour as the HTTP path — so the flag means
+    something only for a restricted scope: the ``hr`` document and
+    department-file services pass it (no in-process caller writes
+    ``task_attachment`` today — task attachments arrive through the HTTP
+    upload); callers writing an open scope (``apps.files``, ``contracts``,
+    ``mail``, the ``bpp`` export, avatars) don't need it and shouldn't pass
+    it "just in case".
 
     Raises ``apps.media_files.services.upload_service.UploadValidationError``
     for oversize/wrong-mime/undecodable-image inputs — same contract as
@@ -100,6 +129,7 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
         scope=scope,
         requested_is_public=None,
         owner_id=owner_id,
+        folder=folder,
     )
     meta = result.meta
 
@@ -137,6 +167,46 @@ def store_file(*, data: bytes, filename: str, mime: str, scope: str,
     return serialize_file(meta).model_dump(mode="json")
 
 
+def copy_file(file_id, *, scope: str, folder: str | None = None,
+              owner_id: int | None = None, internal_authorized: bool = False) -> dict:
+    """Копия уже сохранённого файла в другом scope — тем же пайплайном, что
+    ``store_file`` (проверки scope, сигнатура, раскладка по папке, аудит).
+
+    Нужна переносу старых вложений в файловую подсистему (``apps.files``):
+    новый scope может быть строже старого (``file_object`` —
+    ``owner_gated``, папка на владельца), поэтому байты проходят его
+    проверки заново, а не переписываются ключом. Исходная строка не
+    трогается — удалять оригинал решает вызывающий.
+
+    Возвращает то же, что ``store_file``, плюс ``source`` — паспорт
+    оригинала (``id``, ``owner_id``, ``created_at``, ``sha256``): тому, кто
+    переносит, нужно сохранить, КТО и КОГДА загрузил файл на самом деле.
+    ``LookupError`` — исходного файла нет (неизвестный id, soft-deleted);
+    ``UploadValidationError`` — новый scope файл не принял.
+    """
+    require_service("media")
+
+    try:
+        key = uuid.UUID(str(file_id))
+    except (ValueError, AttributeError, TypeError):
+        raise LookupError(f"файл {file_id!r} не найден в media") from None
+    meta = FileMetadata.objects.filter(pk=key, deleted_at__isnull=True).first()
+    if meta is None:
+        raise LookupError(f"файл {file_id!r} не найден в media")
+
+    stored = store_file(
+        data=read_original(meta), filename=meta.original_filename, mime=meta.mime,
+        scope=scope, owner_id=owner_id if owner_id is not None else meta.owner_id,
+        internal_authorized=internal_authorized, folder=folder,
+    )
+    return {**stored, "source": {
+        "id": str(meta.pk),
+        "owner_id": meta.owner_id,
+        "created_at": meta.created_at.isoformat(),
+        "sha256": meta.sha256,
+    }}
+
+
 def get_file_url(file_id, variant: str = "original") -> str | None:
     """The URL a caller should hand to a browser for ``file_id`` — signed
     for private files, plain for public ones (see
@@ -164,6 +234,35 @@ def get_file_url(file_id, variant: str = "original") -> str | None:
 
     url, _exp = build_file_url(meta, variant=variant)
     return url
+
+
+def get_file_links(file_ids) -> dict[str, dict]:
+    """``get_file_url`` для пачки id одним запросом и со сроком жизни:
+    ``{id: {"url", "exp"}}``. Id, не разрешившиеся в живую строку
+    (неизвестные, кривые, soft-deleted), в ответ не попадают — тот же
+    контракт, что ``None`` у одиночной версии.
+
+    ``exp`` — unix-время, после которого подпись не примут (у публичного
+    файла — лишь подсказка для кэша, см. ``build_file_url``). Нужен тому, кто отдаёт ссылку
+    наружу как «временную» (ТЗ §21, ``DownloadFile``) и должен сказать
+    клиенту, до какого момента она действует.
+    """
+    require_service("media")
+
+    keys: list[uuid.UUID] = []
+    for file_id in file_ids:
+        try:
+            keys.append(uuid.UUID(str(file_id)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    if not keys:
+        return {}
+
+    links: dict[str, dict] = {}
+    for meta in FileMetadata.objects.filter(pk__in=keys, deleted_at__isnull=True):
+        url, exp = build_file_url(meta, variant="original")
+        links[str(meta.pk)] = {"url": url, "exp": exp}
+    return links
 
 
 def get_file_meta(file_id) -> dict | None:
@@ -195,6 +294,10 @@ def get_file_meta(file_id) -> dict | None:
         "mime": meta.mime,
         "size": meta.size,
         "kind": meta.kind,
+        # Кто и когда загрузил — тому, кто переносит файл в другое место и
+        # обязан сохранить его историю (перенос сканов в apps.files).
+        "owner_id": meta.owner_id,
+        "created_at": meta.created_at.isoformat(),
     }
 
 
@@ -225,3 +328,16 @@ def delete_file(file_id) -> bool:
         pk=key, deleted_at__isnull=True,
     ).update(deleted_at=timezone.now())
     return bool(updated)
+
+
+def discard_upload(file_id, path: str) -> None:
+    """Откатить ``store_file``: вызывающий записал файл, но его собственная
+    запись не удалась. Удаляет объект из хранилища и помечает строку
+    удалённой, если она ещё жива (в откатившейся транзакции её уже нет).
+
+    ``UploadValidationError`` — исключение ``store_file`` — соседи берут
+    отсюда же: импортировать ``services`` чужой аппки нельзя.
+    """
+    require_service("media")
+    discard(path)
+    delete_file(file_id)

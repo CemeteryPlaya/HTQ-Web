@@ -15,6 +15,8 @@
 добавлена только в ``htqweb.settings.test``.
 """
 
+import uuid
+
 from django.db import models
 
 # Ровно тот импорт, который сделает предметная аппка: примесь доступна
@@ -47,6 +49,20 @@ class ProbeDoc(signoff.Approvable, models.Model):
     # «Владелец» — согласующий, которого называет сам объект
     # (``ApproverKind.SUBJECT``, ключ ``owner``).
     owner_id = models.IntegerField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class UuidProbeDoc(signoff.Approvable, models.Model):
+    """Предмет с UUID-ключом — так устроены документы модуля БЗО
+    (``apps.bpp``, мастер-план D-05). Проверяет, что движок не требует от
+    объекта целого ключа."""
+
+    SIGNOFF_SUBJECT_TYPE = "testapp.uuiddoc"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=100, default="")
 
     def __str__(self) -> str:
         return self.title

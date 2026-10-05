@@ -15,7 +15,8 @@ import pytest
 from django.db import IntegrityError, transaction
 from django.db.transaction import TransactionManagementError
 
-from apps.tasks.models import ProductionDay, Task, TaskSequence
+from apps.refdata.models import ProductionDay
+from apps.tasks.models import Task, TaskSequence
 from apps.tasks.services import sequence_service
 
 

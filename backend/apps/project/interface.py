@@ -1,0 +1,115 @@
+"""Межаппный интерфейс «Проекта» (мастер-план §2.6)."""
+
+from __future__ import annotations
+
+import uuid
+
+from apps.core.services import require_service
+
+from .models import Project, ProjectMember
+from .services import projects
+
+#: Отказ подписчика в правке «Проекта» — сосед поднимает его из своего
+#: слушателя (текст для человека), ручка «Проекта» отдаёт 409 ``E-PRJ-04``.
+ProjectChangeRejected = projects.ProjectChangeRejected
+
+
+def project_brief(ids: list[str]) -> dict[str, dict]:
+    require_service("project")
+    return {str(p.id): projects.brief(p) for p in Project.objects.filter(id__in=ids)}
+
+
+def is_member(project_id: str, user_id: int) -> bool:
+    require_service("project")
+    return ProjectMember.objects.filter(project_id=project_id, user_id=user_id).exists()
+
+
+def member_project_ids(user_id: int) -> list[str]:
+    require_service("project")
+    return [str(pid) for pid in ProjectMember.objects.filter(user_id=user_id)
+            .values_list("project_id", flat=True)]
+
+
+def member_user_ids(project_id: str) -> list[int]:
+    """Кого уведомлять по проекту: руководитель плюс участники, без повторов,
+    по возрастанию. Руководитель — участник и так (``services.projects.
+    _ensure_member``), но берётся и из самого проекта: строку участия могли
+    удалить в обход сервиса. Неизвестный или неверный ключ — пустой список."""
+    require_service("project")
+    try:
+        key = uuid.UUID(str(project_id))
+    except (ValueError, AttributeError, TypeError):
+        return []
+    project = Project.objects.filter(pk=key).only("manager_user_id").first()
+    if project is None:
+        return []
+    ids = set(ProjectMember.objects.filter(project_id=key).values_list("user_id", flat=True))
+    if project.manager_user_id:
+        ids.add(project.manager_user_id)
+    return sorted(ids)
+
+
+def search_projects(query: str, *, user_id: int, only_member: bool,
+                    limit: int = 20) -> list[dict]:
+    require_service("project")
+    return projects.search(query, user_id=user_id, only_member=only_member, limit=limit)
+
+
+def register_change_listener(listener) -> None:
+    """Подписать соседа на правку «Проекта»: ``listener(brief)`` зовётся в
+    транзакции правки с паспортом ``project_brief`` уже после сохранения.
+    Сосед, чьи данные повторяют поля «Проекта» (доска задач), приводит их к
+    нему; отказ — ``ProjectChangeRejected``, и правка откатывается целиком.
+    Звать из ``ready()`` — без ``require_service``: к моменту регистрации
+    базы ещё нет, а выключенный «Проект» и так не правится."""
+    projects.add_change_listener(listener)
+
+
+# ── запись: только для демо-данных модуля БЗО (``bpp seed_bpp_demo``) ──
+
+def create_project(*, code: str, name: str, country_code: str, actor_id: int,
+                   manager_user_id: int | None = None, member_ids=(),
+                   status: str | None = None, date_start=None, date_end=None) -> str:
+    """Завести проект с участниками; ключ — строка UUID. Код занят —
+    ``ProjectError`` сервиса (текст для человека). Статус и сроки — для
+    демо-досок задач (``seed_tasks_demo``), у которых они свои."""
+    require_service("project")
+    extra = {"date_start": date_start, "date_end": date_end}
+    if status:
+        extra["status"] = status
+    project = projects.create(code=code, name=name, country_code=country_code,
+                              actor_id=actor_id, manager_user_id=manager_user_id, **extra)
+    for user_id in member_ids:
+        projects.add_member(project, user_id, actor_id=actor_id)
+    return str(project.id)
+
+
+def update_project(project_id: str, *, actor_id: int, **fields) -> None:
+    """Править «Проект» из кода (демо-доски задач приводят его к своему
+    описанию) — через сервис, поэтому подписчики получают правку как от
+    ручки. Отказ подписчика — ``ProjectChangeRejected``."""
+    require_service("project")
+    projects.update(Project.objects.get(pk=project_id), actor_id=actor_id, **fields)
+
+
+def project_ids_by_code(codes) -> dict[str, str]:
+    """``{код: id}`` проектов с этими кодами — чужие коды не попадают."""
+    require_service("project")
+    return {code: str(pid) for code, pid in
+            Project.objects.filter(code__in=list(codes)).values_list("code", "id")}
+
+
+def delete_project(project_id: str) -> None:
+    """Удалить проект и участников. Документы модуля по проекту вызывающий
+    удаляет сам и раньше: ссылки на проект у них — ключом, без FK."""
+    require_service("project")
+    Project.objects.filter(pk=project_id).delete()
+
+
+def upsert_project_from_1c(record: dict):
+    """Один «Проект» из 1С — идемпотентно (заготовка A7.3, D-38): ``Outcome``
+    (``created|updated|unchanged|conflict|rejected``). В контексте компании."""
+    require_service("project")
+    from .services import onec
+
+    return onec.upsert_project(record)

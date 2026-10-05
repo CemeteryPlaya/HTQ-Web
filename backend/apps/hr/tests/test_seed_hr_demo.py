@@ -284,8 +284,9 @@ def test_holding_structure_sets_serving_and_managing_flags(company_schema):
         assert Position.objects.filter(is_manager=True, external_hierarchy="inherit").count() == 5
         assert Department.objects.filter(unit_type="directorate").count() == 3
         assert ReportingRelation.objects.filter(relation_type="functional").count() == 3
-        # Блок F: direct-связей 12 (ОСУ → ГД + 11 прежних)
-        assert ReportingRelation.objects.filter(relation_type="direct").count() == 12
+        # Блок F: direct-связей 12 (ОСУ → ГД + 11 прежних); модуль БЗО
+        # добавил «Руководитель проекта → Технический директор» — 13.
+        assert ReportingRelation.objects.filter(relation_type="direct").count() == 13
 
 
 # ── роли должностей (задача 11 блока I) ─────────────────────────────────
@@ -493,20 +494,21 @@ def test_holding_staffing_excludes_system_positions(company_schema):
     _seed(company=company_schema["slug"])
     
     with use_company(company_schema["slug"]):
-        # Количество должностей = 13 (12 обычных + 1 ОСУ)
+        # Количество должностей = 14 (13 обычных + 1 ОСУ); тринадцатая
+        # обычная — «Руководитель проекта» модуля БЗО (роль bpp-pm).
         positions = Position.objects.all()
-        assert positions.count() == 13
+        assert positions.count() == 14
         
-        # Штатных строк = 12 (только обычные, ОСУ исключена)
+        # Штатных строк = 13 (только обычные, ОСУ исключена)
         staffing = StaffingPosition.objects.all()
-        assert staffing.count() == 12
+        assert staffing.count() == 13
         
         # Проверяем, что ОСУ нет в штатном расписании
         osu = Position.objects.get(title="Участник (ОСУ)")
         assert not StaffingPosition.objects.filter(position=osu).exists()
         
-        # Остальные 12 должностей в штатном расписании есть
+        # Остальные 13 должностей в штатном расписании есть
         regular_positions = Position.objects.filter(is_system=False)
-        assert regular_positions.count() == 12
+        assert regular_positions.count() == 13
         for pos in regular_positions:
             assert StaffingPosition.objects.filter(position=pos).exists(), pos.title

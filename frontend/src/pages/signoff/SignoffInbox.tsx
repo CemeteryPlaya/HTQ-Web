@@ -13,29 +13,27 @@
  * флаг. Поэтому кнопки решения есть у каждой строки этого списка и только
  * этого: попытка решить чужую задачу вернёт 409, а не 403, и админский
  * токен от этого не спасает.
+ *
+ * Очередь — по ВСЕМ компаниям человека (мастер-план БЗО, B8.1): директора в
+ * штате холдинга, а документы дочерних согласуются в их схемах. Задача
+ * другой компании идёт с её названием и открывается там или решается прямо
+ * отсюда, если маршрут это разрешает (`InboxRowActions`).
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import {
-  ArrowRight,
   ClipboardCheck,
   Inbox as InboxIcon,
   MessageSquare,
   Paperclip,
 } from 'lucide-react';
 
+import { InboxCompany, InboxRowActions } from '@/components/signoff/InboxRowActions';
+import { isForeign } from '@/components/signoff/crossCompany';
 import { SignoffShell } from '@/components/signoff/SignoffShell';
 import { SubjectLink } from '@/components/signoff/SubjectLink';
 import { formatMoment } from '@/components/signoff/format';
 import { QUORUM_LABELS } from '@/components/signoff/labels';
-import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -57,9 +55,11 @@ const SignoffInbox = () => {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['signoff', 'inbox'],
-    queryFn: () => signoffApi.inbox().then((r) => r.data),
+    queryKey: ['signoff', 'inbox', 'all'],
+    queryFn: () => signoffApi.inboxAll().then((r) => r.data),
   });
+  // Колонка компании — только когда в очереди есть задачи других компаний.
+  const showCompany = items.some(isForeign);
 
   return (
     <SignoffShell>
@@ -98,6 +98,7 @@ const SignoffInbox = () => {
             <TableHeader>
               <TableRow>
                 <TableHead>{t('signoff.columns.subject')}</TableHead>
+                {showCompany && <TableHead>{t('signoff.columns.company', 'Компания')}</TableHead>}
                 <TableHead>{t('signoff.columns.stage')}</TableHead>
                 <TableHead>{t('signoff.columns.submitted')}</TableHead>
                 <TableHead className="text-right">{t('signoff.columns.decision')}</TableHead>
@@ -105,19 +106,29 @@ const SignoffInbox = () => {
             </TableHeader>
             <TableBody>
               {items.map((item) => (
-                <TableRow key={item.task_id}>
+                <TableRow key={`${item.company?.slug ?? ''}:${item.task_id}`}>
                   <TableCell>
                     {/* Заголовок ведёт на карточку процесса, а не на сам
                         документ: там и решение, и меню раздела, и документ
-                        внутри. */}
-                    <SubjectLink
-                      title={item.subject_title}
-                      url={item.subject_url}
-                      subjectType={item.subject_type}
-                      subjectId={item.subject_id}
-                      processId={item.process_id}
-                    />
+                        внутри. У задачи другой компании ссылок нет — её
+                        страницы живут на адресе той компании. */}
+                    {isForeign(item) ? (
+                      <span className="font-medium">
+                        {item.subject_title ?? `${item.subject_type} #${item.subject_id}`}
+                      </span>
+                    ) : (
+                      <SubjectLink
+                        title={item.subject_title}
+                        url={item.subject_url}
+                        subjectType={item.subject_type}
+                        subjectId={item.subject_id}
+                        processId={item.process_id}
+                      />
+                    )}
                   </TableCell>
+                  {showCompany && (
+                    <TableCell><InboxCompany item={item} /></TableCell>
+                  )}
                   <TableCell>
                     <div>{item.stage_name}</div>
                     <div className="text-xs text-muted-foreground">
@@ -168,12 +179,7 @@ const SignoffInbox = () => {
                           открыв документа. Цена промаха слишком велика —
                           отклонённый объект запирается, и вернуть его может
                           только отдельный возврат на доработку. */}
-                      <Button asChild size="sm" variant="outline">
-                        <Link to={`/signoff/processes/${item.process_id}`}>
-                          {t('signoff.inbox.open')}
-                          <ArrowRight className="ml-1.5 h-4 w-4 opacity-70" />
-                        </Link>
-                      </Button>
+                      <InboxRowActions item={item} openLabel={t('signoff.inbox.open')} />
                     </div>
                   </TableCell>
                 </TableRow>

@@ -10,6 +10,21 @@
 
 import type { ApprovalState } from './signoff';
 
+/** `GET contracts/v1/freeze` — заморозка раздела после переноса в БЗО (A6.2). */
+export interface ContractsFreeze {
+  frozen: boolean;
+  frozen_at: string | null;
+  comment: string;
+}
+
+/** Куда запись переехала в модуль БЗО — «перенесён в ДГ-…» (A6.2).
+ *  `number` — у документов с номером; у контрагента `null`. */
+export interface MigratedTarget {
+  target_type: string;
+  target_id: string;
+  number: string | null;
+}
+
 export interface Country {
   id: number;
   name: string;
@@ -161,6 +176,8 @@ export interface Counterparty {
   /** Та же организация в модуле задач — партнёр на объектах, если связан.
    *  `null` и при выключенном модуле задач. */
   contractor?: { id: number; name: string; status: string } | null;
+  /** Только в карточке: куда контрагент переехал в БЗО (A6.2). */
+  migrated_to?: MigratedTarget[];
   created_at: string;
   updated_at: string;
 }
@@ -261,6 +278,8 @@ export interface Agreement {
   /** Заявка конструктора «Запросы», по которой заключён договор; `null` —
    *  договор без заявки. Карточка заявки — `contractsApi.getLinkedRequest`. */
   request_id: number | null;
+  /** Только в карточке: куда договор переехал в БЗО (A6.2). */
+  migrated_to?: MigratedTarget[];
   created_by: number | null;
   created_at: string;
   updated_at: string;
@@ -315,6 +334,8 @@ export interface Invoice {
   approval_state: ApprovalState;
   /** Заявка конструктора, по которой выставлен счёт (как у договора). */
   request_id: number | null;
+  /** Только в карточке: куда счёт переехал в БЗО (A6.2). */
+  migrated_to?: MigratedTarget[];
   created_by: number | null;
   created_at: string;
   updated_at: string;

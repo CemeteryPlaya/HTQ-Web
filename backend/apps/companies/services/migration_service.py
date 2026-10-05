@@ -78,11 +78,21 @@ ADVISORY_LOCK_KEY = 0x48545143  # "HTQC"
 
 # Тенантные по принадлежности, но по эффекту — общие: это data-миграции,
 # которые не создают в схеме компании ничего, а пишут в public
-# (django_celery_beat). Их эффект глобален и уже достигнут обычным
-# manage.py migrate; повторное выполнение на каждую компанию — чистый
-# побочный эффект, причём вредный: defaults в обеих несут enabled=True и
-# crontab, то есть заведение новой компании молча вернуло бы выключенную
-# оператором задачу и сбросило бы изменённое им расписание.
+# (django_celery_beat). Их эффект глобален, и на живом стеке его обеспечивают
+# НЕ они: старт контейнера зовёт migrate_shared, который тенантные аппки
+# пропускает, а здесь они не выполняются (ниже). Строки расписания заводит
+# apps.core.periodic_tasks.ensure_periodic_tasks — из migrate_shared на
+# каждом старте, только недостающие, существующие не трогая. Реально эти
+# миграции выполняет лишь голый manage.py migrate (pytest). Поэтому НОВАЯ
+# data-миграция тенантной аппки, пишущая строку django_celery_beat, обязана
+# попасть и в этот список, и в реестр PERIODIC_TASKS
+# (apps/core/periodic_tasks.py) — иначе на живом стеке её задачи не будет;
+# сторож — apps/core/tests/test_periodic_tasks.py.
+#
+# Выполнять их на каждую компанию нельзя: defaults в них несут enabled=True
+# и расписание (update_or_create), то есть заведение новой компании молча
+# вернуло бы выключенную оператором задачу и сбросило бы изменённое им
+# расписание.
 #
 # Поэтому они помечаются применёнными, но НЕ выполняются. Отметка ставится
 # ПОСЛЕ прогона, а не заранее вместе с нетенантными: hr.0020 (как раньше
@@ -95,6 +105,9 @@ SHARED_EFFECT_MIGRATIONS = frozenset({
     ("hr", "0020_sync_identity_dispatch_periodic_task"),
     ("tasks", "0003_tasks_periodic_tasks"),
     ("tasks", "0019_tasks_periodic_tasks_use_dispatchers"),
+    ("signoff", "0014_retry_no_executor_periodic_task"),
+    ("bpp", "0004_committed_check_periodic_task"),
+    ("bpp", "0012_bank_import_reaper_periodic_task"),
 })
 
 

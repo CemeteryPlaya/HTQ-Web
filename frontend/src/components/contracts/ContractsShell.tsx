@@ -1,11 +1,15 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router-dom';
 import { Building2, CheckSquare, FileText, LayoutDashboard, Package, Receipt, Wallet } from 'lucide-react';
 
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { BackToProfile } from '@/components/BackToProfile';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { cn } from '@/lib/utils';
+
+import { FrozenBanner, FrozenFormNotice } from './FrozenNotice';
 
 /**
  * Общая рамка раздела «Договоры»: шапка приложения, боковая панель
@@ -64,8 +68,14 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+/** Формы создания и правки — в замороженном разделе их не показываем. */
+const FORM_PATH = /\/(new|edit)\/?$/;
+
 export function ContractsShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
+  // Раздел перенесён в «Закупки и оплаты» (A6.2): архив только на чтение.
+  const { frozen } = useContractsFreeze();
+  const { t } = useTranslation();
 
   const isActive = (item: NavItem) =>
     item.matchPrefix ? pathname.startsWith(item.matchPrefix) : pathname === item.to;
@@ -78,7 +88,7 @@ export function ContractsShell({ children }: { children: ReactNode }) {
         <div className="flex flex-col gap-6 md:flex-row md:gap-8">
           <aside className="md:w-56 shrink-0">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 px-3">
-              Договоры
+              {frozen ? t('contracts.nav.archive', 'Архив договоров') : 'Договоры'}
             </h2>
             <nav className="flex flex-row gap-3 overflow-x-auto md:flex-col md:gap-5 md:overflow-visible">
               {NAV_SECTIONS.map((section) => (
@@ -122,7 +132,10 @@ export function ContractsShell({ children }: { children: ReactNode }) {
             </nav>
           </aside>
 
-          <main className="flex-1 min-w-0">{children}</main>
+          <main className="flex-1 min-w-0">
+            {frozen && <FrozenBanner />}
+            {frozen && FORM_PATH.test(pathname) ? <FrozenFormNotice /> : children}
+          </main>
         </div>
       </div>
       <Footer />

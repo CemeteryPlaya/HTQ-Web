@@ -80,7 +80,10 @@ export type StageState =
   | 'approved'
   | 'rejected'
   | 'rework'
-  | 'skipped';
+  | 'skipped'
+  /** На роль этапа не назначен ни один действующий исполнитель (ТЗ §16.1
+   *  п.5) — документ ждёт; только у маршрутов с `lazy_resolution`. */
+  | 'no_executor';
 
 export type TaskState = 'pending' | 'approved' | 'rejected' | 'rework' | 'skipped';
 
@@ -169,8 +172,38 @@ export interface CoverageGap {
 
 // ─── Маршруты ────────────────────────────────────────────────────────────
 
+/**
+ * Должность парой «компания + должность» (мастер-план БЗО, B8.1): этап
+ * маршрута дочерней компании может стоять на должности ВЫШЕСТОЯЩЕЙ —
+ * директора в штате холдинга. `company` — слаг этой компании; пусто — своя.
+ * Должности у компаний свои, и id повторяются, поэтому одного id мало.
+ */
+export interface PositionRef {
+  company: string;
+  position_id: number;
+}
+
+/** Компания, из которой редактор маршрута может брать должности. */
+export interface PositionCompany {
+  slug: string;
+  name: string;
+  /** Своя компания (её должности хранятся с пустым `company`). */
+  own: boolean;
+}
+
+/** Должность из справочника компании для редактора маршрута. */
+export interface PositionOption {
+  id: number;
+  title: string;
+  department_name: string | null;
+  is_active: boolean;
+}
+
 export interface RouteRole {
   position_id: number;
+  /** Компания должности (B8.1): пусто — своя. */
+  company?: string;
+  company_name?: string | null;
   title: string;
   department_name: string | null;
   is_active: boolean;
@@ -200,6 +233,9 @@ export interface RouteStage {
    *  `requires_attachment` и `approver_kind` — комментарий можно требовать и
    *  от названного согласующего. На отказ/доработку не влияет. */
   requires_comment: boolean;
+  /** Выбирает вариант при альтернативах (D-25: ФД и ГД). Нет ни у одного этапа —
+   *  выбирает каждый. */
+  votes_option: boolean;
   roles: RouteRole[];
   /** `users`: люди поимённо (с именами для редактора). */
   user_ids: number[];
@@ -215,6 +251,33 @@ export interface RouteStage {
   requirement_label: string | null;
 }
 
+/** Должность в подписи флагов маршрута. `title` у должности вышестоящей
+ *  компании уже несёт её название («ФД · Hi-Tech Group»). */
+export interface PositionBrief {
+  id: number;
+  title: string;
+  company?: string;
+  company_name?: string | null;
+}
+
+/** Флаги маршрута, которые принимают ручки маршрута. */
+export interface RouteFlagsInput {
+  forbid_self_approval?: boolean;
+  reject_comment_min?: number;
+  lazy_resolution?: boolean;
+  skip_unmatched_groups?: boolean;
+  no_executor_notify_position_ids?: number[];
+  escalation_position_id?: number | null;
+  self_skip_notify_position_ids?: number[];
+  /** B8.1: должности вышестоящих компаний для тех же ролей. */
+  escalation_position_company?: string;
+  no_executor_notify_foreign?: PositionRef[];
+  self_skip_notify_foreign?: PositionRef[];
+  /** Задачу можно решить прямо из очереди вышестоящей компании. Живой
+   *  флаг: действует сразу, в том числе на идущие согласования. */
+  allow_direct_decisions?: boolean;
+}
+
 export interface ApprovalRoute {
   id: number;
   subject_type: string;
@@ -225,6 +288,27 @@ export interface ApprovalRoute {
   name: string;
   /** Активный маршрут на тип ровно один — частичный уникальный индекс. */
   is_active: boolean;
+  /** Флаги маршрута (мастер-план БЗО, D-21) — все выключены по умолчанию. */
+  forbid_self_approval: boolean;
+  reject_comment_min: number;
+  lazy_resolution: boolean;
+  /** Группа этапов без подходящей ветки пропускается; не осталось ни одной —
+   *  документ согласован сразу (D-18, допсоглашение без изменения суммы). */
+  skip_unmatched_groups?: boolean;
+  no_executor_notify_position_ids: number[];
+  escalation_position_id: number | null;
+  self_skip_notify_position_ids: number[];
+  no_executor_notify_positions: PositionBrief[];
+  escalation_position: PositionBrief | null;
+  self_skip_notify_positions: PositionBrief[];
+  /** B8.1 — см. `RouteFlagsInput`. `cross_company_decisions` — тип документа
+   *  вообще допускает решение из вышестоящей компании; без него переключатель
+   *  не показывается. */
+  escalation_position_company?: string;
+  no_executor_notify_foreign?: PositionRef[];
+  self_skip_notify_foreign?: PositionRef[];
+  allow_direct_decisions?: boolean;
+  cross_company_decisions?: boolean;
   stages: RouteStage[];
   /** Только в карточке ОДНОГО маршрута: схема его области — факты для
    *  условий и ключи «назначает объект». */
@@ -265,6 +349,12 @@ export interface ProcessTask {
   user_id: number;
   /** HR position through which this task was assigned; null for legacy and initiator tasks. */
   position_id: number | null;
+  /** Компания должности (B8.1): пусто — своя; подпись — «ФД · Hi-Tech Group». */
+  position_company?: string;
+  position_label?: string | null;
+  /** Остальные должности этапа, которые закрывает эта же задача (один
+   *  человек на двух должностях — решение засчитывается за обе). */
+  also_positions?: PositionRef[];
   full_name: string;
   state: TaskState;
   comment: string;
@@ -274,6 +364,10 @@ export interface ProcessTask {
   /** Подписанная ссылка на него — короткоживущая, и её может не быть даже
    *  при непустом `file_id`, если media недоступен. */
   file_url: string | null;
+  /** За какой вариант отдан голос «согласовать», когда было из чего выбирать
+   *  (исходный документ или альтернатива, ТЗ §12.4). */
+  option_key?: string | null;
+  option_label?: string | null;
 }
 
 export interface ProcessStage {
@@ -293,12 +387,17 @@ export interface ProcessStage {
   approver_kind: ApproverKind;
   /** HR-должности, по которым этот снимок маршрута разрешил задачи. */
   role_ids: number[];
+  /** Все должности этапа парами, включая вышестоящих компаний (B8.1). */
+  role_refs?: PositionRef[];
   user_ids: number[];
   approver_key: string;
   requires_attachment: boolean;
   requires_comment: boolean;
+  votes_option?: boolean;
   requirement_key: string;
   requirement_label: string | null;
+  /** Когда этап стал активным. */
+  activated_at?: string | null;
   decided_at: string | null;
   tasks: ProcessTask[];
 }
@@ -306,7 +405,8 @@ export interface ProcessStage {
 export interface ApprovalProcess {
   id: number;
   subject_type: string;
-  subject_id: number;
+  /** Строка: целый id старых доменов или UUID документа БЗО. */
+  subject_id: string;
   /** Область маршрута, по которому шёл процесс (снимок). */
   scope: string;
   state: ProcessState;
@@ -327,6 +427,9 @@ export interface ApprovalProcess {
    *  если инициатор неизвестен или пользователь удалён — тогда остаётся
    *  только `initiator_id`. */
   initiator_name: string | null;
+  /** Варианты для «согласовать» у идущего процесса: исходный документ и его
+   *  альтернативы. Меньше двух — выбирать не из чего. */
+  options?: { key: string; label: string }[];
 }
 
 /** Строка списка «ждёт моего решения». */
@@ -334,7 +437,8 @@ export interface InboxItem {
   task_id: number;
   process_id: number;
   subject_type: string;
-  subject_id: number;
+  /** Строка: целый id старых доменов или UUID документа БЗО. */
+  subject_id: string;
   subject_title: string | null;
   subject_url: string | null;
   stage_name: string;
@@ -352,6 +456,59 @@ export interface InboxItem {
   file_id: string | null;
   initiator_id: number | null;
   created_at: string;
+}
+
+/** Компания строки очереди или карточки (B8.1). */
+export interface CompanyBrief {
+  slug: string;
+  /** Короткий адрес компании — по нему `switchCompany` строит хост. */
+  subdomain: string | null;
+  name: string;
+  url: string | null;
+  /** Компания текущего адреса. */
+  current: boolean;
+}
+
+/**
+ * Строка единой очереди «Ждёт меня» по всем компаниям (B8.1).
+ *
+ * Директора — в штате холдинга, а документы дочерних согласуются в схемах
+ * дочерних, поэтому очередь собирается по текущей компании, компаниям с
+ * членством и дочерним текущей. Задачу чужой компании можно открыть там
+ * (`can_enter` — есть членство) или решить прямо отсюда (`direct_allowed` —
+ * маршрут это разрешает); `direct_blocker` — почему нельзя.
+ */
+export interface InboxAllItem extends InboxItem {
+  /** `null` — запрос без контекста компании (голый домен). */
+  company: CompanyBrief | null;
+  can_enter: boolean;
+  direct_allowed: boolean;
+  direct_blocker: string | null;
+  /** Где решать на адресе компании задачи. */
+  process_path: string;
+}
+
+/** Сводка документа для решения из вышестоящей компании — готовыми
+ *  строками: поля шапки и таблица позиций (`Subject.summary`). */
+export interface SubjectSummary {
+  fields: { label: string; value: string }[];
+  lines: {
+    columns: { key: string; label: string; align?: 'right' | null }[];
+    rows: Record<string, string>[];
+    total: { label: string; value: string } | null;
+  } | null;
+}
+
+/** Карточка процесса дочерней компании, открытая из холдинга (B8.1). */
+export interface ForeignProcess extends ApprovalProcess {
+  company: CompanyBrief;
+  summary: SubjectSummary | null;
+  /** Своя задача на активном этапе — её и можно решить. */
+  my_task_id: number | null;
+  direct_allowed: boolean;
+  direct_blocker: string | null;
+  /** Есть членство в компании документа — её адрес откроется. */
+  can_enter: boolean;
 }
 
 export interface SignoffEnums {
@@ -374,6 +531,9 @@ export interface StageInput {
   /** Минимум одна у `position` — этап без должностей движок не запустит. У
    *  `initiator` наоборот: список обязан быть пустым. */
   position_ids: number[];
+  /** Должности парами, в том числе вышестоящих компаний (B8.1);
+   *  складываются с `position_ids` своей компании. */
+  positions?: PositionRef[];
   condition?: Condition;
   is_fallback?: boolean;
   approver_kind?: ApproverKind;
@@ -381,6 +541,7 @@ export interface StageInput {
   approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  votes_option?: boolean;
   requirement_key?: string;
 }
 
@@ -394,6 +555,8 @@ export interface StageUpdateInput {
   name?: string;
   quorum?: Quorum;
   position_ids?: number[];
+  /** Пары (B8.1); прислано хоть одно из двух — список заменяется их суммой. */
+  positions?: PositionRef[];
   condition?: Condition;
   is_fallback?: boolean;
   /** Переключение на `initiator` стирает названных согласующих само —
@@ -404,6 +567,7 @@ export interface StageUpdateInput {
   approver_key?: string;
   requires_attachment?: boolean;
   requires_comment?: boolean;
+  votes_option?: boolean;
   requirement_key?: string;
 }
 
@@ -418,6 +582,9 @@ export interface DecisionInput {
    *  для правки. Не то же, что `reject` (см. `ProcessState`). */
   decision: 'approve' | 'reject' | 'rework';
   comment?: string;
+  /** Ключ варианта из `ApprovalProcess.options` — обязателен у «согласовать»,
+   *  когда вариантов больше одного. */
+  option_key?: string;
 }
 
 /** Возврат на доработку по УЖЕ ЗАКРЫТОМУ кругу (`POST /processes/:id/rework`).

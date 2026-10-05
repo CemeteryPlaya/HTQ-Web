@@ -31,6 +31,7 @@ from apps.signoff.models import (
     ApprovalProcess,
     ApprovalRoute,
     ApprovalState,
+    ApprovalTask,
     ProcessState,
     StageState,
     TaskState,
@@ -38,9 +39,16 @@ from apps.signoff.models import (
 from apps.signoff.services import attachments, engine, presentation, registry
 from apps.signoff.services.engine import (
     AlreadyInApproval,
+    CommentTooShort,
+    InvalidDecision,
+    OptionError,
+    OptionRejected,
+    OptionRequired,
     ProcessStillRunning,
     RouteNotConfigured,
+    PreapprovalMismatch,
     RouteUnusable,
+    SelfApprovalForbidden,
     SignoffError,
     SubjectLocked,
 )
@@ -63,15 +71,28 @@ __all__ = [
     # аппки, и брать его ей больше неоткуда.
     "SubjectLocked",
     "ProcessStillRunning",
+    "InvalidDecision",
+    "CommentTooShort",
+    "SelfApprovalForbidden",
+    "OptionError",
+    "OptionRequired",
+    "OptionRejected",
     "UnknownSubject",
     "RouteConflict",
     "configure_route",
     "register_subject",
     "start_process",
+    "decide_many",
+    "current_holders",
+    "pending_for_user",
+    "PreapprovalMismatch",
     "cancel_process",
+    "count_no_executor",
     "rework_process",
     "get_process",
     "get_process_for",
+    "lock_process_for",
+    "final_option",
     "approval_state_of",
     "count_awaiting",
     "has_active_route",
@@ -82,6 +103,8 @@ __all__ = [
     "pending_step",
     "decision_stats",
     "is_participant",
+    "participant_subject_ids",
+    "purge_processes",
 ]
 
 
@@ -109,9 +132,10 @@ def has_active_route(subject_type: str, scope: str = "") -> bool:
                                         is_active=True).exists()
 
 
-def start_process(*, subject_type: str, subject_id: int,
+def start_process(*, subject_type: str, subject_id: int | str,
                   initiator_id: int | None = None,
-                  enrich: bool = False, scope: str | None = None) -> dict:
+                  enrich: bool = False, scope: str | None = None,
+                  preapproved: list[dict] | None = None) -> dict:
     """Отправить объект на согласование. Возвращает карточку процесса.
 
     Поднимает ``engine.RouteNotConfigured`` / ``AlreadyInApproval`` /
@@ -121,12 +145,53 @@ def start_process(*, subject_type: str, subject_id: int,
     ``scope`` обычно не передаётся: область объекта движок спрашивает у
     самой аппки (``Subject.scope_of``), и явный аргумент нужен только там,
     где аппка хочет запустить объект по чужой области.
+
+    ``subject_id`` — целое, строка или ``UUID``: движок приводит его к
+    канонической строке ключа модели.
+
+    ``preapproved`` — ``[{position_id, company?, actor_id, label}]``
+    (мастер-план БЗО, D-26): группы этих должностей уже согласованы — задач
+    им не будет, этап из одних таких групп закроется сразу с событием
+    ``stage_preapproved``. ``company`` — слаг вышестоящей компании, если
+    должность в её штате (B8.1); пусто — своя. Должность, которой нет в
+    маршруте, — ``engine.PreapprovalMismatch`` (409).
     """
     require_service("signoff")
 
     process = engine.start(subject_type=subject_type, subject_id=subject_id,
-                           initiator_id=initiator_id, scope=scope)
+                           initiator_id=initiator_id, scope=scope,
+                           preapproved=preapproved)
     return serialize_process(process, enrich=enrich)
+
+
+def decide_many(*, actor_id: int, items: list[dict]) -> list[dict]:
+    """Массовое решение (B1.3): ``[{task_id, decision, comment?, option_key?}]``
+    → ``[{task_id, ok, error?}]``. Каждый элемент — в своей транзакции, отказ
+    по одному не откатывает остальные."""
+    require_service("signoff")
+    from apps.signoff.services import batch
+
+    return batch.decide_many(actor_id=actor_id, items=items)
+
+
+def current_holders(subject_type: str, subject_ids) -> dict[str, dict]:
+    """«Сейчас у» (ТЗ §16.2): ``{subject_id: {stage, users: [{id, name}],
+    position, since, no_executor}}`` по идущим согласованиям объектов.
+    Ключ — каноническая строка ключа объекта."""
+    require_service("signoff")
+    from apps.signoff.services import holders
+
+    return holders.current_holders(subject_type, subject_ids)
+
+
+def pending_for_user(user_id: int) -> list[dict]:
+    """Решения, которых пользователь ждёт прямо сейчас, в текущей компании:
+    ``[{task_id, subject_type, subject_id, title, url, since}]`` — для
+    ежедневной сводки (D-23)."""
+    require_service("signoff")
+    from apps.signoff.services import holders
+
+    return holders.pending_for_user(user_id)
 
 
 def cancel_process(*, process_id: int, actor_id: int | None = None,
@@ -158,6 +223,37 @@ def rework_process(*, process_id: int, actor_id: int | None = None,
                       comment=comment), enrich=enrich)
 
 
+def count_no_executor(subject_type_prefix: str) -> int:
+    """Сколько идущих согласований типов ``<prefix>…`` стоят на этапе «Нет
+    исполнителя» (ленивое разрешение не нашло держателя должности, ТЗ §16.1
+    п.5) — для «Обзора» администратора модуля."""
+    require_service("signoff")
+
+    return (ApprovalProcess.objects
+            .filter(state=ProcessState.PENDING, subject_type__startswith=subject_type_prefix,
+                    stages__state=StageState.NO_EXECUTOR)
+            .distinct().count())
+
+
+def lock_process_for(subject_type: str, subject_id: int | str) -> dict | None:
+    """Взять под замок (``SELECT … FOR UPDATE``) последний процесс объекта.
+
+    Первый шаг транзакции, которая дальше трогает и строку объекта, и его
+    процесс (выбор альтернативы в модуле БЗО, B5.1): решения движка берут
+    замки в порядке «процесс → строка объекта» (колбэки ``on_*`` правят
+    строку уже под замком процесса), и встречная транзакция в обратном
+    порядке поймала бы взаимную блокировку. Зовётся внутри транзакции
+    вызывающего. ``{"id", "state"}``; ``None`` — процесса у объекта нет.
+    """
+    require_service("signoff")
+
+    process = (ApprovalProcess.objects.select_for_update()
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
+               .order_by("-created_at", "-id").first())
+    return None if process is None else {"id": process.pk, "state": process.state}
+
+
 def get_process(process_id: int, *, enrich: bool = False) -> dict | None:
     require_service("signoff")
 
@@ -165,18 +261,56 @@ def get_process(process_id: int, *, enrich: bool = False) -> dict | None:
     return None if process is None else serialize_process(process, enrich=enrich)
 
 
-def get_process_for(subject_type: str, subject_id: int, *,
+def get_process_for(subject_type: str, subject_id: int | str, *,
                     enrich: bool = False) -> dict | None:
     """Последний процесс согласования объекта или ``None``."""
     require_service("signoff")
 
     process = (ApprovalProcess.objects
-               .filter(subject_type=subject_type, subject_id=subject_id)
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
                .order_by("-created_at", "-id").first())
     return None if process is None else serialize_process(process, enrich=enrich)
 
 
-def approval_state_of(subject_type: str, subject_id: int) -> str:
+def final_option(subject_type: str, subject_id: int | str) -> dict | None:
+    """Какой вариант принят последним согласованным кругом объекта.
+
+    Голос последнего этапа — решающий (ТЗ §12.4: «если голоса разошлись,
+    решающим является голос ГД на последнем этапе»; при единогласии он
+    совпадает с остальными). Внутри этапа — последний по времени голос
+    «согласовать». ``{"key", "label", "actor_id", "acted_at"}``; ``None`` —
+    согласованного круга нет или выбирать было не из чего (ключ пуст).
+
+    Зовётся из ``on_approved`` предметной аппки: к этому моменту процесс уже
+    помечен согласованным (``engine._finish``), а транзакция та же.
+    """
+    require_service("signoff")
+
+    process = (ApprovalProcess.objects
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id),
+                       state=ProcessState.APPROVED)
+               .order_by("-created_at", "-id").first())
+    if process is None:
+        return None
+    # Выбирающие этапы названы признаком ``votes_option`` (D-25: ФД и ГД) —
+    # решает последний из них; без признака — последний этап процесса.
+    stages = process.stages.order_by("-order")
+    voters = stages.filter(votes_option=True)
+    last_order = ((voters if voters.exists() else stages)
+                  .values_list("order", flat=True).first())
+    task = (ApprovalTask.objects
+            .filter(stage__process=process, stage__order=last_order,
+                    state=TaskState.APPROVED)
+            .order_by("-acted_at", "-id").first())
+    if task is None or not task.option_key:
+        return None
+    return {"key": task.option_key, "label": task.option_label,
+            "actor_id": task.user_id, "acted_at": task.acted_at}
+
+
+def approval_state_of(subject_type: str, subject_id: int | str) -> str:
     """Состояние согласования объекта, выведенное из процессов.
 
     Нужно редко: у самого объекта есть денормализованное поле
@@ -186,7 +320,8 @@ def approval_state_of(subject_type: str, subject_id: int) -> str:
     require_service("signoff")
 
     process = (ApprovalProcess.objects
-               .filter(subject_type=subject_type, subject_id=subject_id)
+               .filter(subject_type=subject_type,
+                       subject_id=registry.storage_key(subject_type, subject_id))
                .order_by("-created_at", "-id").first())
     if process is None:
         return ApprovalState.DRAFT
@@ -212,17 +347,22 @@ def count_awaiting(user_id: int) -> int:
 
 
 def configure_route(*, subject_type: str, name: str, stages: list[dict],
-                    scope: str = "") -> int:
+                    scope: str = "", flags: dict | None = None) -> int:
     """Создать активный маршрут с этапами одной транзакцией; вернуть его id.
 
     Для предметной аппки, которая заводит маршрут программно — команда
-    переезда «Запросов» со старого движка. Каждый этап — словарь в терминах
+    переезда «Запросов» со старого движка, ``bpp_configure_routes``. ``flags`` —
+    флаги маршрута (``resolution.ROUTE_FLAG_DEFAULTS``: самосогласование,
+    длина комментария, ленивое разрешение, кому уведомления; D-21). Каждый этап — словарь в терминах
     ``route_service.add_stage`` (``order``, ``name``, ``quorum``,
     ``approver_kind``, ``position_ids``/``user_ids``/``approver_key``,
     ``condition``, ``is_fallback``, ``requires_attachment``,
-    ``requires_comment``, ``requirement_key``). Любая ошибка настройки —
-    ``RouteConflict``
-    (экспортируется отсюда же), и ничего не записано.
+    ``requires_comment``, ``requirement_key``). Должности вышестоящих
+    компаний (B8.1) — ``positions: [{company, position_id}]`` рядом с
+    ``position_ids`` своей; во флагах — ``escalation_position_company``,
+    ``no_executor_notify_foreign``, ``self_skip_notify_foreign``. Любая
+    ошибка настройки — ``RouteConflict`` (экспортируется отсюда же), и
+    ничего не записано.
     """
     require_service("signoff")
 
@@ -230,13 +370,14 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
 
     with transaction.atomic():
         route = route_service.create_route(subject_type=subject_type, name=name,
-                                           scope=scope)
+                                           scope=scope, **(flags or {}))
         for spec in stages:
             route_service.add_stage(
                 route.pk,
                 order=spec.get("order", 1), name=spec["name"],
                 quorum=spec.get("quorum", "all"),
                 position_ids=list(spec.get("position_ids") or []),
+                positions=list(spec.get("positions") or []),
                 condition=spec.get("condition") or [],
                 is_fallback=bool(spec.get("is_fallback", False)),
                 approver_kind=spec.get("approver_kind", "position"),
@@ -244,13 +385,14 @@ def configure_route(*, subject_type: str, name: str, stages: list[dict],
                 approver_key=spec.get("approver_key", ""),
                 requires_attachment=bool(spec.get("requires_attachment", False)),
                 requires_comment=bool(spec.get("requires_comment", False)),
+                votes_option=bool(spec.get("votes_option", False)),
                 requirement_key=spec.get("requirement_key", ""),
             )
     return route.pk
 
 
 def pending_step(*, user_id: int, subject_type: str,
-                 subject_id: int) -> dict | None:
+                 subject_id: int | str) -> dict | None:
     """Рабочий шаг этого пользователя по объекту ПРЯМО СЕЙЧАС — или ``None``.
 
     Задача на активном этапе идущего процесса, где решение за ним, вместе с
@@ -274,7 +416,7 @@ def pending_step(*, user_id: int, subject_type: str,
                     stage__state=StageState.ACTIVE,
                     stage__process__state=ProcessState.PENDING,
                     stage__process__subject_type=subject_type,
-                    stage__process__subject_id=subject_id)
+                    stage__process__subject_id=registry.storage_key(subject_type, subject_id))
             .order_by("stage__order", "id")
             .first())
     if task is None:
@@ -295,17 +437,20 @@ def pending_step(*, user_id: int, subject_type: str,
 
 
 def pending_requirement_keys(*, user_id: int, subject_type: str,
-                             subject_id: int) -> list[str]:
+                             subject_id: int | str) -> list[str]:
     """Требования к объекту активного шага пользователя (см. ``pending_step``)."""
     step = pending_step(user_id=user_id, subject_type=subject_type,
                         subject_id=subject_id)
     return [step["requirement_key"]] if step and step["requirement_key"] else []
 
 
-def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list[int]:
+def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list:
     """Объекты этого типа, по которым пользователь должен принять решение
     ПРЯМО СЕЙЧАС — для вкладки «Список дел» реестра предметной аппки,
-    которой к ``ApprovalTask`` доступа нет. Порядок — свежие процессы первыми."""
+    которой к ``ApprovalTask`` доступа нет. Порядок — свежие процессы первыми.
+
+    Ключи — в типе ключа модели (``registry.native_id``): целые у
+    целочисленных моделей, ``UUID`` у моделей с UUID-ключом."""
     require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
@@ -316,13 +461,16 @@ def list_awaiting_subject_ids(user_id: int, subject_type: str) -> list[int]:
                     stage__process__subject_type=subject_type)
             .order_by("-stage__process__created_at")
             .values_list("stage__process__subject_id", flat=True))
-    return list(dict.fromkeys(rows))
+    return registry.native_ids(subject_type, dict.fromkeys(rows))
 
 
-def list_decided_subject_ids(user_id: int, subject_type: str) -> list[int]:
+def list_decided_subject_ids(user_id: int, subject_type: str) -> list:
     """Объекты, по которым пользователь УЖЕ принимал решение — вкладка
     «Готово». Только состоявшиеся решения: пропущенные кворумом запросы
-    (``skipped``) решением не были."""
+    (``skipped``) решением не были.
+
+    Ключи — в типе ключа модели (``registry.native_id``): целые у
+    целочисленных моделей, ``UUID`` у моделей с UUID-ключом."""
     require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
@@ -333,10 +481,28 @@ def list_decided_subject_ids(user_id: int, subject_type: str) -> list[int]:
             .exclude(state__in=(TaskState.PENDING, TaskState.SKIPPED))
             .order_by("-acted_at")
             .values_list("stage__process__subject_id", flat=True))
-    return list(dict.fromkeys(rows))
+    return registry.native_ids(subject_type, dict.fromkeys(rows))
 
 
-def is_participant(user_id: int, subject_type: str, subject_id: int) -> bool:
+def purge_processes(subject_type: str, subject_ids) -> int:
+    """Удалить процессы предметов вместе с этапами, задачами и событиями.
+
+    Только для демо-данных (``bpp seed_bpp_demo --purge``): иначе у
+    согласующих остались бы задачи «Ждёт меня» по удалённым документам.
+    История согласования настоящих документов не удаляется никогда — у
+    предметной аппки нет законного повода звать это для них. Возвращает
+    число удалённых процессов."""
+    require_service("signoff")
+    ids = [str(sid) for sid in subject_ids]
+    if not ids:
+        return 0
+    rows = ApprovalProcess.objects.filter(subject_type=subject_type, subject_id__in=ids)
+    count = rows.count()
+    rows.delete()
+    return count
+
+
+def is_participant(user_id: int, subject_type: str, subject_id: int | str) -> bool:
     """Был ли человек согласующим этого объекта — в любом круге и в любом
     состоянии задачи.
 
@@ -346,14 +512,38 @@ def is_participant(user_id: int, subject_type: str, subject_id: int) -> bool:
     которому сам signoff показывает процессы (``views._visible_processes``).
     """
     require_service("signoff")
+    return bool(participant_subject_ids(user_id, subject_type, [subject_id]))
+
+
+def participant_subject_ids(user_id: int, subject_type: str, subject_ids) -> set:
+    """Какие из ``subject_ids`` человек согласовывал — правило
+    ``is_participant`` пачкой, одной выборкой (поиск договоров БЗО для
+    соседа, D-S8-3: без запроса на строку).
+
+    Возвращает подмножество ВХОДНЫХ ключей в том виде, в каком их передали
+    (``"ABC…"`` вернётся ``"ABC…"``, хотя хранится в нижнем регистре); ключ,
+    которым объект этого типа быть не может, — просто не участник, а не
+    ошибка всего ответа. Пустой вход — без запроса.
+    """
+    require_service("signoff")
 
     from apps.signoff.models import ApprovalTask
 
-    return ApprovalTask.objects.filter(
+    by_key: dict[str, list] = {}
+    for raw in subject_ids:
+        try:
+            key = registry.storage_key(subject_type, raw)
+        except registry.BadSubjectId:
+            continue
+        by_key.setdefault(key, []).append(raw)
+    if not by_key:
+        return set()
+    found = ApprovalTask.objects.filter(
         user_id=user_id,
         stage__process__subject_type=subject_type,
-        stage__process__subject_id=subject_id,
-    ).exists()
+        stage__process__subject_id__in=list(by_key),
+    ).values_list("stage__process__subject_id", flat=True).distinct()
+    return {raw for key in found for raw in by_key[key]}
 
 
 def decision_stats(subject_type: str, *, limit: int = 20) -> list[dict]:

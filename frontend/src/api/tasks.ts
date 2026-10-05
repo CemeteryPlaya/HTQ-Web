@@ -7,12 +7,13 @@ import type {
   Label, Project, Task, TaskComment, TaskAttachment, TaskStats, TaskStatus,
   TaskLink, Notification, TaskAssigneeRef, AssigneeRole, TaskTypeRef,
   Equipment, ResourceGanttResponse, Assignment, Site, ProjectSiteRef,
-  Contractor, ContractorWorker, ContractorEngagement,
+  Contractor, ContractorCounterpartyOption, EngagementAgreementOption, ContractorWorker, ContractorEngagement,
   Roadmap, RoadmapStatus, RoadmapMetrics, SiteBlock, BlockStatus, BlockVolume,
   BlockProgress, TaskVolume, ResourceRequirement, ReferenceRow,
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
   ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
+  ProjectBoardCreate, ProjectLinkCandidate,
 } from '@/types/tasks';
 import i18next from '@/i18n';
 
@@ -157,14 +158,29 @@ export const fetchProjects = async (params?: Record<string, string>): Promise<Pr
   return unwrap<Project>(res.data).map(normalizeProject);
 };
 
+/** Доска задач «Проекта» БЗО (одна на проект) или `null` — для ссылки с его
+ * карточки. Держателю «Доски задач проекта» сервер открывает доски его
+ * «Проектов» (решение 01.10); остальным — по прежним правилам. */
+export const fetchProjectBoard = async (projectRef: string): Promise<Project | null> => {
+  const res = await api.get(`${BASE}projects/`, { params: { project_ref: projectRef } });
+  return unwrap<Project>(res.data).map(normalizeProject)[0] ?? null;
+};
+
 export const fetchProject = async (id: number): Promise<Project> => {
   const res = await api.get(`${BASE}projects/${id}/`);
   return normalizeProject(res.data);
 };
 
-export const createProject = async (data: Partial<Project>): Promise<Project> => {
+/** Доска заводится к «Проекту» БЗО — название, статус, сроки и владелец из него. */
+export const createProject = async (data: ProjectBoardCreate): Promise<Project> => {
   const res = await api.post(`${BASE}projects/`, toBackendRecord(data as Record<string, any>, PROJECT_FIELD_ALIASES));
   return normalizeProject(res.data);
+};
+
+/** «Проекты» БЗО без доски задач (не в архиве) — выбор при создании доски. */
+export const fetchProjectLinkCandidates = async (q = ''): Promise<ProjectLinkCandidate[]> => {
+  const res = await api.get(`${BASE}projects/link-candidates`, { params: q ? { q } : undefined });
+  return res.data;
 };
 
 export const updateProject = async (id: number, data: Partial<Project>): Promise<Project> => {
@@ -546,6 +562,17 @@ export const fetchContractors = async (params?: {
   return unwrap<Contractor>(res.data);
 };
 
+/** Поиск контрагента модуля «Закупки и оплаты» для карточки партнёра
+ *  (A6.1): только действующие, по наименованию или БИН/ИИН. */
+export const searchContractorCounterparties = async (
+  q: string, limit = 20,
+): Promise<ContractorCounterpartyOption[]> => {
+  const res = await api.get(`${BASE}contractors/counterparty-search`, {
+    params: { q: q || undefined, limit },
+  });
+  return unwrap<ContractorCounterpartyOption>(res.data);
+};
+
 export const createContractor = async (data: Partial<Contractor>): Promise<Contractor> => {
   const res = await api.post(`${BASE}contractors/`, data);
   return res.data;
@@ -598,6 +625,18 @@ export const fetchEngagements = async (params?: {
 }): Promise<ContractorEngagement[]> => {
   const res = await api.get(`${BASE}contractor-engagements/`, { params });
   return unwrap<ContractorEngagement>(res.data);
+};
+
+/** Договоры модуля для выбора в привлечении партнёра: контрагента этого
+ *  партнёра, «Действует»/«Исполнен», с учётом прав пользователя на договоры. */
+export const searchEngagementAgreements = async (
+  contractorId: number,
+  q?: string,
+): Promise<EngagementAgreementOption[]> => {
+  const res = await api.get(`${BASE}contractor-engagements/agreement-search`, {
+    params: { contractor_id: contractorId, ...(q ? { q } : {}) },
+  });
+  return Array.isArray(res.data) ? res.data : [];
 };
 
 export const createEngagement = async (
@@ -878,11 +917,11 @@ export const fetchNotificationHistory = async (
   return res.data;
 };
 
-export const markNotificationRead = async (id: number): Promise<void> => {
+export const markNotificationRead = async (id: string): Promise<void> => {
   await api.post(`${BASE}notifications/${id}/mark_read/`);
 };
 
-export const markNotificationUnread = async (id: number): Promise<void> => {
+export const markNotificationUnread = async (id: string): Promise<void> => {
   await api.post(`${BASE}notifications/${id}/mark_unread/`);
 };
 
@@ -890,7 +929,7 @@ export const markAllNotificationsRead = async (): Promise<void> => {
   await api.post(`${BASE}notifications/mark-all-read/`);
 };
 
-export const deleteNotification = async (id: number): Promise<void> => {
+export const deleteNotification = async (id: string): Promise<void> => {
   await api.delete(`${BASE}notifications/${id}/`);
 };
 
@@ -900,7 +939,7 @@ export const deleteNotification = async (id: number): Promise<void> => {
  * concrete entity reference).
  */
 export const notificationTargetUrl = (
-  n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb'>,
+  n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb' | 'url'>,
 ): string | null => {
   if (n.target_type === 'task' && n.target_id) return `/tasks/${n.target_id}`;
   if (n.target_type === 'calendar_event' && n.target_id)
@@ -934,6 +973,11 @@ export const notificationTargetUrl = (
   const verb = n.verb || '';
   const calMatch = verb.match(/^calendar_(?:invited|updated):event:(\d+):/);
   if (calMatch) return `/calendar?event=${calMatch[1]}`;
+  // Цель, которой нет в карте выше (документы модуля БЗО и прочие новые
+  // писатели центра уведомлений), — переход по ссылке, которую положил
+  // писатель. Только внутренний путь: внешний адрес колокольчик не открывает.
+  // Второй символ не / и не \: браузер читает //host и /\host как чужой хост.
+  if (n.url && /^\/(?![/\\])/.test(n.url)) return n.url;
   return null;
 };
 

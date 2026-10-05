@@ -43,6 +43,24 @@
 #     администратора, которое держится днями; level-алерт ныл бы дважды в
 #     сутки вечно. Если понадобится — алертить на ПЕРЕХОД, а не на уровень:
 #     min by (service) (changes(htqweb_service_enabled[15m])) > 0, for: 0s.
+#
+#   htqweb_bpp_requests_in_approval_stale — заявки БЗО на этапе дольше 5
+#     рабочих дней. Бизнес-очередь людей, а не поломка: каждому согласующему
+#     её и так показывает ежедневная сводка «ждут вашего решения» (центр
+#     уведомлений, 09:00 Пн–Пт) — адресно, а не в общий чат. Панель на
+#     дашборде «БЗО» есть, правила нет.
+#
+#   htqweb_bpp_bank_imports_failed — автор загрузки выписки видит ошибку на
+#     экране в ту же минуту; алерт сообщил бы то, что человек уже знает.
+#
+#   htqweb_bpp_invoices_awaiting_fd, htqweb_bpp_invoices_to_pay — очереди
+#     счетов ФД и бухгалтерии. Решение ФД — задача согласования, и каждому ФД
+#     её адресно показывает ежедневная сводка «ждут вашего решения»; «К
+#     оплате» — рабочий экран бухгалтерии, ненулевой каждый рабочий день.
+#     Level-алерт на любую из них горел бы всегда. Панели на дашборде «БЗО»
+#     есть, правил нет. Алертится только htqweb_bpp_invoices_closing_docs_overdue
+#     (группа htqweb-business): это уже не очередь, а просрочка, и её не
+#     видит никто, кроме автора счёта.
 
 apiVersion: 1
 
@@ -1353,6 +1371,103 @@ groups:
           severity: critical
           team: platform
 
+      # ── Модуль БЗО: ночная сверка «Задействовано» ────────────────────────
+      # Корректность денег, а не бизнес-событие — поэтому здесь, в
+      # инцидентном канале (без channel=business). Итог сверки пишет ночная
+      # задача (02:30) в настройку модуля, метрики читают его (D-S3-4); серия
+      # на компанию, без агрегации — уведомление называет компанию. Итога
+      # нет (сверка не бежала ни разу, модуль у компании выключен) — метрик
+      # нет, noDataState: OK.
+      - uid: htqweb-bpp-committed-mismatch
+        title: "БЗО: «Задействовано» не сошлось с пересчётом"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_bpp_committed_mismatches'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "4"
+          threshold: "0"
+          summary: "{{ $values.A }} строк(и) бюджета: «Задействовано» не совпало с пересчётом"
+          description: |
+            Ночная сверка (apps/bpp/services/budget/check.py) нашла строки
+            бюджета, где SQL-агрегат «Задействовано» расходится с независимым
+            пересчётом по позициям заявок. Одна из двух реализаций сломана, и
+            остатки, по которым пропускаются заявки и счета, неверны.
+            Какие строки: Explore → Loki → {service="backend-worker"} |=
+            "bpp.committed.mismatch" за ночь (бюджет, статья, обе суммы).
+            Правило гаснет только после следующей ночной сверки без расхождений.
+        labels:
+          severity: warning
+          team: platform
+
+      - uid: htqweb-bpp-committed-check-stale
+        title: "БЗО: ночная сверка «Задействовано» не бежит"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'htqweb_bpp_committed_check_age_seconds'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [93600], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 15m
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "5"
+          threshold: "26 ч"
+          summary: "Ночная сверка «Задействовано» не бежала {{ humanizeDuration $values.A.Value }}"
+          description: |
+            Сверка идёт каждую ночь в 02:30 (periodic task bpp.committed_check,
+            диспетчер + веер по компаниям). Больше 26 ч без итога — задача не
+            запускалась или упала до записи результата, и расхождения в
+            «Задействовано» некому заметить.
+            Проверить: Flower (задачи apps.bpp.tasks.committed_check*), логи
+            backend-beat и backend-worker, включён ли периодик в
+            /django-admin/ → Periodic tasks.
+        labels:
+          severity: warning
+          team: platform
+
   # ═══════════════════════════════════════════════════════════════════════
   - orgId: 1
     name: htqweb-loki
@@ -1625,6 +1740,105 @@ groups:
             В строке есть ip и причина; not_activated отделён от
             invalid_credentials намеренно — перебор ИМЁН и перебор ПАРОЛЕЙ
             выглядят по-разному. Ни логина, ни пароля в логе нет.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Всплеск блокировок входа (D-S7-3) ────────────────────────────────
+      # Источник — Counter htqweb_auth_lockout_total (htqweb/ratelimit.py). Пока
+      # AUTH_LOCKOUT_THRESHOLD=0 (выкатка выключенной) серий нет и правило молчит
+      # (noDataState: OK). Блокировка — следствие 5 неудач по одному логину;
+      # много блокировок за короткое время — это подбор по многим логинам либо
+      # массовая ошибка (смена пароля, поломанная форма входа).
+      - uid: htqweb-auth-lockout-burst
+        title: "Всплеск блокировок входа"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(increase(htqweb_auth_lockout_total{reason="locked"}[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [10], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "15"
+          threshold: "10"
+          summary: "Больше 10 блокировок входа за 10 минут"
+          description: |
+            Блокировка наступает после 5 неудач по одному логину, поэтому
+            десять блокировок — это подбор по многим логинам или массовая
+            ошибка (смена пароля, поломанная форма входа). Разбор: Explore →
+            Loki → {service="backend-web"} |= "auth_login_locked" — IP и префикс
+            хеша логина, самого логина в логе нет. Снять блокировку —
+            manage.py auth_unlock <логин>.
+        labels:
+          severity: warning
+          team: platform
+
+      # ── Антивирус загрузок недоступен (A7.4, D-31) ───────────────────────
+      # Сканер включён (ANTIVIRUS_CLAMD_HOST), но не отвечает: загрузка
+      # документов получает 503 (fail-closed), и без правила об этом знают
+      # только пользователи. Серия растёт лишь при включённом сканере, у
+      # выключенного её нет вовсе (noDataState: OK).
+      - uid: htqweb-antivirus-unavailable
+        title: "Антивирус недоступен"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              expr: 'sum(increase(htqweb_antivirus_scans_total{verdict="unavailable"}[10m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        annotations:
+          __dashboardUid__: htqweb-business
+          __panelId__: "16"
+          threshold: "0"
+          summary: "Загрузки документов отклоняются: антивирус не отвечает"
+          description: |
+            За 10 минут были попытки загрузки, а clamd не ответил (503
+            E-SYS-01). Первый запуск: базы сигнатур качаются минуты, clamd в это
+            время молчит. Иначе: состояние здоровья контейнера clamav
+            (docker inspect, State.Health.Status), логи freshclam (403 от
+            database.clamav.net — нужно зеркало), память контейнера. Ранбук —
+            docs/deploy/antivirus-runbook.md. Откат — пустой ANTIVIRUS_CLAMD_HOST.
         labels:
           severity: warning
           team: platform
@@ -1910,6 +2124,56 @@ groups:
             Человек двое суток не может войти на платформу, и об этом не знает
             никто: заявка лежит в списке, куда заходят раз в неделю.
             Решение: /django-admin/ → пользователи → статус «ожидает».
+        labels:
+          severity: warning
+          team: platform
+          channel: business
+
+      - uid: htqweb-bpp-closing-docs-overdue
+        title: "БЗО: закрывающие документы не сданы дольше 5 дней"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # Серия на компанию, без агрегации — уведомление называет
+              # компанию. Таблицы счетов в схеме компании ещё нет (до
+              # migrate_companies) — метрики нет, noDataState: OK.
+              expr: 'htqweb_bpp_invoices_closing_docs_overdue'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-bpp
+          __panelId__: "10"
+          threshold: "0"
+          summary: "{{ $values.A }} оплаченных счетов ждут закрывающих документов дольше 5 дней"
+          description: |
+            Счёт оплачен, бухгалтер запросил АВР, накладную или счёт-фактуру,
+            а автор счёта больше 5 календарных дней их не вложил (D-13). Сам
+            автор видит это в ежедневной сводке; правило — для бухгалтерии и
+            ФД: пока документов нет, счёт не закрыть («Закрыт» — только
+            после приёма документов бухгалтером).
+            Какие счета — реестр счетов, вкладка «Ожидают документы» (колонка
+            «ждёт N дн.»). Запрета новых счетов такому контрагенту нет — это
+            решение D-13, а не упущение.
         labels:
           severity: warning
           team: platform

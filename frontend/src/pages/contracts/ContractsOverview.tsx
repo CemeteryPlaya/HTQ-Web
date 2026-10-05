@@ -7,6 +7,7 @@ import { ContractsShell } from '@/components/contracts/ContractsShell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 
 /** Formats the high-level budget metrics without decimal fractions. */
 function formatShort(value: string): string {
@@ -42,6 +43,9 @@ function ModuleCard({
   to,
   primaryAction,
 }: ModuleCardProps) {
+  // В архиве (A6.2) «Создать» вёл бы на закрытую форму.
+  const { frozen } = useContractsFreeze();
+  const action = frozen ? undefined : primaryAction;
   return (
     <Card className="flex flex-col">
       <CardHeader className="pb-4">
@@ -64,11 +68,11 @@ function ModuleCard({
           <Button asChild size="sm" variant="outline">
             <Link to={to}>Открыть</Link>
           </Button>
-          {primaryAction && (
+          {action && (
             <Button asChild size="sm">
-              <Link to={primaryAction.to}>
+              <Link to={action.to}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" />
-                {primaryAction.label}
+                {action.label}
               </Link>
             </Button>
           )}

@@ -45,11 +45,34 @@ def _is_webp(data: bytes) -> bool:
     return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
+def _is_ooxml(data: bytes) -> bool:
+    # DOCX/XLSX — ZIP-контейнеры Office Open XML: локальный заголовок файла
+    # "PK\x03\x04". Защищённый паролем (или меткой конфиденциальности) файл
+    # Office хранит в OLE2/CFB-контейнере (EncryptedPackage, MS-OFFCRYPTO) —
+    # его сигнатура D0 CF 11 E0 A1 B1 1A E1, а расширение остаётся .docx/.xlsx.
+    # Структуру не разбираем — отсекаем только байты, которые документом
+    # Office быть не могут (переименованный .exe, текст).
+    return data.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"))
+
+
+_UTF8_BOM = bytes((0xEF, 0xBB, 0xBF))
+
+
+def _is_xml(data: bytes) -> bool:
+    # XML-документ (счёт-фактура): после необязательной BOM UTF-8 и пробелов —
+    # разметка. Схему не разбираем — отсекаем байты, которые XML быть не могут
+    # (переименованный .exe, PDF).
+    return data.removeprefix(_UTF8_BOM).lstrip().startswith(b"<")
+
+
 _SIGNATURE_CHECKS: dict[str, Callable[[bytes], bool]] = {
     "application/pdf": lambda data: data.startswith(b"%PDF-"),
     "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
     "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
     "image/webp": _is_webp,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": _is_ooxml,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": _is_ooxml,
+    "application/xml": _is_xml,
 }
 
 

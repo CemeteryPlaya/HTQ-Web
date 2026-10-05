@@ -1956,7 +1956,19 @@
       "noSitesYet": "No sites yet. Check them below — the work on each will show up here.",
       "registryEmpty": "There are no projects yet —",
       "addFirst": "create a project",
-      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites"
+      "readOnlyNotice": "Read-only list — only the project owner or an administrator can pick sites",
+      "platformProject": "Project",
+      "pickAnother": "Change",
+      "pickProjectSearch": "Project code or name",
+      "noCandidatesSearch": "Nothing found",
+      "noCandidates": "Every project already has a task board",
+      "createInProjects": "The project is not listed — create it under Projects in the procurement module.",
+      "openProjects": "Open Projects",
+      "openInProjects": "project card",
+      "mirroredHint": "Name, status, dates and manager come from the project and are edited under Projects — read-only here.",
+      "addProject": "Add a project to tasks",
+      "addProjectShort": "Add project",
+      "projectRequired": "Choose a project"
     },
     "types": {
       "create": "Create type",
@@ -2457,7 +2469,12 @@
         "speciality": "Speciality / Position",
         "specialityPlaceholder": "Grade 5 welder",
         "registryEmpty": "The partner registry is empty —",
-        "addFirst": "add a partner"
+        "addFirst": "add a partner",
+        "bppAgreement": "Purchasing & Payments contract",
+        "noBppAgreement": "Not selected",
+        "bppAgreementSearch": "Find a contract by number or name",
+        "bppAgreementNone": "No suitable agreements: only \"Active\" and \"Completed\" ones with the partner's counterparty fit —",
+        "bppAgreementRegistry": "agreement registry"
       },
       "roadmaps": {
         "title": "Roadmaps",
@@ -2737,6 +2754,9 @@
     "email": "Email",
     "emailOrPhone": "Email or Phone",
     "password": "Password",
+    "loginLocked": "Too many failed sign-in attempts. Try again in {{minutes}} min.",
+    "loginLockedLater": "Too many failed sign-in attempts. Try again later.",
+    "tooManyRequests": "Too many requests. Try again later.",
     "confirmPassword": "Confirm Password",
     "alreadyAccount": "Already have an account?",
     "noAccount": "Don't have an account?",
@@ -3634,7 +3654,15 @@
     "pickOrTypeNewM": "Pick one or type a new one",
     "createProject": "Create the project “{{input}}”",
     "createProgramme": "Create the programme “{{input}}”",
-    "applyStatus": "Apply"
+    "applyStatus": "Apply",
+    "frozen": {
+      "title": "This section has moved to Purchasing & Payments",
+      "text": "This is an archive: documents are read-only. New contracts, invoices and payments are created in Purchasing & Payments.",
+      "goToBpp": "Go to Purchasing & Payments",
+      "formClosed": "This section is read-only — documents can no longer be created or edited here.",
+      "migratedTo": "Moved to",
+      "migratedCard": "the card in Purchasing & Payments"
+    }
   },
   "signoff": {
     "nav": {
@@ -3813,7 +3841,8 @@
       "finished": "Finished",
       "stage": "Stage",
       "submitted": "Submitted",
-      "decision": "Decision"
+      "decision": "Decision",
+      "company": "Company"
     },
     "routes": {
       "created": "The route was created — add stages",
@@ -3848,7 +3877,10 @@
       "pdfNeeded": "PDF required",
       "stepOf": "Step {{n}} of {{total}}",
       "needs": "needs: {{what}}",
-      "open": "Open"
+      "open": "Open",
+      "decideHere": "Decide here",
+      "openIn": "Open in {{company}}",
+      "noAccess": "No access to «{{company}}» — ask an administrator to grant it."
     },
     "userNumberLower": "user #{{id}}",
     "editor": {
@@ -3911,6 +3943,13 @@
       "whenNeeded": "When this stage is needed",
       "otherwise": "otherwise",
       "otherwiseHint": "The stage runs only when no condition in its step matched. An “otherwise” stage cannot have a condition of its own."
+    },
+    "foreign": {
+      "back": "Back to “Waiting for me”",
+      "notFound": "The approval was not found or is not yours.",
+      "openInCompany": "Open the document in {{company}}",
+      "note": "A document of «{{company}}». Its files and full card are on the company's address.",
+      "noSummary": "No document summary — open it on the company's address."
     }
   },
   "messenger": {
@@ -4542,6 +4581,37 @@
     "deleteConfirmAfter": "will be deleted permanently.",
     "upload": "Upload"
   },
+  "attachments": {
+    "title": "Documents",
+    "versionHint": "Files and their versions. A version number is assigned on upload and never changes; a new version marks the previous one \"Replaced\" and the history is kept.",
+    "counter": "{{n}} of {{max}}",
+    "typeLabel": "Document type",
+    "pickTypeFirst": "Choose the document type first",
+    "allowed": "Formats: {{types}}; up to {{mb}} MB",
+    "attach": "Attach file",
+    "wrongType": "File {{name}} was not uploaded: allowed are {{types}} up to {{mb}} MB.",
+    "current": "Current",
+    "replaced": "Replaced",
+    "deletedBadge": "Deleted",
+    "deletedAt": "Deleted {{time}}",
+    "newVersion": "New version",
+    "delete": "Delete",
+    "deleteTitle": "Delete \"{{name}}\"?",
+    "deletePhysical": "The document has never been sent, so it and all its versions will be removed permanently.",
+    "deleteSoft": "The document will be marked deleted; the versions that were sent stay in the history.",
+    "cancel": "Cancel",
+    "versions": "Versions ({{n}})",
+    "uploaded": "File attached",
+    "versionUploaded": "New version uploaded",
+    "uploadError": "Could not attach the file",
+    "removed": "Document deleted",
+    "markedDeleted": "Document marked deleted",
+    "deleteError": "Could not delete the document",
+    "loadError": "Could not load the documents",
+    "empty": "No files yet",
+    "download": "Open or download",
+    "downloadError": "Could not download the file"
+  },
   "requests": {
     "nav": {
       "inbox": "Requests",
@@ -5053,6 +5123,7 @@
       "depthColumn": "Depth",
       "notSet": "not set (no access)",
       "inherits": "inherits: {{value}}",
+      "explicitOnly": "no access (granted explicitly only)",
       "allowed": "allowed",
       "pages": "Site pages",
       "pagesHint": "a hidden page overrides everything allowed above",
@@ -5094,6 +5165,27 @@
       "externalHint": "The tree is derived from the company hierarchy and cannot be edited: an employee of a parent company is the manager of employees of subsidiary companies. The link means subordination, not a transfer of permissions. The rule applies to managerial positions that have participation in the external hierarchy enabled.",
       "registryClosed": "The full company tree is shown when you have access to the company registry; what is listed here is only what your permissions let you see.",
       "externalEmpty": "There are no subordinate companies: your position is not marked as managerial with participation in the external hierarchy. This is not a loading error — the flag is set on the position's card."
+    }
+  },
+  "bpp": {
+    "migration": {
+      "badge": "migrated",
+      "note": "Migrated from Contracts. Its history before the migration stays there, read-only."
+    },
+    "holding": {
+      "title": "Budget, procurement and payments by group",
+      "hint": "Approved budget limits in KZT, invoices and active agreements per company. \"Committed\" is not part of the summary.",
+      "company": "Company",
+      "budgets": "Approved budgets",
+      "limit": "Limit (KZT)",
+      "toPay": "To pay",
+      "paid": "Paid",
+      "agreements": "Active agreements",
+      "otherCurrency": "+ {{count}} in another currency (not summed)",
+      "totals": "Group total",
+      "unavailable": "The procurement summary is unavailable right now, try again later.",
+      "error": "Could not load the procurement summary.",
+      "count": "{{count}} pcs."
     }
   }
 }

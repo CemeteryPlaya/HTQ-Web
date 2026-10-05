@@ -1,0 +1,418 @@
+{
+  "uid": "htqweb-bpp",
+  "title": "HTQWeb · БЗО: заявки, сверка, выписки, счета",
+  "tags": [
+    "htqweb",
+    "business",
+    "bpp"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "",
+  "annotations": {
+    "list": []
+  },
+  "description": "Модуль «Бюджет, закупки и оплаты» (apps/bpp/metrics.py, задача A3.2). Считает Celery-beat раз в 60 с по каждой компании (метка company); пустая панель = метрики нет, а не ноль (см. apps/core/metrics.py). Итог ночной сверки «Задействовано» не пересчитывается каждую минуту: его пишет ночная задача (02:30) в настройку модуля committed_check_last (D-S3-4). Очереди счетов — по статусам, как вкладки реестра счетов (§10.5).",
+  "templating": {
+    "list": [
+      {
+        "name": "company",
+        "label": "Компания",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(htqweb_bpp_requests_in_approval, company)",
+        "query": { "query": "label_values(htqweb_bpp_requests_in_approval, company)", "refId": "company" },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Заявки на закупку",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": [],
+      "id": 100
+    },
+    {
+      "type": "stat",
+      "title": "На согласовании",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_requests_in_approval{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Заявки в статусе «На согласовании» (без технических заявок переноса из contracts). Справочная цифра, порога нет.",
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "На этапе дольше 5 рабочих дней",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 6, "y": 1, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_requests_in_approval_stale{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Заявки, чей ТЕКУЩИЙ этап согласования активирован больше 5 рабочих дней назад (Пн–Пт, без праздников). Правила нет намеренно: это очередь людей, её видно в ежедневной сводке «ждут вашего решения» — см. шапку rules.yml. Пустая панель при выключенном signoff.",
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Очередь согласования заявок",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 1, "w": 12, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_requests_in_approval{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "На согласовании"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_requests_in_approval_stale{company=~\"$company\"})",
+          "refId": "B",
+          "legendFormat": "Дольше 5 рабочих дней"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "row",
+      "title": "Ночная сверка «Задействовано»",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": [],
+      "id": 101
+    },
+    {
+      "type": "stat",
+      "title": "Расхождений в последней сверке",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 7, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_committed_mismatches{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Строки бюджета, где SQL-агрегат «Задействовано» не совпал с независимым пересчётом по позициям (apps/bpp/services/budget/check.py). Обязано быть нулём: иначе неверны остатки, по которым пропускаются заявки и счета. Какие строки — строки FALLBACK site=bpp.committed.mismatch в логах backend-worker за ночь. Пустая панель = сверка в компании ещё не бежала или модуль у неё выключен.",
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "С последней сверки",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 6, "y": 7, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 93600 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max without (company) (htqweb_bpp_committed_check_age_seconds{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Сколько прошло с последнего прогона ночной сверки (по самой отстающей компании). Сверка идёт каждую ночь в 02:30; больше 26 ч — задача не бежит (beat, воркер или падение до записи итога).",
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Расхождения по ночам",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 7, "w": 12, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_committed_mismatches{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "Расхождений"
+        }
+      ],
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Выписки банка",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": [],
+      "id": 102
+    },
+    {
+      "type": "stat",
+      "title": "Загрузок с ошибкой за 7 дней",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 13, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_bank_imports_failed{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Загрузки выписок в статусе «Ошибка загрузки», созданные за последние 7 дней. Причина — в карточке загрузки (поле failure). Правила нет: автор загрузки видит ошибку на экране сразу; всплеск у многих компаний разом — повод смотреть шаблоны выписок.",
+      "id": 7
+    },
+    {
+      "type": "row",
+      "title": "Счета",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": [],
+      "id": 103
+    },
+    {
+      "type": "stat",
+      "title": "На решение ФД",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_awaiting_fd{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Счета «На рассмотрении ФД» — вкладка реестра «На решение ФД» (без строк переноса из contracts). Справочная цифра: решение ФД — задача согласования, и каждому ФД её адресно показывает ежедневная сводка «ждут вашего решения» — см. шапку rules.yml.",
+      "id": 8
+    },
+    {
+      "type": "stat",
+      "title": "К оплате (очередь БУХ)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 6, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_to_pay{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Счета «К оплате» и «Оплачено частично» — ровно вкладка реестра «К оплате»: остаток частично оплаченного счёта платит тот же бухгалтер. Справочная цифра: это рабочий экран бухгалтерии, ненулевой каждый день.",
+      "id": 9
+    },
+    {
+      "type": "stat",
+      "title": "Ждут закрывающих дольше 5 дней",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_closing_docs_overdue{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Оплаченные счета в «Ждёт закрывающих документов», у которых документы запрошены больше 5 календарных дней назад (D-13, Q-C29) — те же «N дн.», что в карточке счёта и в разделе сводки автора. Бизнес-правило htqweb-bpp-closing-docs-overdue (чат бизнес-событий). Какие счета — вкладка «Ожидают документы» реестра счетов.",
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Очереди счетов",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 18, "y": 19, "w": 6, "h": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_awaiting_fd{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "На решение ФД"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_to_pay{company=~\"$company\"})",
+          "refId": "B",
+          "legendFormat": "К оплате"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum without (company) (htqweb_bpp_invoices_closing_docs_overdue{company=~\"$company\"})",
+          "refId": "C",
+          "legendFormat": "Закрывающие > 5 дней"
+        }
+      ],
+      "id": 11
+    }
+  ]
+}

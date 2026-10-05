@@ -56,7 +56,11 @@ describe('routeDefinitions', () => {
         // Путь исторический (/manage/), но это страница домена задач, а не
         // CMS. С гейтом cms админ без редакторских прав туда не попадал бы,
         // а контент-редактор попадал бы и получал 403 на каждое действие.
-        expect(projects?.requires).toEqual({ module: 'hr', level: 'read' });
+        // Плюс держатели «Доски задач проекта» без кадровых прав — ссылка с
+        // карточки «Проекта» БЗО (решение 01.10).
+        expect(projects?.requires).toEqual({
+            module: 'hr', level: 'read', orNode: { node: 'project.board', flag: 'view' },
+        });
         expect(projects?.requiresAuth).toBe(true);
     });
 
