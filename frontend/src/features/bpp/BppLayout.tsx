@@ -28,12 +28,9 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 
 import { moduleVisible } from './core/moduleAccess';
-import { bppModules, type BppModule } from './modules';
-
-/** Базовый путь раздела — пункты меню подмодулей относительны ему. */
-export const BPP_BASE = '/bpp';
-
-const menuHref = (path: string) => `${BPP_BASE}/${path.replace(/^\/+/, '')}`;
+// Базовый путь раздела и адреса пунктов меню — в `modules.ts`: их же берёт
+// блок «Подтверждения» сайдбара профиля, не затягивая в свой чанк раскладку.
+import { bppMenuHref as menuHref, bppModules, type BppModule } from './modules';
 
 function NoAccess() {
   const { t } = useTranslation();
