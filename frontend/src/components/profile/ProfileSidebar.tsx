@@ -55,7 +55,10 @@ import { Input } from '@/components/ui/input';
 import { DjangoIcon } from '@/components/icons/DjangoIcon';
 import { ServiceUnavailableDialog } from '@/components/ServiceUnavailableDialog';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { hrNavVisible } from '@/app/navigation/hrNavAccess';
+import { moduleVisible } from '@/features/bpp/core/moduleAccess';
+import { bppMenuHref, bppModules } from '@/features/bpp/modules';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
@@ -81,6 +84,11 @@ type ItemConfig = {
     label: string;
     badge?: React.ReactNode;
     external?: boolean;
+    /**
+     * Подсвечивать и на вложенных путях (`/bpp/budgets/42` → «Бюджеты»), как
+     * меню раздела (`BppLayout.isActive`). По умолчанию — только точный адрес.
+     */
+    matchPrefix?: boolean;
     onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
@@ -88,7 +96,7 @@ type ItemProps = ItemConfig & {
     searchQuery: string;
 };
 
-const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external, onClick }) => {
+const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, external, matchPrefix, onClick }) => {
     const linkClasses = ({ isActive }: { isActive: boolean }) =>
         cn(
             'group relative flex min-h-[44px] items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 sm:min-h-0',
@@ -120,7 +128,7 @@ const SidebarItem: React.FC<ItemProps> = ({ to, icon: Icon, label, badge, extern
     }
 
     return (
-        <NavLink to={to} end className={linkClasses} onClick={onClick}>
+        <NavLink to={to} end={!matchPrefix} className={linkClasses} onClick={onClick}>
             {content}
         </NavLink>
     );
@@ -259,6 +267,13 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     // ревью блока L, M-3).
     const chatsAdmin = permissions.atLeast('messenger', 'admin');
     const mailboxesAdmin = permissions.atLeast('mail', 'admin');
+    // Раздел «Закупки и оплаты» закрыт гейтом маршрута `/bpp/*` (`bpp:read`),
+    // поэтому его пункты без уровня модуля не показываем, даже если узел
+    // подмодуля (`project`, `refdata`) открыт сам по себе.
+    const hasBpp = permissions.atLeast('bpp', 'read');
+    // «Договоры» заморожены после переноса в БЗО (A6.2) — тогда это архив,
+    // и подпись та же, что в шапке (`navItems.labelled`).
+    const { frozen: contractsFrozen } = useContractsFreeze();
     // Кадровые пункты — по тому же правилу, что и навигация самого HR-модуля
     // (`HRLayout`): `hrNavVisible` читает права из `usePermissions`, а не
     // кадровый уровень (задача 10 блока I). Администратор платформы видит
@@ -310,26 +325,58 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
                 { id: 'reports', to: '/tasks/reports', icon: BarChart3, label: t('tasks.nav.reports') },
             );
         }
+        // ⚠️ «Запросы» — конструктор форм (apps.approvals), который согласует
+        // свои же формы; это НЕ «Заявки на закупку» модуля БЗО и не очередь
+        // согласований. Поэтому пункт остаётся в «Работе», а «Договоры» и
+        // «Согласования», жившие здесь до Phase 10.1, переехали в блок
+        // «Подтверждения» ниже (`approvalItems`) — вместе с меню модуля.
         items.push({ id: 'requests', to: '/requests', icon: ClipboardList, label: t('profile.sidebar.requests', 'Запросы') });
-        // Договоры и согласования были достижимы только из шапки (меню «Ещё»):
-        // сайдбар ведёт свой список и НЕ читает app/navigation/navItems.ts, где
-        // оба раздела есть с самого начала. Ровно та же болезнь, ради которой
-        // тот файл и заводили — там в докстринге описано, как разошлись шапка и
-        // нижняя панель; сайдбар тогда в объединение не попал.
-        //
-        // ⚠️ «Запросы» выше и «Согласования» ниже — РАЗНЫЕ домены, и их легко
-        // перепутать: /requests — конструктор заявок (apps.approvals), который
-        // согласует свои же формы; /signoff — маршруты утверждения ЧУЖИХ
-        // документов (договоров, счетов, актов). Подписи намеренно не сближаем.
-        //
-        // Ключи и иконки взяты те же, что в navItems.ts, чтобы один раздел не
-        // назывался в шапке и в сайдбаре по-разному.
-        items.push(
-            { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') },
-            { id: 'signoff', to: '/signoff', icon: Stamp, label: t('signoff.nav.title', 'Согласования') },
-        );
         return items;
     }, [t, hasTasksAccess, elevated]);
+
+    /**
+     * Блок «Подтверждения» (Phase 10.1, решение 05.10): всё, что про
+     * утверждение денег и документов, — в одном месте, а не врозь по
+     * «Работе» и шапке. Сайдбар по-прежнему ведёт свой список и НЕ читает
+     * `app/navigation/navItems.ts`; ключи подписей те же, что там и в
+     * `BppLayout`, чтобы раздел не назывался в разных местах по-разному.
+     *
+     * - «Мои согласования» — ОБЩАЯ очередь `/signoff` (документы модуля,
+     *   кадровые, запросы); видна всем, как прежний пункт «Согласования».
+     * - Меню раздела «Закупки и оплаты» — из того же реестра подмодулей и по
+     *   тем же правам (`moduleVisible`), что левое меню `BppLayout`, поэтому
+     *   новый подмодуль появится здесь сам. Модульный пункт «Мои согласования»
+     *   (`/bpp/approvals`) пропущен: его заменяет общая очередь выше.
+     * - «Архив договоров» (`/contracts`) — последним; маршрут без гейта модуля,
+     *   поэтому виден всем, как прежний пункт «Договоры». Пока раздел у компании
+     *   не заморожен, он ещё живой и подписан «Договоры».
+     */
+    const approvalItems: ItemConfig[] = useMemo(() => {
+        const items: ItemConfig[] = [
+            { id: 'signoff', to: '/signoff', icon: Stamp, label: t('profile.sidebar.myApprovals', 'Мои согласования') },
+        ];
+        if (hasBpp) {
+            for (const module of bppModules) {
+                if (!module.menu || module.key === 'approvals') continue;
+                if (!moduleVisible(module, permissions)) continue;
+                items.push({
+                    id: `bpp-${module.key}`,
+                    to: bppMenuHref(module.menu.path),
+                    icon: module.menu.icon ?? FileText,
+                    label: t(module.menu.labelKey, module.menu.labelFallback),
+                    matchPrefix: true,
+                });
+            }
+        }
+        // До заморозки рядом с «Договорами» модуля стоял бы второй пункт
+        // «Договоры» — старый раздел называется «Прежние договоры».
+        items.push(contractsFrozen
+            ? { id: 'contracts', to: '/contracts', icon: Archive, label: t('contracts.nav.archive', 'Архив договоров') }
+            : hasBpp
+                ? { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.legacy', 'Прежние договоры') }
+                : { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') });
+        return items;
+    }, [t, hasBpp, permissions, contractsFrozen]);
 
     const contentItems: ItemConfig[] = useMemo(() => {
         if (!editor) return [];
@@ -428,13 +475,14 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const filteredAccount = filterFn(accountItems);
     const filteredComm = filterFn(communicationItems);
     const filteredWork = filterFn(workItems);
+    const filteredApprovals = filterFn(approvalItems);
     const filteredContent = filterFn(contentItems);
     const filteredHr = filterFn(hrItems);
     const filteredAdmin = filterFn(adminItems);
     const filteredMonitoring = filterFn(monitoringItems);
 
     const totalResults = filteredAccount.length + filteredComm.length + filteredWork.length +
-        filteredContent.length + filteredHr.length + filteredAdmin.length + filteredMonitoring.length;
+        filteredApprovals.length + filteredContent.length + filteredHr.length + filteredAdmin.length + filteredMonitoring.length;
 
     const isSearching = Boolean(searchQuery.trim());
 
@@ -489,6 +537,15 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
             {filteredWork.length > 0 && (
                 <SidebarSection id="work" title={t('profile.sidebar.sectionWork', 'Работа')} count={filteredWork.length} forceOpen={isSearching}>
                     {filteredWork.map((item) => (
+                        <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
+                    ))}
+                </SidebarSection>
+            )}
+
+            {/* Approvals Section — документы модуля, очередь согласований, архив */}
+            {filteredApprovals.length > 0 && (
+                <SidebarSection id="approvals" title={t('profile.sidebar.sectionApprovals', 'Подтверждения')} count={filteredApprovals.length} forceOpen={isSearching}>
+                    {filteredApprovals.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
                 </SidebarSection>
