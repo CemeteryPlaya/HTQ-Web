@@ -366,6 +366,25 @@ def test_release_to_plan_needs_an_approved_request(company_context, heard):
     assert PurchaseRequest.objects.get(pk=ref.bpp_request_id).source == "tender"
 
 
+def test_release_to_plan_is_for_the_author_or_the_fd(company_context, heard):
+    slug = company_context["slug"]
+    proj = _setup(slug)
+    refs = [_submit(proj, _part(s.metal(), 100))[0], _submit(proj, _part(_pipe(), 100))[0]]
+    for ref in refs:
+        _approve(ref)
+    ids = [ref.bpp_request_id for ref in refs]
+
+    s.actor(slug, s.SN2, "bpp-sn")
+    with pytest.raises(DomainError) as exc:  # чужой снабженец
+        bpp.release_to_plan(ids, actor=_actor(s.SN2))
+    assert (exc.value.code, exc.value.status) == ("E-ACC-01", 403)
+    assert set(PurchaseRequest.objects.values_list("source", flat=True)) == {"tender"}
+
+    s.actor(slug, s.FD, "bpp-fd")
+    bpp.release_to_plan(ids, actor=_actor(s.FD))
+    assert set(PurchaseRequest.objects.values_list("source", flat=True)) == {""}
+
+
 # ── статьи и остаток ────────────────────────────────────────────────────
 
 def test_budget_articles_are_those_of_the_role_group(company_context, heard):

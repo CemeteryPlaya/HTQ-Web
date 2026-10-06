@@ -159,12 +159,20 @@ def cancel_from_tender(ids, *, actor: TenderActor | dict, comment: str) -> None:
 def release_to_plan(ids, *, actor: TenderActor | dict) -> None:
     """«Тендер не состоялся» (этап 2): признак ``source`` снимается, позиции
     утверждённой ЗЗ видны в Плане у исполнителя; номер тендерной заявки
-    остаётся — по нему tender читает статус. Только «Утверждена»."""
+    остаётся — по нему tender читает статус. Только «Утверждена»; вправе
+    автор или держатель ``bpp.requests.cancel_approved`` (ФД), иначе 403."""
     who = _actor(actor)
     rows = _locked_rows(ids)
     wrong = next((req for req in rows if req.status != RequestStatus.APPROVED), None)
     if wrong is not None:
         raise service._state_error("вернуть в План", wrong)
+    # Права — как у «Закрыть остаток»: автор или ФД (решение ревью 07.10);
+    # первый отказ откатывает весь вызов.
+    if not who.can("bpp.requests.cancel_approved", "edit"):
+        foreign = next((req for req in rows if req.author_id != who.user_id), None)
+        if foreign is not None:
+            raise service._deny(
+                f"Вернуть в План заявку {foreign.number} может автор или финансовый директор.")
     for req in rows:
         req.source = RequestSource.BPP
         service._touch(req, who.user_id, "source")
