@@ -390,6 +390,12 @@ export default defineConfig(({ mode }) => {
       target: backendTarget,
       changeOrigin: true,
     },
+    // Тендерный модуль (apps.tender) — та же история: легаси-путей нет,
+    // без строки запрос уйдёт в сам dev-сервер.
+    "^/api/tender/": {
+      target: backendTarget,
+      changeOrigin: true,
+    },
     "^/api/requests/v1/stream": {
       target: asgiTarget,
       changeOrigin: true,

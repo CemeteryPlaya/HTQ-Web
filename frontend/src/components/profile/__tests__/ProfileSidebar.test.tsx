@@ -210,6 +210,17 @@ describe('ProfileSidebar — блок «Подтверждения»', () => {
     }
   });
 
+  it('tender:read — пункт «Тендеры» → /tender перед архивом договоров (T0.4)', () => {
+    const restore = setRights({ tender: 'read' });
+    try {
+      const { container } = renderSidebar();
+      expect(sectionHrefs(container, 'approvals')).toEqual(['/signoff', '/tender', '/contracts']);
+      expect(screen.getByRole('link', { name: 'Тендеры' })).toHaveAttribute('href', '/tender');
+    } finally {
+      restore();
+    }
+  });
+
   it('без bpp:read — только общая очередь и архив, даже при узлах', () => {
     const restore = setRights({ hr: 'read', project: 'read', refdata: 'read' }, FD_NODES);
     try {

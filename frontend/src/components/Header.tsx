@@ -130,6 +130,7 @@ export const Header = () => {
     hasMessenger: permissions.atLeast('messenger', 'read'),
     hasMail: permissions.atLeast('mail', 'read'),
     hasBpp: permissions.atLeast('bpp', 'read'),
+    hasTender: permissions.atLeast('tender', 'read'),
     contractsFrozen,
   });
 

@@ -165,6 +165,12 @@ export const protectedRoutes: RouteConfig[] = [
   // `/bpp/accountable/<id>`). Права на сам документ проверяет бэкенд.
   { path: '/bpp/*', component: lazyPages.BppLayout, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
 
+  // ─── Тендерный модуль (apps.tender): раздел «Тендеры» ─────────────────
+  // Как у БЗО: один маршрут на раздел, меню и экраны приносят подразделы
+  // (`features/tender/<подраздел>/module.tsx`), `TenderLayout` раскладывает их.
+  // Портал поставщика (этап 3) — отдельно, в `publicRoutes`, без общего layout.
+  { path: '/tender/*', component: lazyPages.TenderLayout, requiresAuth: true, requires: { module: 'tender', level: 'read' } },
+
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },
 

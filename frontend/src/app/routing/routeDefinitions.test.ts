@@ -22,6 +22,13 @@ describe('routeDefinitions', () => {
         expect(duplicates).toEqual([]);
     });
 
+    it('раздел «Тендеры» — один маршрут /tender/* под гейтом tender:read (T0.4)', () => {
+        const tender = protectedRoutes.filter((r) => r.path.startsWith('/tender'));
+        expect(tender.map((r) => r.path)).toEqual(['/tender/*']);
+        expect(tender[0].requires).toEqual({ module: 'tender', level: 'read' });
+        expect(isKnownModule('tender')).toBe(true);
+    });
+
     it('не содержит дублирующихся публичных путей', () => {
         const paths = publicRoutes.map((r) => r.path);
         const duplicates = paths.filter((p, i) => paths.indexOf(p) !== i);

@@ -67,6 +67,8 @@ export const lazyPages = {
 
   // Модуль БЗО: раздел «Закупки и оплаты» (`/bpp/*`) с меню подмодулей.
   BppLayout: React.lazy(() => import('@/features/bpp/BppLayout')),
+  // Тендерный модуль: раздел «Тендеры» (`/tender/*`) с меню подразделов.
+  TenderLayout: React.lazy(() => import('@/features/tender/TenderLayout')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   ManageHomeSections: React.lazy(() => import('@/pages/ManageHomeSections')),

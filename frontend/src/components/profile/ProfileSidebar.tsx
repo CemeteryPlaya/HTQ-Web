@@ -22,6 +22,7 @@ import {
     Clock,
     FileText,
     FileSignature,
+    Gavel,
     History,
     ClipboardList,
     Stamp,
@@ -271,6 +272,8 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     // поэтому его пункты без уровня модуля не показываем, даже если узел
     // подмодуля (`project`, `refdata`) открыт сам по себе.
     const hasBpp = permissions.atLeast('bpp', 'read');
+    // Раздел «Тендеры» — гейт маршрута `/tender/*` (`tender:read`).
+    const hasTender = permissions.atLeast('tender', 'read');
     // «Договоры» заморожены после переноса в БЗО (A6.2) — тогда это архив,
     // и подпись та же, что в шапке (`navItems.labelled`).
     const { frozen: contractsFrozen } = useContractsFreeze();
@@ -347,6 +350,8 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
      *   тем же правам (`moduleVisible`), что левое меню `BppLayout`, поэтому
      *   новый подмодуль появится здесь сам. Модульный пункт «Мои согласования»
      *   (`/bpp/approvals`) пропущен: его заменяет общая очередь выше.
+     * - «Тендеры» (`/tender`, T0.4) — одним пунктом при `tender:read`: меню
+     *   раздела живёт в самом `TenderLayout`.
      * - «Архив договоров» (`/contracts`) — последним; маршрут без гейта модуля,
      *   поэтому виден всем, как прежний пункт «Договоры». Пока раздел у компании
      *   не заморожен, он ещё живой и подписан «Договоры».
@@ -368,6 +373,9 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
                 });
             }
         }
+        if (hasTender) {
+            items.push({ id: 'tender', to: '/tender', icon: Gavel, label: t('tender.nav.title', 'Тендеры'), matchPrefix: true });
+        }
         // До заморозки рядом с «Договорами» модуля стоял бы второй пункт
         // «Договоры» — старый раздел называется «Прежние договоры».
         items.push(contractsFrozen
@@ -376,7 +384,7 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
                 ? { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.legacy', 'Прежние договоры') }
                 : { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') });
         return items;
-    }, [t, hasBpp, permissions, contractsFrozen]);
+    }, [t, hasBpp, hasTender, permissions, contractsFrozen]);
 
     const contentItems: ItemConfig[] = useMemo(() => {
         if (!editor) return [];

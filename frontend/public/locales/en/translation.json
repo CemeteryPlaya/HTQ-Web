@@ -5178,6 +5178,22 @@
       "externalEmpty": "There are no subordinate companies: your position is not marked as managerial with participation in the external hierarchy. This is not a loading error — the flag is set on the position's card."
     }
   },
+  "tender": {
+    "nav": {
+      "title": "Tenders"
+    },
+    "layout": {
+      "menu": "Section menu",
+      "noAccess": "No access",
+      "noAccessHint": "Your role has no rights to this section. If you need them for your work, contact the administrator.",
+      "notFound": "There is no such page in this section"
+    },
+    "overview": {
+      "title": "Overview",
+      "empty": "Tender requests and tenders will appear here",
+      "emptyHint": "The section is being prepared: tender requests and tenders will be connected in the next stages."
+    }
+  },
   "bpp": {
     "migration": {
       "badge": "migrated",
