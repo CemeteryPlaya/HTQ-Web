@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.services import require_service
@@ -156,6 +157,39 @@ def list_employees_brief(limit: int = 500) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def employees_brief(ids: list[int] | None = None, *, query: str = "",
+                    limit: int = 20) -> list[dict]:
+    """Сотрудники для проектной структуры (``apps.project``, спек
+    docs/plans/2026-10-06-project-structure-spec.md §4).
+
+    По списку ``ids`` — эти сотрудники, ВКЛЮЧАЯ уволенных и мягко удалённых
+    (``active=False``): схема проекта помечает их «уволен», а не теряет.
+    Без ``ids`` — поиск ДЕЙСТВУЮЩИХ по словам запроса в фамилии, имени и
+    отчестве (каждое слово обязано найтись), по ФИО, не больше ``limit``.
+    Ключ ``id`` — ``Employee.id``: в структуре стоят и сотрудники без учётки
+    (рабочие), поэтому ``user_id`` отдаётся рядом, а не вместо. Только
+    чтение; кадровых прав вызывающего не проверяет — права решает аппка-
+    потребитель.
+    """
+    require_service("hr")
+    rows = Employee.objects.select_related("position")
+    if ids is not None:
+        rows = rows.filter(id__in=list(ids))
+    else:
+        rows = rows.filter(is_deleted=False, status=EmployeeStatus.ACTIVE)
+        for word in query.split():
+            rows = rows.filter(Q(last_name__icontains=word) | Q(first_name__icontains=word)
+                               | Q(middle_name__icontains=word))
+        rows = rows.order_by("last_name", "first_name", "id")[:limit]
+    return [{
+        "id": e.id,
+        "full_name": " ".join(p for p in (e.last_name, e.first_name, e.middle_name or "") if p),
+        "user_id": e.user_id,
+        "position_title": e.position.title,
+        "active": (not e.is_deleted) and e.status == EmployeeStatus.ACTIVE,
+    } for e in rows]
 
 
 def get_positions_brief(position_ids: list[int]) -> list[dict]:

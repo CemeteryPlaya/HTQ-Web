@@ -30,8 +30,12 @@ def _need(request, node: str, flag: str) -> None:
 
 
 def _sees_all(request) -> bool:
+    """Все проекты, а не только участия: узел ``project.all`` или право
+    править структуру любого проекта (``project.structure``, спек
+    2026-10-06 PS-9) — без видимости «правит любой» упирался бы в 404."""
     company = (getattr(request, "company", None) or {}).get("slug")
-    return "view" in access.flags_for(request.token, "project.all", company)
+    return ("view" in access.flags_for(request.token, "project.all", company)
+            or "edit" in access.flags_for(request.token, "project.structure", company))
 
 
 def _project(request, project_id: str) -> Project:

@@ -57,6 +57,25 @@ interface Props {
 
 const signoffHref = (routeId: number) => `/signoff/routes/${routeId}`;
 
+/**
+ * Разделы экрана — по аппке-владельцу типа (префикс `subject_type`).
+ * Технический код типа на экран не выводится (Phase 10.2): у замороженных
+ * «Договоров» (`contracts.*`) и модуля БЗО (`bpp.*`) названия типов
+ * совпадают («Договор», «Счёт на оплату»), и различает их раздел. Архив
+ * «Договоров» — последним: его маршруты только читают.
+ */
+const SECTIONS: { key: string; prefix: string | null; fallback: string }[] = [
+  { key: 'bpp', prefix: 'bpp.', fallback: 'Закупки и оплаты' },
+  { key: 'hr', prefix: 'hr.', fallback: 'Кадры' },
+  { key: 'approvals', prefix: 'approvals.', fallback: 'Запросы' },
+  { key: 'other', prefix: null, fallback: 'Прочее' },
+  { key: 'contracts', prefix: 'contracts.', fallback: 'Архив договоров (только чтение)' },
+];
+
+const sectionKeyOf = (subjectType: string): string =>
+  SECTIONS.find((section) => section.prefix && subjectType.startsWith(section.prefix))?.key
+  ?? 'other';
+
 export function RouteListPanel({ subjectFilter, routeHref = signoffHref }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -89,6 +108,17 @@ export function RouteListPanel({ subjectFilter, routeHref = signoffHref }: Props
       ? allRoutes.filter((route) => subjectFilter(route.subject_type))
       : allRoutes),
     [allRoutes, subjectFilter],
+  );
+
+  /** Непустые разделы в порядке `SECTIONS`; внутри — порядок реестра. */
+  const sections = useMemo(
+    () => SECTIONS
+      .map((section) => ({
+        ...section,
+        subjects: subjects.filter((subject) => sectionKeyOf(subject.subject_type) === section.key),
+      }))
+      .filter((section) => section.subjects.length > 0),
+    [subjects],
   );
 
   const routesByType = useMemo(() => {
@@ -133,6 +163,79 @@ export function RouteListPanel({ subjectFilter, routeHref = signoffHref }: Props
 
   const isLoading = subjectsLoading || routesLoading;
 
+  /** Карточка типа: название, состояние согласования и его маршруты. */
+  const renderSubject = (subject: Subject) => {
+    const typeRoutes = routesByType.get(subject.subject_type) ?? [];
+    return (
+      <Card key={subject.subject_type}>
+        <CardHeader className="pb-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                {subject.label}
+                {subject.has_active_route ? (
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  >
+                    {t('signoff.routes.approvalOn')}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    {t('signoff.routes.noActiveRoute')}
+                  </Badge>
+                )}
+              </CardTitle>
+            </div>
+            <Button
+              size="sm"
+              variant={subject.has_active_route ? 'outline' : 'default'}
+              onClick={() => openCreate(subject)}
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              {subject.has_active_route
+                ? t('signoff.routes.addInactive')
+                : t('signoff.routes.create')}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {typeRoutes.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t('signoff.routes.emptyForType')}
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {typeRoutes.map((route) => (
+                <li
+                  key={route.id}
+                  className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+                >
+                  <div className="min-w-0">
+                    <Link
+                      to={routeHref(route.id)}
+                      className="font-medium hover:underline underline-offset-2"
+                    >
+                      {route.name}
+                    </Link>
+                    <p className="text-xs text-muted-foreground">
+                      {route.stages.length === 0
+                        ? t('signoff.routes.noStages')
+                        : t('signoff.routes.stageCount', { count: route.stages.length })}
+                    </p>
+                  </div>
+                  <Badge variant={route.is_active ? 'default' : 'outline'}>
+                    {route.is_active ? t('signoff.routes.activeLower') : t('signoff.routes.disabledLower')}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <>
       <Alert className="mb-6">
@@ -163,80 +266,20 @@ export function RouteListPanel({ subjectFilter, routeHref = signoffHref }: Props
         </Card>
       ) : (
         <div className="space-y-4">
-          {subjects.map((subject) => {
-            const typeRoutes = routesByType.get(subject.subject_type) ?? [];
-            return (
-              <Card key={subject.subject_type}>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-base flex items-center gap-2">
-                        {subject.label}
-                        {subject.has_active_route ? (
-                          <Badge
-                            variant="outline"
-                            className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                          >
-                            {t('signoff.routes.approvalOn')}
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-muted-foreground">
-                            {t('signoff.routes.noActiveRoute')}
-                          </Badge>
-                        )}
-                      </CardTitle>
-                      <CardDescription className="font-mono text-xs mt-1">
-                        {subject.subject_type}
-                      </CardDescription>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant={subject.has_active_route ? 'outline' : 'default'}
-                      onClick={() => openCreate(subject)}
-                    >
-                      <Plus className="mr-1.5 h-4 w-4" />
-                      {subject.has_active_route
-                        ? t('signoff.routes.addInactive')
-                        : t('signoff.routes.create')}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {typeRoutes.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      {t('signoff.routes.emptyForType')}
-                    </p>
-                  ) : (
-                    <ul className="divide-y">
-                      {typeRoutes.map((route) => (
-                        <li
-                          key={route.id}
-                          className="flex flex-wrap items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
-                        >
-                          <div className="min-w-0">
-                            <Link
-                              to={routeHref(route.id)}
-                              className="font-medium hover:underline underline-offset-2"
-                            >
-                              {route.name}
-                            </Link>
-                            <p className="text-xs text-muted-foreground">
-                              {route.stages.length === 0
-                                ? t('signoff.routes.noStages')
-                                : t('signoff.routes.stageCount', { count: route.stages.length })}
-                            </p>
-                          </div>
-                          <Badge variant={route.is_active ? 'default' : 'outline'}>
-                            {route.is_active ? t('signoff.routes.activeLower') : t('signoff.routes.disabledLower')}
-                          </Badge>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+          {sections.length === 1
+            // Один раздел (страница модуля — только `bpp.*`): заголовок лишний.
+            ? sections[0].subjects.map(renderSubject)
+            : sections.map((section) => {
+              const title = t(`signoff.routes.sections.${section.key}`, section.fallback);
+              return (
+                <section key={section.key} aria-label={title} className="space-y-3">
+                  <h3 className="pt-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                    {title}
+                  </h3>
+                  {section.subjects.map(renderSubject)}
+                </section>
+              );
+            })}
 
           {orphanTypes.length > 0 && (
             <Card className="border-dashed">

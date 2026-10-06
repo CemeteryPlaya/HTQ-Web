@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/table';
 import { usePermissions } from '@/hooks/usePermissions';
 
-import { projectApi, projectHref, projectKeys } from './api';
+import { PROJECTS_BASE, projectApi, projectHref, projectKeys } from './api';
 import { projectKindLabel } from './labels';
 import { ProjectFormDialog } from './ProjectFormDialog';
 import { ProjectStatusBadge } from './ProjectStatusBadge';
@@ -46,6 +46,7 @@ export function ProjectsPage() {
 
   const nameOf = useUserNames(data.map((project) => project.manager_user_id));
   const canCreate = permissions.can('project.projects', 'create');
+  const canRoles = permissions.can('project.roles', 'edit');
   const colSpan = 6;
 
   return (
@@ -67,8 +68,13 @@ export function ProjectsPage() {
           <Checkbox checked={mine} onCheckedChange={(checked) => setMine(checked === true)} />
           {t('bpp.projects.mine', 'Только мои')}
         </label>
+        {canRoles && (
+          <Button size="sm" variant="outline" className="ml-auto" onClick={() => navigate(`${PROJECTS_BASE}/roles`)}>
+            {t('bpp.structure.rolesTitle', 'Проектные роли')}
+          </Button>
+        )}
         {canCreate && (
-          <Button size="sm" className="ml-auto" onClick={() => setCreating(true)}>
+          <Button size="sm" className={canRoles ? '' : 'ml-auto'} onClick={() => setCreating(true)}>
             <Plus className="mr-1.5 h-4 w-4" />
             {t('bpp.projects.create', 'Новый проект')}
           </Button>

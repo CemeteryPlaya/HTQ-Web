@@ -73,3 +73,94 @@ class ProjectMember(models.Model):
                                                name="uq_project_member")]
         verbose_name = "Участник проекта"
         verbose_name_plural = "Участники проекта"
+
+
+# ── Проектная структура (спек docs/plans/2026-10-06-project-structure-spec.md) ──
+#
+# Своя у каждого проекта и НЕ связана с кадровой схемой ``hr`` (должности,
+# уровни N-1…N-4): человек на проекте может занимать роль, не совпадающую с
+# его кадровой должностью. Сотрудник — ``hr.Employee.id`` голым числом
+# (межаппный FK запрещён), данные о нём — через ``hr.interface``.
+
+
+class ProjectPart(models.TextChoices):
+    OFFICE = "office", "Офис"
+    SITE = "site", "Объект"
+
+
+class ProjectRole(models.Model):
+    """Справочник проектных ролей компании: «Технический директор» — одна и та
+    же роль на всех проектах (на неё опираются маршруты согласования и учёт,
+    подпроекты 2 и 3). Уровни L1–L4 — своя шкала проекта."""
+
+    name = models.CharField(max_length=100, unique=True)
+    level = models.PositiveSmallIntegerField()
+    # Подставляется в новое место; часть хранится у места (PS-7): «Специалист»
+    # бывает и в офисе, и на объекте.
+    default_part = models.CharField(max_length=8, choices=ProjectPart.choices,
+                                    default=ProjectPart.OFFICE,
+                                    db_default=ProjectPart.OFFICE.value)
+    sort_order = models.IntegerField(default=0, db_default=0)
+    is_active = models.BooleanField(default=True, db_default=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        ordering = ("level", "sort_order", "name")
+        constraints = [models.CheckConstraint(condition=models.Q(level__gte=1, level__lte=4),
+                                              name="ck_project_role_level")]
+        verbose_name = "Проектная роль"
+        verbose_name_plural = "Проектные роли"
+
+    def __str__(self) -> str:
+        return f"L{self.level} {self.name}"
+
+
+class ProjectSlot(models.Model):
+    """Место в структуре проекта: роль, руководитель-место и план людей.
+
+    Места не удаляются, а закрываются датой (``closed_on`` — закрыто С этой
+    даты): история нужна учёту, а подчинённые переживают смену людей.
+    ``parent`` — ``RESTRICT``, а не ``PROTECT``: удаление проекта каскадом
+    сносит и руководителя, и подчинённого одним проходом, ``PROTECT`` его
+    уронил бы."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="slots")
+    role = models.ForeignKey(ProjectRole, on_delete=models.PROTECT, related_name="slots")
+    part = models.CharField(max_length=8, choices=ProjectPart.choices)
+    title = models.CharField(max_length=255, default="", blank=True)
+    parent = models.ForeignKey("self", on_delete=models.RESTRICT, null=True, blank=True,
+                               related_name="children")
+    planned_headcount = models.PositiveSmallIntegerField(default=1, db_default=1)
+    closed_on = models.DateField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(planned_headcount__gte=1),
+                                              name="ck_project_slot_planned")]
+        verbose_name = "Место в структуре проекта"
+        verbose_name_plural = "Места в структуре проекта"
+
+
+class ProjectAssignment(models.Model):
+    """Сотрудник на месте с даты по дату (обе включительно, ``date_to`` пусто —
+    бессрочно). Начавшееся назначение не удаляется, а закрывается датой."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slot = models.ForeignKey(ProjectSlot, on_delete=models.CASCADE, related_name="assignments")
+    employee_id = models.IntegerField(db_index=True)
+    date_from = models.DateField()
+    date_to = models.DateField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=models.Q(date_to__isnull=True) | models.Q(date_to__gte=models.F("date_from")),
+            name="ck_project_assignment_dates")]
+        verbose_name = "Назначение на проекте"
+        verbose_name_plural = "Назначения на проекте"

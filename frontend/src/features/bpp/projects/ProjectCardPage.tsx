@@ -1,5 +1,6 @@
 /**
- * Карточка проекта (D-02): реквизиты и участники.
+ * Карточка проекта (D-02): реквизиты, участники и проектная структура
+ * (`ProjectStructureSection`, спек 2026-10-06).
  *
  * Чужой проект сервер отдаёт 404, как несуществующий (у ПМ без узла
  * `project.all` — все, где он не участник), — экран говорит «Проект не
@@ -34,6 +35,7 @@ import { PROJECTS_BASE, projectApi, projectKeys, type Project } from './api';
 import { projectKindLabel } from './labels';
 import { ProjectFormDialog } from './ProjectFormDialog';
 import { ProjectStatusBadge } from './ProjectStatusBadge';
+import { ProjectStructureSection } from './ProjectStructureSection';
 import { useUserNames } from './useUserNames';
 
 function Detail({ label, value }: { label: string; value: string | null | undefined }) {
@@ -210,6 +212,8 @@ export function ProjectCardPage() {
           />
         )}
       </section>
+
+      <ProjectStructureSection projectId={data.id} />
 
       {canEdit && (
         <ProjectFormDialog

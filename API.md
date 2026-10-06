@@ -131,7 +131,7 @@ same backend.
 | `/api/contracts/v1/*`               | `backend` (WSGI)   | Budgets, counterparty registry, agreements   |
 | `/api/signoff/v1/*`                 | `backend` (WSGI)   | Approval routes + running approvals — **not** `apps.approvals` (`/api/requests/v1`) |
 | `/api/conference/v1/*`              | `backend` (WSGI)   | История видеоконференций, записи, протокол — **не** `/api/cms/v1/conference/*` (там конфиг SFU и приглашения) |
-| `/api/project/v1/*`                 | `backend` (WSGI)   | «Проект» модуля БЗО: проекты и участники |
+| `/api/project/v1/*`                 | `backend` (WSGI)   | «Проект» модуля БЗО: проекты, участники, проектная структура |
 | `/api/refdata/v1/*`                 | `backend` (WSGI)   | Общие справочники БЗО: страны, валюты, курсы, НДС, МРП, ед. изм., статьи |
 | `/api/notifications/v1/*`           | `backend` (WSGI)   | Центр уведомлений: лента, прочтение, каналы доставки |
 | `/api/bpp/v1/*`                     | `backend` (WSGI)   | Модуль БЗО: бюджеты, заявки, план закупок, договоры, счета, выписки, альтернативы, KPI. Подмодули `budgets`/`requests`+`plan`/`agreements`/`invoices`/`bank`/`alternatives`+`kpi`/`accountable` выключаются отдельно. `history/<тип>/<id>` — журнал изменений документа |
@@ -1563,6 +1563,7 @@ schema the platform can run on.
 участники — `project.members` (`edit`), иначе 403 `E-ACC-01`. Видимость: без узла
 `project.all` (у роли ПМ его нет) список, карточка и участники ограничены
 проектами, где вызывающий участник; чужой проект — 404, как несуществующий.
+Держатель `project.structure` (`edit`) видит все проекты, как с `project.all`.
 
 | Метод и путь | Что делает |
 |---|---|
@@ -1572,6 +1573,33 @@ schema the platform can run on.
 | `GET` / `POST projects/<id>/members` | Список `user_id` / добавить участника |
 | `DELETE projects/<id>/members/<user_id>` | Снять участника; руководителя — 422 `E-PRJ-02` |
 | `GET user-names` (`?ids=1,2,3`, до 200) | ФИО из учёток `users` — `{id строкой: ФИО}` — только для руководителей и участников проектов, ВИДИМЫХ вызывающему (без `project.all` — где он участник; не справочник пользователей); id не из цифр ASCII или больше int4 пропускаются; чужие и невозможные id в ответ не попадают. Подписи карточки «Проекта» у ролей без кадровых прав (`hr/v1/employees` им — 403) |
+
+### Проектная структура
+
+Спек — [docs/plans/2026-10-06-project-structure-spec.md](docs/plans/2026-10-06-project-structure-spec.md).
+Своя у каждого проекта и не связана с кадровой схемой `hr`: справочник
+проектных ролей компании (уровень L1–L4, часть по умолчанию), места (роль,
+часть «Офис»/«Объект», руководитель — другое место строго выше по уровню,
+план людей, закрытие датой) и назначения сотрудников (`hr.Employee.id`, с/по
+включительно). Видит структуру тот, кто видит проект; правит руководитель
+своего проекта (`manager_user_id`, без узла) или держатель `project.structure`
+(`edit`, `EXPLICIT_ONLY`: ФД, ТД, ОД, ГД, АДМ, `hr-lead`; `access/0024`),
+справочник — держатель `project.roles` (тот же круг). Ошибки: `409 E-PRJ-05` —
+правила дерева, плана и дат; `422 E-PRJ-06` — сотрудник не действующий;
+`409 E-PRJ-07` — справочник (имя занято, роль на местах — не удалить и не
+сменить уровень).
+
+| Метод и путь | Что делает |
+|---|---|
+| `GET project-roles` (`?active=1`) | Справочник ролей `[{id, name, level, default_part, sort_order, is_active}]` |
+| `POST project-roles`, `PATCH`/`DELETE project-roles/<id>` | Завести / изменить (в т.ч. `is_active`) / удалить неиспользуемую роль — узел `project.roles` |
+| `GET projects/<id>/structure` (`?on=ГГГГ-ММ-ДД`, по умолчанию сегодня) | `{project_id, on, can_edit, slots: [{id, role: {id, name, level}, part, title, parent_id, planned_headcount, actual_headcount, closed_on, assignments: [{id, employee_id, full_name, position_title, date_from, date_to, dismissed}]}]}` — места, открытые на дату, и назначения, действующие на неё; `dismissed` — уволен или удалён из кадров |
+| `POST projects/<id>/slots` | `{role_id, parent_id?, part?, title?, planned_headcount?}` → `{id}`; без `parent_id` — только L1 |
+| `PATCH slots/<id>` | `parent_id` (присланный `null` — без руководителя), `part`, `title`, `planned_headcount` (не ниже людей сегодня), `closed_on` (без людей на эту дату и открытых подчинённых); закрытое место не правится |
+| `POST slots/<id>/assignments` | `{employee_id, date_from, date_to?}` → `{id}`; лимит плана на всём периоде, тот же сотрудник на месте без пересечения дат; сотрудник с учёткой становится участником проекта |
+| `PATCH assignments/<id>` | `date_from`, `date_to` (присланный `null` — бессрочно) — снять сотрудника датой |
+| `DELETE assignments/<id>` | Только не начавшееся назначение (иначе 409 `E-PRJ-05`) |
+| `GET employees?q=` | До 20 действующих сотрудников компании `[{id, full_name, position_title}]` — держателю `project.structure` или руководителю хоть одного проекта, иначе 403; кадровых прав не требует |
 
 ---
 

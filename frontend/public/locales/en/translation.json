@@ -47,6 +47,8 @@
       "conference": "Video conference",
       "email": "Email",
       "sectionWork": "Work",
+      "sectionApprovals": "Approvals",
+      "myApprovals": "My approvals",
       "calendar": "Calendar",
       "departmentFiles": "Department files",
       "requests": "Requests",
@@ -3348,7 +3350,9 @@
       "overview": "Overview",
       "budgets": "Budgets",
       "counterparties": "Counterparty registry",
-      "agreements": "Agreements"
+      "agreements": "Agreements",
+      "archive": "Contracts archive",
+      "legacy": "Legacy contracts"
     },
     "agreement": {
       "statusChanged": "Status changed: {{status}}",
@@ -3867,7 +3871,14 @@
       "newTitle": "New route",
       "newHint": "This type already has an active route, and there can only be one — the new one is created disabled. Enable it by disabling the old one.",
       "nameLabel": "Name",
-      "namePlaceholder": "For example: approval of budget requests"
+      "namePlaceholder": "For example: approval of budget requests",
+      "sections": {
+        "bpp": "Procurement and payments",
+        "hr": "HR",
+        "approvals": "Requests",
+        "contracts": "Contracts archive (read-only)",
+        "other": "Other"
+      }
     },
     "inbox": {
       "subtitle": "Requests where the decision is yours right now.",

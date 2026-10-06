@@ -95,3 +95,22 @@ def test_interface_raises_service_disabled():
     cache.clear()
     with pytest.raises(ServiceDisabled):
         interface.get_request_brief(instance.pk)
+
+
+def test_signoff_label_names_the_form_designer_not_a_purchase_request():
+    """Тип ``approvals.request`` в списке маршрутов signoff (Phase 10.2).
+
+    Подпись «Заявка» путали с «Заявкой на закупку» модуля БЗО: на экране
+    маршрутов они стояли рядом, а технический код типа экран больше не
+    показывает. Запрос конструктора форм называется так, чтобы его нельзя
+    было принять за документ модуля.
+    """
+    from apps.approvals.models import RequestInstance
+    from apps.signoff import interface as signoff
+
+    labels = {item["subject_type"]: item["label"] for item in signoff.registered_subjects()}
+    label = labels[RequestInstance.SIGNOFF_SUBJECT_TYPE]
+    assert label == "Запрос"
+    # Ни один другой тип не подписан так же — иначе на экране маршрутов
+    # снова две одинаковые карточки.
+    assert list(labels.values()).count(label) == 1

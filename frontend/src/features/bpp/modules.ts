@@ -14,6 +14,16 @@
 import type { ComponentType } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
+/** Базовый путь раздела — пункты меню подмодулей относительны ему. */
+export const BPP_BASE = '/bpp';
+
+/**
+ * Адрес пункта меню подмодуля (`budgets` → `/bpp/budgets`). Один на меню
+ * раздела (`BppLayout`) и блок «Подтверждения» сайдбара профиля
+ * (`ProfileSidebar`), чтобы ссылки не разошлись.
+ */
+export const bppMenuHref = (path: string): string => `${BPP_BASE}/${path.replace(/^\/+/, '')}`;
+
 /** Пункт меню раздела «Закупки и оплаты» для одного подмодуля. */
 export interface BppMenuItem {
   /** i18n-ключ и запасная подпись (в проекте всюду `t(key, fallback)`). */
