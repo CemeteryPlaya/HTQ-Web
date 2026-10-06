@@ -140,6 +140,8 @@ INSTALLED_APPS = [
     "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
     "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
     "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
+    # Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md).
+    "apps.tender",         # тендеры · /api/tender/v1/ (TENANT_APPS — с первой миграцией, T0.2)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное

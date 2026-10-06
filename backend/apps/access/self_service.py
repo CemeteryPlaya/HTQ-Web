@@ -128,7 +128,8 @@ from __future__ import annotations
 TRANSLATED_APPS: frozenset[str] = frozenset({"access", "users", "hr", "tasks", "companies",
                                              "media_files", "conference", "messenger", "mail",
                                              "cms", "approvals", "files",
-                                             "project", "refdata", "notifications", "bpp"})
+                                             "project", "refdata", "notifications", "bpp",
+                                             "tender"})
 
 #: Закрытый список причин, по которым ручке не положен гейт модуля (см.
 #: докстринг модуля). Любое значение вне списка сторож считает
@@ -632,4 +633,8 @@ SELF_SERVICE: dict[str, dict[str, str]] = {
         "_prefs_get": "self", "_prefs_patch": "self", "telegram_link": "self",
     },
     "bpp": {},
+    # Тендерный модуль (docs/plans/2026-10-06-tender-master-plan.md): под
+    # гейтом с рождения. Публичный портал поставщика (auth=None, доступ —
+    # пара «токен + cookie устройства») придёт сюда записями scoped на этапе 3.
+    "tender": {},
 }
