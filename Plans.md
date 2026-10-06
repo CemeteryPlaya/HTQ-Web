@@ -65,6 +65,49 @@ Spec: ответ Q-A06 (25.09, «новый раздел — всё в одно�
 
 Итог 05.10: шапка (`navItems.ts`) не менялась — сайдбар есть только на `/myprofile` и `/settings`, а шапка на всех страницах, поэтому «Договоры», «Согласования» и «Закупки и оплаты» в «Ещё» остаются: дублем это не является. До заморозки «Договоров» старый раздел в блоке подписан «Прежние договоры» (рядом с «Договорами» модуля), после — «Архив договоров». Подпись типа `approvals.request` — «Запрос»: она видна и в сообщениях об ошибках, внутренний термин «конструктор форм» туда не нужен.
 
+## Phase T: тендерный модуль `tender` (ветка `tender`, с 06.10)
+
+Spec: [docs/plans/2026-10-06-tender-master-plan.md](docs/plans/2026-10-06-tender-master-plan.md) — реестр решений T-01…T-31 поверх ТЗ (`docs/HTQ-Web запрос предложений поставщиков (RFQ)…md`); порядок: мастер-план > ТЗ > Plans.md. Пошаговый план с кодом пишется к старту каждого этапа; ниже — задачи уровня мастер-плана. `team_validation_mode: subagent` (Product / Architecture / Security / QA / Skeptic, 06.10). `formatter_baseline: configured` (eslint, tsc `app.json` ≤148, сторожа pytest). **[B]** — зона Руслана (Q-T09).
+
+Spec delta (Phase T):
+- path: docs/plans/2026-10-06-tender-master-plan.md (корневого `spec.md` нет; контракт — мастер-план)
+- change: вариант A подтверждён, полный объём ТЗ в пилоте, АП разрешены, OTP — с почтой (ответы 06.10); исправлены 22 расхождения ТЗ с кодом (§2.2): путь cookie, D-13 вручную, схема 2 одним счётом, BR-040 вместо BR-094, своя копия нумерации/журнала, outbox вместо `apps.mail`, автор файлов портала, курс «не позже даты», плановые суммы доставки/СМР, группы статей, проверяющий через `ApproverKind.SUBJECT`
+- why: пять проверок ТЗ против кода `sanzhar` @ 0d5eebd3
+
+| Task | 内容 | DoD | Depends | Status |
+|------|------|-----|---------|--------|
+| T0.1 | `[lane:gate]` `[tdd:required]` Каркас `apps.tender`: `INSTALLED_APPS`, `KNOWN_SERVICES` (+ зеркало `ACCESS_MODULES` фронта), `PREFIX_TO_SERVICE`, `TRANSLATED_APPS`/`SELF_SERVICE`, `urls.py`, `interface.py`; `platform-admin` получает модуль (`access/0026`). `TENANT_APPS`, `holding.py`, `admin.py` — в T0.2 с первой миграцией (тенантная аппка без таблиц роняет `test_tenancy_status`) | Тест каркаса: 404 при включённом, 503 при выключенном сервисе и `CompanyModule`; `test_app_isolation`, `test_invariants`, `test_gate`, `test_me`, `test_bootstrap`, `test_depth`, `test_module_service`, `test_holding_views`, `test_tenancy_status` зелёные | - | cc:完了 [2188fe24] |
+| T0.2 | `[lane:gate]` `[tdd:required]` `services/core` tender: копия нумерации `ТН-ГГГГ-NNNNNN` и журнала с триггером append-only, `DomainError` (T-10); первая миграция + `TENANT_APPS`, `holding.py` (`HOLDING_MODELS = ()`), `admin.py` с `ServiceGatedAdminMixin` | Номера без дыр под гонкой; `UPDATE`/`DELETE` журнала — ошибка БД; `makemigrations --check` чист; `test_tenancy_status`, `test_holding_views`, `test_invariants` (админка), `migrate_companies` на стенде | T0.1 | cc:TODO |
+| T0.3 | `[lane:gate]` `[tdd:required]` `[feature:security]` Узлы `tender.*` и роли `tender-buyer/quality/fd/viewer/adm` (`access/0027`, явные строки, `*.all` в `EXPLICIT_ONLY`), `tender_assign_roles` | Тест «роль × узел» по каждой паре; `*.all` без явной строки — нет доступа; `test_bootstrap`, `test_depth` зелёные; команда идемпотентна, `--dry-run` не пишет | T0.1 | cc:TODO |
+| T0.4 | `[lane:gate]` `[tdd:required]` Фронт: раздел `/tender`, реестр `features/tender/modules.ts`, гейт `tender:read`, `vite.config.ts`, ключи `tender.*` | `modules.test.ts`, `routeDefinitions.test.ts`, `translationKeys.test.ts`, `endpoints.proxy.test.ts` зелёные; eslint чисто; tsc ≤148 | T0.1 | cc:TODO |
+| T0.5 | `[lane:fast]` `[tdd:skip:docs-only]` ТЗ переименовать (без «в модуле БЗО») и закоммитить; `STRUCTURE.md`, `CLAUDE.md`, `API.md` — раздел tender | Ссылки мастер-плана и CLAUDE.md на ТЗ открываются; три файла описывают аппку | T0.1 | cc:TODO |
+| T1.1 | `[lane:gate]` `[tdd:required]` Модели заявки (`TenderRequest`, `TenderRequestPart`, `TenderRequestItem`), CRUD черновика, файлы ТЗ/чертежей (`files/0006`) | Черновик правит только автор; после отправки — 409; ПМ видит только свои проекты; `makemigrations --check` чист | T0.2, T0.3 | cc:TODO |
+| T1.2 | `[lane:gate]` `[tdd:required]` **[B]** Пакет B-1: `PurchaseRequest.source`/`tender_number` (`bpp/0021`), замок правки/отмены/ручных документов для `source="tender"`, фильтр Плана, `submit_request_from_tender`, `request_status`, `register_request_listener`, `cancel_request_from_tender`, `release_to_plan`, `budget_available`, `budget_articles` (BR-010), схемы Pydantic | ЗЗ `source="tender"`: правка/отмена через API БЗО — 409, ручной документ на её позицию — 409, в Плане не видна; `apps/bpp` зелёный; `migrate_companies` на стенде | T0.1 | cc:TODO |
+| T1.3 | `[lane:gate]` `[tdd:required]` Сервис заявки: части по (статья × вид), группы статей, подсказка остатка, отправка, свёртка статусов (T-08), «исключить часть», отмена | Две статьи + доставка + СМР → 4 ЗЗ; отказ ТД виден в tender в той же транзакции; резерв уменьшает `budget_available`; чужая группа статьи — 422 | T1.1, T1.2 | cc:TODO |
+| T1.4 | `[lane:gate]` `[tdd:required]` Фронт заявки: реестр, форма (позиции, признаки, статьи, плановые суммы, обоснование), карточка с частями и статусами ЗЗ | vitest формы и карточки; eslint чисто; tsc ≤148 | T1.3, T0.4 | cc:TODO |
+| T2.1 | `[lane:gate]` `[tdd:required]` `Tender`, `PaymentScheme`/`PaymentStage` (шаблоны 1–3, модель для 4), черновик → продление → отмена с причиной | Второй активный тендер — 409; тендер по неутверждённой заявке — 409 | T1.3 | cc:TODO |
+| T2.2 | `[lane:gate]` `[tdd:required]` `[feature:security]` `SupplierContact`, `SupplierProspect`, приглашения (токен SHA-256), отзыв, перевыпуск, сброс устройства, публикация без писем («Скопировать ссылку») | Заблокированный контрагент — 422; сырого токена в БД нет; перевыпуск — старый токен 404 | T2.1 | cc:TODO |
+| T2.3 | `[lane:gate]` `[tdd:required]` Фронт тендера: карточка, участники, ссылки, счётчики «отправлено/открыто/подано» | vitest; до вскрытия предложения не отображаются; eslint/tsc | T2.2, T1.4 | cc:TODO |
+| T3.1 | `[lane:gate]` `[tdd:required]` `[feature:security]` `htqweb/ratelimit.hit(...)` + nginx `location ^~ /api/tender/v1/supplier/` (лимит, маскировка токена в логе, 21M, `X-Frame-Options: DENY`, `Referrer-Policy`) | Юнит-тесты лимитера (fail-open/closed); `check-monitoring-config.sh` зелёный; `docker compose -f <каждый> config` | T0.1 | cc:TODO |
+| T3.2 | `[lane:gate]` `[tdd:required]` `[feature:security]` Вход по ссылке: GET-карточка, POST `bind` → cookie `__Secure-tender_device` (`Path=/api/tender/v1/supplier/`), «токен + cookie» на каждой ручке, `max_devices`, `PortalEvent` (IP из `X-Real-IP`), Origin/JSON | GET не привязывает; второе устройство — отказ; параллельные `bind` → одна привязка; чужой Origin — 4xx; архив — 404; сервис выключен — 503; `X-Forwarded-For` не в журнале | T2.2, T3.1 | cc:TODO |
+| T3.3 | `[lane:gate]` `[tdd:required]` `[feature:security]` Предложение: позиции, аналоги, `OfferExtra` (доставка/СМР), НДС, валюта, срок, схема оплаты, реквизиты, согласие ПДн, версии, отзыв, отказ; правка после срока — 409 под блокировкой тендера | Сторож: рекурсивно нет `plan_price`/других участников; после срока — 409 (`pinned_clock`); версии с историей | T3.2 | cc:TODO |
+| T3.4 | `[lane:gate]` `[tdd:required]` `[feature:security]` Файлы КП: владелец `tender.offer`, технический пользователь (`users`), загрузка только при включённом сканере, 20 МБ/10 файлов/без xml | Без сканера — 503; поддельный clamd с угрозой — 422 `E-FIL-08`; 11-й файл и `.xml` — 422; чужой файл — 404 | T3.3 | cc:TODO |
+| T3.5 | `[lane:gate]` `[tdd:required]` Фронт портала `SupplierTender.tsx` (мобильный, без layout, итог после срока) | vitest; Playwright: два `newContext` — второе устройство видит отказ; `Secure`-cookie на `*.localhost` проверена | T3.3, T3.4 | cc:TODO |
+| T4.1 | `[lane:gate]` `[tdd:required]` Outbox `OutboundEmail` + Celery, шаблоны писем (приглашение, продление, напоминание, отмена, итог), статус доставки, mailpit в `test-local` | `mail.outbox` с приглашением; повтор не дублирует; ошибка SMTP — `delivery_error`; `test_invariants`, `test_periodic_tasks` зелёные | T2.2 | cc:TODO |
+| T4.2 | `[lane:gate]` `[tdd:required]` `[feature:security]` OTP-перепривязка (хэш HMAC, 10 мин, 5 попыток, 3 отправки/ч + IP, fail-closed) | 6-я попытка — 429; верный код после 5 неудач — отказ; повтор кода — отказ; старое устройство — отказ; Playwright с кодом из mailpit | T4.1, T3.2 | cc:TODO |
+| T4.3 | `[lane:gate]` `[tdd:required]` Beat: закрытие приёма по сроку, напоминания, чистка OTP; `notify` внутренним и источник сводки | `test_periodic_tasks` зелёный; закрытие по сроку на `pinned_clock`; уведомления в колокольчике | T4.1 | cc:TODO |
+| T4.4 | `[lane:release]` `[tdd:skip:ops-dns-mailbox]` Ящик `tender@htq.group`, SPF/DKIM/DMARC, ранбук почты | Ручной протокол: письмо во «Входящих» Gmail, Mail.ru, Yandex | T4.1 | cc:TODO |
+| T5.1 | `[lane:gate]` `[tdd:required]` Вскрытие и сравнение (полная стоимость в KZT с НДС, курс «не позже даты», покрытие, экономия), экспорт xlsx с санитайзером (+ `bpp/services/core/export.py`) | `comparison` до вскрытия — 409; частичное предложение — по общему набору; формулы нейтрализованы | T3.3, T5.4 | cc:TODO |
+| T5.2 | `[lane:gate]` `[tdd:required]` Выбор по позициям и `OfferExtra`, комментарий не самой низкой цены, проверка остатка (T-13), signoff `tender.award` (SUBJECT → ФД), возврат, письма итога | Без комментария — 422; дефицит — 422; ТД по должности и заменённый проверяющий получают задачу; `apps/signoff` зелёный | T5.1 | cc:TODO |
+| T5.3 | `[lane:gate]` `[tdd:required]` **[B]** Пакет B-2: `create_documents_from_tender`, `documents_status`, `set_acceptance`, `attach_closing_docs` (D-13), схема 3 (`pay_after_receipt`, срок от приёмки) | > 1000 МРП на поставщика — договоры; повтор не дублирует; автор — закупщик; закрывающие вне `awaiting_docs`/незапрошенного типа — отказ; `apps/bpp` зелёный | T1.2 | cc:TODO |
+| T5.4 | `[lane:gate]` `[tdd:required]` Зона A: `create_counterparty_from_prospect`, `refdata.exchange_rate_on_or_before` | Страна + рег. номер — привязка без дубля; курс в выходной — последний рабочий; `apps/bpp/tests/counterparties`, `apps/refdata` зелёные | T0.1 | cc:TODO |
+| T5.5 | `[lane:gate]` `[tdd:required]` Передача и поставка: `handover`, стадии по схемам 1–3, приёмка (частичная, сканы, «оригиналы переданы»), автоприкладывание по запросу БУХ, «Закрыт» | Стадии на трёх схемах; приёмка ставит срок схемы 3; «Закрыт» — всё получено и счета закрыты | T5.2, T5.3 | cc:TODO |
+| T5.6 | `[lane:gate]` `[tdd:required]` Метрики `htqweb_tender_*` + дашборд/правило; сквозной pytest и Playwright по сценарию ТЗ | `test_metrics_are_observed` зелёный; сквозные сценарии зелёные | T5.5, T4.3 | cc:TODO |
+| T5.7 | `[lane:release]` `[tdd:skip:verification-and-review]` Ранбук выкатки, прогон затронутых аппок + сторожей backend-full, `harness-review`, PR `tender` → `sanzhar` | Аппки зелёные, `ci-known-failures.txt` не вырос; Critical/Major исправлены; PR создан, CI зелёный; мерж — по команде пользователя | T5.6, T4.4 | cc:TODO |
+| T6.1 | `[lane:gate]` `[tdd:required]` После пилота: открытый тендер, переторжка и тендер на остаток, вопросы-ответы, отгрузка от поставщика, схема 4, этап ГД и `tender-gd`, bounce, рейтинг, английский, удаление по сроку | Пошаговый план этапа 6 утверждён до начала | T5.7 | cc:TODO |
+
+Каждый этап (T0…T5) закрывается `harness-review` и PR в `sanzhar`; открытые вопросы Q-T01…Q-T15 — §6 мастер-плана (до ответа — умолчания).
+
 ## 事前確認
 
 - 事項: external-send — `git push origin new-module-BPP-sanzhar`
@@ -90,3 +133,16 @@ Spec: ответ Q-A06 (25.09, «новый раздел — всё в одно�
   理由: прогоны тестов и проверка миграций `bpp/0020`, `project/0003` на стенде
   scope: Phase 8 / Task 8.1, 8.3, 8.4, 8.5
 - secret-read (Phase 8): не требуется — `.env`, `secrets/**` не читаются.
+- 事項: external-send — `git push origin tender`
+  理由: коммиты задач фазы T публикуются в ветку модуля
+  scope: Phase T / Task T0.1–T6.1
+- 事項: external-send — GitHub REST API: создание PR `tender` → `sanzhar` и чтение статуса CI (токен из `git credential fill`, не печатается)
+  理由: закрытие каждого этапа (T0…T5); мерж — только по команде пользователя
+  scope: Phase T / Task T0.5, T1.4, T2.3, T3.5, T4.4, T5.7
+- 事項: external-send — `docker pull axllent/mailpit` (и `clamav/clamav:1.4` для проверки сканера) на тестовом стенде
+  理由: Playwright-сценарий OTP (T4.2) и проверка загрузок портала (T3.4)
+  scope: Phase T / Task T3.4, T4.1, T4.2
+- 事項: destructive — тестовые БД `test_htqweb*` (pytest создаёт и удаляет) и `migrate_companies`/команды tender на БД стенда `docker-compose.test-local.yml`
+  理由: прогоны тестов и проверка миграций `tender/*`, `bpp/0021`, `access/0026`–`0027`, `files/0006`
+  scope: Phase T / все задачи с кодом
+- secret-read (Phase T): не требуется — `.env`, `secrets/**` не читаются; DNS и ящик `tender@` (T4.4) настраивает эксплуатация, агенты доступов не получают.
