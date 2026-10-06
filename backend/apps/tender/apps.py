@@ -8,7 +8,6 @@ class TenderConfig(AppConfig):
     # Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md,
     # T-01): запрос предложений поставщикам, сравнение, выбор и передача в
     # БЗО. Рубильник — по компании (не CORE_MODULES): пилот только у холдинга.
-    # Тенантная: в settings.TENANT_APPS попадает вместе с первой миграцией
-    # (задача T0.2) — тенантная аппка без таблиц выпала бы из tenancy_status,
-    # а migrate_companies прогоняет каждую аппку списка.
+    # Тенантная (settings.TENANT_APPS — с 0001_core): таблицы в схеме
+    # компании, на бою их доводит migrate_companies, а не старт контейнера.
     API_PREFIX = "api/tender/v1/"

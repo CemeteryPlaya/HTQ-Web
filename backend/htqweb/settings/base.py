@@ -141,7 +141,7 @@ INSTALLED_APPS = [
     "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
     "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
     # Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md).
-    "apps.tender",         # тендеры · /api/tender/v1/ (TENANT_APPS — с первой миграцией, T0.2)
+    "apps.tender",         # тендеры · /api/tender/v1/ (TENANT_APPS — с 0001_core)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
@@ -150,7 +150,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project", "tender")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
