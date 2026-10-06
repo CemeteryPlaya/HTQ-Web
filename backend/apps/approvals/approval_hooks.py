@@ -455,7 +455,9 @@ def _on_event(subject_id: int, kind: str, payload: dict) -> None:
 def register() -> None:
     signoff.register_subject(
         SUBJECT_TYPE,
-        label="Заявка",
+        # Не «Заявка»: рядом в списке маршрутов стоит «Заявка на закупку»
+        # модуля БЗО, а код типа экран не показывает (Phase 10.2).
+        label="Запрос",
         model=RequestInstance,
         on_started=_on_started,
         on_approved=_on_approved,

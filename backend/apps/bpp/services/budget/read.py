@@ -161,7 +161,13 @@ def project_money(actor: Actor) -> list[dict]:
 
 
 def _visible(actor: Actor, *, status: str | None = None, project_id: str | None = None):
-    """Выборка реестра L-01 — одна на страницу и выгрузку."""
+    """Выборка реестра L-01 — одна на страницу и выгрузку.
+
+    Узел ``bpp.budgets`` проверяется здесь же, как в карточке (``can_view``):
+    гейт модуля ``bpp:read`` его не заменяет — пропуск в раздел ``bpp.entry``
+    (``hr-lead``, access/0025) даёт уровень модуля без единого документа."""
+    if not actor.can("bpp.budgets", "view"):
+        return Budget.objects.none()
     rows = Budget.objects.all().order_by("-created_at")
     if status:
         rows = rows.filter(status=status)
