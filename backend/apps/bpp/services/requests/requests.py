@@ -27,6 +27,7 @@ from apps.bpp.models import (
     PurchaseRequest,
     PurchaseRequestItem,
     PurchaseType,
+    RequestSource,
     RequestStatus,
 )
 from apps.bpp.services.actor import ROLE_GROUP, Actor
@@ -37,6 +38,7 @@ from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
 from apps.bpp.services.money import fmt, line_amount
+from apps.bpp.services.requests import listeners
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
@@ -111,6 +113,23 @@ def _state_error(action: str, req: PurchaseRequest) -> DomainError:
         status=409)
 
 
+def tender_locked(req: PurchaseRequest) -> DomainError:
+    """E-STS-02 — ЗЗ ведёт тендерный модуль (T-07): правят, отправляют,
+    отзывают, отменяют и закрывают её только функции ``bpp.interface``."""
+    return DomainError(
+        "E-STS-02",
+        f"Заявка {req.number} ведётся в тендерном модуле ({req.tender_number})",
+        status=409)
+
+
+def _guard_tender(req: PurchaseRequest, via_tender: bool) -> None:
+    """Замок T-07: ``via_tender=True`` передают только функции стыка
+    (``services/requests/tender.py``); колбэки согласования замка не знают —
+    решения ТД и ОД идут как обычно."""
+    if req.source == RequestSource.TENDER and not via_tender:
+        raise tender_locked(req)
+
+
 def _require_status(req: PurchaseRequest, statuses, action: str) -> None:
     """``action`` — глагол: «отправить», «отозвать»…"""
     if req.status not in statuses:
@@ -118,7 +137,10 @@ def _require_status(req: PurchaseRequest, statuses, action: str) -> None:
 
 
 def allowed_actions(actor: Actor, req: PurchaseRequest) -> list[str]:
-    """Кнопки формы F-02 (ТЗ §7.7) — по роли, авторству и статусу."""
+    """Кнопки формы F-02 (ТЗ §7.7) — по роли, авторству и статусу. ЗЗ
+    тендерного модуля в БЗО только печатается (T-07)."""
+    if req.source == RequestSource.TENDER:
+        return ["print"]
     author = req.author_id == actor.user_id
     actions = []
     if author and req.status in EDITABLE:
@@ -269,7 +291,10 @@ def _touch(req: PurchaseRequest, actor_id: int, *fields: str) -> None:
 # ── черновик ────────────────────────────────────────────────────────────
 
 @transaction.atomic
-def create_draft(actor: Actor, data: dict) -> PurchaseRequest:
+def create_draft(actor: Actor, data: dict, *, source: str = "",
+                 tender_number: str = "") -> PurchaseRequest:
+    """``source``/``tender_number`` передаёт только стык с tender
+    (``services/requests/tender.py``); ручки БЗО их не принимают."""
     role = _role_for(actor, data.get("initiator_role"))
     if not data.get("project_id"):
         raise DomainError(
@@ -284,6 +309,7 @@ def create_draft(actor: Actor, data: dict) -> PurchaseRequest:
     req = PurchaseRequest(
         number=next_number("ЗЗ"), author_id=actor.user_id, initiator_role=role,
         project_id=data["project_id"], currency_code=budget.currency_code,
+        source=source, tender_number=tender_number,
         created_by=actor.user_id, updated_by=actor.user_id)
     _apply_header(req, data)
     req.save()
@@ -295,8 +321,9 @@ def create_draft(actor: Actor, data: dict) -> PurchaseRequest:
 
 @transaction.atomic
 def update_draft(actor: Actor, request_id, *, expected_version: int | None,
-                 data: dict) -> PurchaseRequest:
+                 data: dict, via_tender: bool = False) -> PurchaseRequest:
     req = _lock(request_id)
+    _guard_tender(req, via_tender)
     req.assert_editable()
     _require_author(actor, req, "Править")
     _require_status(req, EDITABLE, "править")
@@ -326,6 +353,8 @@ def update_draft(actor: Actor, request_id, *, expected_version: int | None,
 @transaction.atomic
 def delete_draft(actor: Actor, request_id, *, expected_version: int | None) -> None:
     req = _lock(request_id)
+    # Удалять ЗЗ не умеет и сам tender: в его заявке ей соответствует часть.
+    _guard_tender(req, False)
     req.assert_editable()
     _require_author(actor, req, "Удалить")
     _require_status(req, (RequestStatus.DRAFT,), "удалить")
@@ -378,8 +407,10 @@ def _signoff_error(exc: Exception) -> DomainError:
 
 
 @transaction.atomic
-def submit(actor: Actor, request_id, *, expected_version: int | None) -> PurchaseRequest:
+def submit(actor: Actor, request_id, *, expected_version: int | None,
+           via_tender: bool = False) -> PurchaseRequest:
     req = _lock(request_id)
+    _guard_tender(req, via_tender)
     req.assert_editable()
     _require_author(actor, req, "Отправить")
     _require_status(req, EDITABLE, "отправить")
@@ -431,8 +462,10 @@ def _has_decisions(req: PurchaseRequest) -> bool:
 
 
 @transaction.atomic
-def withdraw(actor: Actor, request_id, *, expected_version: int | None) -> PurchaseRequest:
+def withdraw(actor: Actor, request_id, *, expected_version: int | None,
+             via_tender: bool = False) -> PurchaseRequest:
     req = _lock(request_id)
+    _guard_tender(req, via_tender)
     _require_author(actor, req, "Отозвать")
     _require_status(req, (RequestStatus.IN_APPROVAL,), "отозвать")
     check_version(req, expected_version)
@@ -471,10 +504,11 @@ def _in_documents(req: PurchaseRequest) -> bool:
 
 @transaction.atomic
 def cancel(actor: Actor, request_id, *, expected_version: int | None,
-           comment: str) -> PurchaseRequest:
+           comment: str, via_tender: bool = False) -> PurchaseRequest:
     """Отменить: автор — черновик и доработку; ФД — утверждённую без
     договоров и счетов (ТЗ §15.2). Позиции аннулируются, резерв снят."""
     req = _lock(request_id)
+    _guard_tender(req, via_tender)
     comment = _comment(comment, "Отмена заявки")
     check_version(req, expected_version)
     if req.status in EDITABLE:
@@ -492,16 +526,18 @@ def cancel(actor: Actor, request_id, *, expected_version: int | None,
     req.status, req.status_comment = RequestStatus.CANCELLED, comment
     _touch(req, actor.user_id, "status", "status_comment")
     audit.record(req, "cancelled", actor_id=actor.user_id, comment=comment)
+    listeners.changed(req.pk)
     return req
 
 
 @transaction.atomic
 def close_remainder(actor: Actor, request_id, *, expected_version: int | None,
-                    comment: str) -> PurchaseRequest:
+                    comment: str, via_tender: bool = False) -> PurchaseRequest:
     """«Закрыть остаток» (ТЗ §7.7): невыбранные остатки позиций аннулируются,
     резерв падает до выставленных счетов, заявка — «Закрыта». До этапа 3
     счетов нет: открытые позиции аннулируются целиком."""
     req = _lock(request_id)
+    _guard_tender(req, via_tender)
     comment = _comment(comment, "Закрытие остатка")
     check_version(req, expected_version)
     _require_status(req, (RequestStatus.APPROVED,), "закрыть остаток")
@@ -512,6 +548,7 @@ def close_remainder(actor: Actor, request_id, *, expected_version: int | None,
     req.status, req.status_comment = RequestStatus.CLOSED, comment
     _touch(req, actor.user_id, "status", "status_comment")
     audit.record(req, "remainder_closed", actor_id=actor.user_id, comment=comment)
+    listeners.changed(req.pk)
     return req
 
 
@@ -520,6 +557,7 @@ def copy(actor: Actor, request_id) -> PurchaseRequest:
     """Новая заявка «Черновик» с теми же шапкой и позициями, без файлов и
     согласований (ТЗ §7.7). Роль — своя: копирует и тот, кто не автор."""
     source = get_visible(actor, request_id)
+    _guard_tender(source, False)
     roles = actor.initiator_roles()
     wanted = source.initiator_role if source.initiator_role in roles else None
     today = timezone.localdate()
@@ -546,16 +584,19 @@ def copy(actor: Actor, request_id) -> PurchaseRequest:
 
 def on_started(request_id) -> None:
     PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.IN_APPROVAL)
+    listeners.changed(request_id)
 
 
 def on_approved(request_id) -> None:
     # Позиции остаются открытыми и попадают в План закупок автора (AC-003).
     PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.APPROVED)
+    listeners.changed(request_id)
 
 
 def on_rejected(request_id) -> None:
     PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.REJECTED)
     PurchaseRequestItem.objects.filter(request_id=request_id).update(status=ItemStatus.ANNULLED)
+    listeners.changed(request_id)
 
 
 def _last_rework_comment(request_id) -> str:
@@ -573,10 +614,12 @@ def on_rework(request_id) -> None:
         status=RequestStatus.REWORK, rework_comment=_last_rework_comment(request_id))
     PurchaseRequestItem.objects.filter(request_id=request_id,
                                        status=ItemStatus.ANNULLED).update(status=ItemStatus.OPEN)
+    listeners.changed(request_id)
 
 
 def on_cancelled(request_id) -> None:
     PurchaseRequest.objects.filter(pk=request_id).update(status=RequestStatus.DRAFT)
+    listeners.changed(request_id)
 
 
 def purchase_type_label(value: str) -> str:
