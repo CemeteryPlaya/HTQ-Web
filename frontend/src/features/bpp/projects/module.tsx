@@ -26,6 +26,8 @@ export const bppModule: BppGatedModule = {
   visible: (permissions) => permissions.atLeast('project', 'read'),
   routes: [
     { path: 'projects', element: lazy(() => import('./ProjectsPage')) },
+    // Справочник проектных ролей (узел `project.roles`) — до `projects/:id`.
+    { path: 'projects/roles', element: lazy(() => import('./ProjectRolesPage')) },
     { path: 'projects/:id', element: lazy(() => import('./ProjectCardPage')) },
   ],
 };
