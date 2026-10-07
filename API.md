@@ -135,6 +135,7 @@ same backend.
 | `/api/refdata/v1/*`                 | `backend` (WSGI)   | Общие справочники БЗО: страны, валюты, курсы, НДС, МРП, ед. изм., статьи |
 | `/api/notifications/v1/*`           | `backend` (WSGI)   | Центр уведомлений: лента, прочтение, каналы доставки |
 | `/api/bpp/v1/*`                     | `backend` (WSGI)   | Модуль БЗО: бюджеты, заявки, план закупок, договоры, счета, выписки, альтернативы, KPI. Подмодули `budgets`/`requests`+`plan`/`agreements`/`invoices`/`bank`/`alternatives`+`kpi`/`accountable` выключаются отдельно. `history/<тип>/<id>` — журнал изменений документа |
+| `/api/tender/v1/*`                  | `backend` (WSGI)   | Тендерный модуль закупок: заявки на закуп, тендеры, участники ([мастер-план](docs/plans/2026-10-06-tender-master-plan.md)); портал поставщика — с этапа 3 |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
@@ -2089,6 +2090,38 @@ filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
 скачивается.
 
 ---
+
+## `apps.tender` — `/api/tender/v1` (тендерный модуль закупок)
+
+Тендерный модуль: заявка на закуп → запрос предложений поставщикам → выбор → передача в БЗО. ТЗ — [docs/tz/TZ-tender-procurement-v1.0.md](docs/tz/TZ-tender-procurement-v1.0.md), мастер-план — [docs/plans/2026-10-06-tender-master-plan.md](docs/plans/2026-10-06-tender-master-plan.md), план этапов 0–2 (формы ответов, правила) — [docs/plans/2026-10-07-tender-stages-0-2-plan.md](docs/plans/2026-10-07-tender-stages-0-2-plan.md). Все ручки — JWT + компания + `api_view(module="tender", level=read|write)` и узлы `tender.*`; ошибки — `{detail, code, fields}` (`E-CON-01` версия, `E-STS-01` статус, `E-TND-01…04`), ошибки типов тела — штатный 422 Pydantic. Портал поставщика (`supplier/<token>`, без JWT) — с этапа 3.
+
+**Заявки на закуп** (`tender.requests`; «свои» — автор, все — `tender.requests.all`):
+
+| Метод и путь | Назначение |
+|---|---|
+| `GET/POST requests` | Реестр `{results, total, page, page_size}` (фильтры `status`, `project_id`, `q`) / черновик (номер `ЗТ-ГГГГ-NNNNNN`) |
+| `GET/PATCH/DELETE requests/<id>` | Карточка (`allowed_actions`, `items`, `parts` с `bpp_number`/`bpp_status`, `version`) / правка автором в draft/rework / удаление ни разу не отправленного черновика (`?version=`) |
+| `POST requests/<id>/submit` | `{version}` — разбить на части (статья × вид, доставка и СМР отдельно) и отправить ЗЗ в БЗО (`bpp.submit_request_from_tender`, маршрут ТД → ОД, резерв бюджета) |
+| `POST requests/<id>/withdraw` · `cancel` | `{version}` / `{version, comment}` (≥ 10) |
+| `POST requests/<id>/parts/<part_id>/exclude` | `{version}` — исключить отклонённую часть |
+| `GET requests/budget?project_id&article_id&role` | Остаток статьи (в правах пользователя) |
+| `GET requests/articles?project_id&role` · `requests/projects?q&role` | Статьи бюджета проекта группы роли · проекты для выбора (ПМ — участия) |
+
+Статус заявки — свёртка статусов её ЗЗ (слушатель `bpp.register_request_listener` в той же транзакции). Файлы ТЗ и чертежей — панель `/api/files/v1` (владелец `tender.request`, тип `tender_spec`).
+
+**Тендеры и участники** (`tender.tenders`, `tender.tenders.all`, `tender.prospects`):
+
+| Метод и путь | Назначение |
+|---|---|
+| `GET/POST tenders` | Реестр / объявить тендер по утверждённой заявке `{request_id}` (номер `ТН-ГГГГ-NNNNNN`, один активный на заявку — 409 `E-TND-01`) |
+| `GET/PATCH tenders/<id>` | Карточка (`allowed_actions`, `payment_scheme`, `counters`, `invitations`) / правка черновика, проверяющего качества |
+| `PUT tenders/<id>/payment-scheme` | `{kind: prepay\|advance\|postpay, advance_pct?, postpay_days?}` — шаблоны 1–3 |
+| `POST tenders/<id>/publish` · `extend` · `cancel` | Публикация — `{links: [{invitation_id, link}]}` (ссылки показываются один раз, в БД только SHA-256 токена) · новый срок · отмена с причиной (заявка — снова «Утверждена») |
+| `GET/POST tenders/<id>/invitations` | Участники: активный контрагент БЗО (+ контакт) или потенциальный поставщик; после публикации ответ несёт `link` |
+| `POST tenders/<id>/invitations/<inv>/revoke` · `reissue` · `reset-device` | Отозвать · перевыпустить ссылку (`{link}`, старая недействительна, привязки устройств сняты) · сбросить привязку |
+| `GET/POST contacts?counterparty_id` · `PATCH/DELETE contacts/<id>` | Контакты контрагентов (несколько адресов на компанию) |
+| `GET/POST prospects` · `GET/PATCH prospects/<id>` | Потенциальные поставщики без БИН |
+| `GET counterparties?q` | Поиск активных контрагентов БЗО |
 
 ## Django admin — `/django-admin/`
 

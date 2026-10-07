@@ -82,7 +82,7 @@ class BudgetArticle(BaseModel): id: str; code: str; name: str; group_code: str; 
 | `release_to_plan(ids, *, actor) -> None` | Снять `source` (позиции видны в Плане у исполнителя-закупщика) — для «тендер не состоялся» (этап 2). Только approved. |
 | `request_status(ids) -> dict[str, RequestStatusOut]` | Невозможные/чужие ключи в ответ не попадают. |
 | `register_request_listener(fn: Callable[[RequestStatusOut], None]) -> None` | Слушатель зовётся **в транзакции смены статуса** ЗЗ с `source="tender"`: `on_started`, `on_approved`, `on_rejected`, `on_rework`, `on_cancelled`, `cancel`, `close_remainder`. Исключение слушателя откатывает смену статуса (как `project.register_change_listener`). |
-| `budget_available(project_id, article_id) -> BudgetFigures` | Обёртка `budget.balance.balance`; нет утверждённого бюджета/строки — `DomainError` штатный (`E-BUD-02`/`E-BUD-07`). |
+| `budget_available(project_id, article_id, *, actor, role) -> BudgetFigures` | Обёртка `budget.balance.balance` **с проверкой доступа** (замечание проверки безопасности 07.10): проект — по правилам роли (`_check_project`, ПМ — только участия, BR-014), статья — из группы роли (BR-010, 403 `E-REQ-04`); нет утверждённого бюджета/строки — `DomainError` штатный (`E-BUD-02`/`E-BUD-07`). |
 | `budget_articles(project_id, *, actor, role) -> list[BudgetArticle]` | Статьи утверждённого бюджета проекта ∩ группа статей роли (`ROLE_GROUP`, BR-010), с остатком. |
 
 **Замок T-07** (в сервисах БЗО, для `source="tender"`):
@@ -182,6 +182,10 @@ class BudgetArticle(BaseModel): id: str; code: str; name: str; group_code: str; 
 | `GET/POST contacts?counterparty_id=` · `PATCH/DELETE contacts/<id>` | `tender.prospects` | Контакты контрагентов |
 | `GET/POST prospects` · `GET/PATCH prospects/<id>` | `tender.prospects` | Потенциальные поставщики |
 | `GET counterparties?q=` | `tender.tenders` view | `bpp.search_counterparties` |
+
+**Формы ответов** (по ним строится фронт T2.3): карточка тендера — `{id, number, status, request_id, request_number, deadline_at, currency_code, delivery_terms, quality_reviewer_user_id, cancel_reason, round, version, allowed_actions[] (edit/publish/extend/cancel/invite), payment_scheme: {kind, postpay_days, stages:[{order, trigger, pct, days}]} | null, counters: {sent, opened, submitted}, invitations: [...]}`; приглашение — `{id, counterparty_id, prospect_id, name, email, status, sent_at, first_opened_at, revoked_at, max_devices}` (токена и хэша нет никогда); `link` — только в ответах `publish` (`{links: [{invitation_id, link}]}`), `reissue` (`{link}`) и `POST invitations` после публикации; контакт — `{id, counterparty_id, email, name, phone, is_primary, is_active}`; потенциальный поставщик — `{id, name, email, reg_number, country_code, counterparty_id, version}`; `counterparties?q` — карточки `bpp.search_counterparties`. Тела: `extend` — `{deadline_at, version}`, `cancel` — `{reason, version}`, `payment-scheme` — `{kind, advance_pct?, postpay_days?}`.
+
+Дополнение от фронта (T2.3): строка реестра — `{id, number, status, request_id, request_number, deadline_at, counters}`; `PUT payment-scheme` без `version`, `advance_pct` — строкой (`"30.5"`), `postpay_days` — числом; после `publish`/`revoke`/`reset-device` фронт перечитывает карточку; карточка может отдавать `quality_reviewer_name` (иначе фронт показывает «Пользователь № id»).
 
 ### 4.4 Фронт (T2.3)
 
