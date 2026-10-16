@@ -26,6 +26,10 @@ export default function ArticlesTab() {
   // Для НОВОЙ статьи — только действующие группа и родитель.
   const { data: activeGroups } = useActiveRefdata('articleGroups');
   const { data: activeArticles } = useActiveRefdata('articles');
+  // Статьи миграция не сидит, поэтому признак «правит управляющая компания»
+  // для пустой таблицы берётся из стран — как у НДС и МРП (VatMrpTab).
+  const { data: countries } = useRefdataList('countries');
+  const canEditFallback = (countries ?? []).some((row) => row.can_edit);
 
   const groupName = new Map((groups.data ?? []).map((g) => [g.id, g.name]));
   const articleLabel = new Map((articles.data ?? []).map((a) => [a.id, `${a.code} ${a.name}`]));
@@ -83,6 +87,7 @@ export default function ArticlesTab() {
         rows={articles.data}
         isLoading={articles.isLoading}
         fields={articleFields}
+        canEditFallback={canEditFallback}
         onCreate={(values) => refdataApi.articles.create({
           code: values.code.trim(),
           name: values.name.trim(),
