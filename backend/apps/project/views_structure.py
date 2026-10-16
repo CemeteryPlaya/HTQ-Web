@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.utils import timezone
 
 from apps.access import interface as access
@@ -114,7 +114,7 @@ def _role_delete(request, role_id: int):
     if not _has(request, "project.roles"):
         raise DomainError("E-ACC-01", _FORBIDDEN, status=403)
     _call(structure.delete_role, _role_or_404(role_id))
-    return {}
+    return HttpResponse(status=204)
 
 
 def project_role(request, role_id: int):
@@ -200,7 +200,7 @@ def _assignment_delete(request, assignment_id: str):
     row = _assignment(request, assignment_id)
     _require_edit(request, row.slot.project)
     _call(structure.delete_assignment, row)
-    return {}
+    return HttpResponse(status=204)
 
 
 def assignment_item(request, assignment_id: str):
