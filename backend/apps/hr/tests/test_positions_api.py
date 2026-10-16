@@ -844,6 +844,31 @@ def test_move_into_level_weight_collision_returns_409_not_500(admin_auth, dep):
 # `level == _compute_level(weight)` не должен нарушаться ни одним из путей.
 
 @pytest.mark.django_db
+def test_create_with_taken_title_is_409_not_500(admin_auth, dep):
+    """Название должности уникально: повтор — 409 (раньше IntegrityError → 500)."""
+    _pos("Закупщик", dep, weight=100)
+    resp = Client().post(
+        f"{BASE}/", data={"title": "Закупщик", "department_id": dep.id, "weight": 200},
+        content_type="application/json", **admin_auth,
+    )
+    assert resp.status_code == 409
+    assert "Закупщик" in resp.json()["detail"]
+    assert Position.objects.filter(title="Закупщик").count() == 1
+
+
+@pytest.mark.django_db
+def test_rename_to_taken_title_is_409(admin_auth, dep):
+    _pos("Закупщик", dep, weight=100)
+    other = _pos("Снабженец", dep, weight=200)
+    taken = Client().patch(f"{BASE}/{other.id}/", data={"title": "Закупщик"},
+                           content_type="application/json", **admin_auth)
+    assert taken.status_code == 409
+    same = Client().patch(f"{BASE}/{other.id}/", data={"title": "Снабженец"},
+                          content_type="application/json", **admin_auth)
+    assert same.status_code == 200
+
+
+@pytest.mark.django_db
 def test_create_with_level_picks_free_weight_in_range(admin_auth, dep):
     _threshold(1, 0, 99)
     _threshold(3, 300, 599)
