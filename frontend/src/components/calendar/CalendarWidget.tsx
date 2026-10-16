@@ -18,6 +18,7 @@ import { CalendarEvent } from '@/types/calendar';
 import { cn } from '@/lib/utils';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
+import { companyFromHost } from '@/lib/auth/companySwitch';
 import { canEditCalendarEvent, canEditProductionDay } from './calendarAccess';
 import { EventForm } from './EventForm';
 
@@ -63,10 +64,12 @@ export const CalendarWidget: React.FC<CalendarWidgetProps> = ({
     const startDate = startOfMonth(currentDate);
     const endDate = endOfMonth(currentDate);
 
-    // Fetch unified timeline (tasks + events)
+    // Fetch unified timeline (tasks + events) — only on a company host: the
+    // timeline lives in the company's schema (see ConferenceNotifier).
     const { data: timeline } = useQuery({
         queryKey: ['calendar-timeline', format(startDate, 'yyyy-MM-dd'), format(endDate, 'yyyy-MM-dd')],
         queryFn: () => fetchCalendarTimeline(format(startDate, 'yyyy-MM-dd'), format(endDate, 'yyyy-MM-dd')),
+        enabled: companyFromHost(window.location.host) !== null,
     });
 
     // Treat malformed/absent responses as empty so the widget does not crash

@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { DateInput } from '@/components/ui/date-input';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { reportApiError } from '@/lib/apiError';
@@ -230,7 +231,7 @@ export function AssignDialog({ open, onOpenChange, slot, defaultDate, onSaved }:
           </div>
           <div className="space-y-1">
             <Label htmlFor="assign-from">{t('bpp.structure.dateFrom', 'С даты')}</Label>
-            <Input id="assign-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <DateInput id="assign-from" value={dateFrom} onChange={setDateFrom} />
           </div>
         </div>
         <DialogFooter>
@@ -280,7 +281,7 @@ export function DateDialog({ open, onOpenChange, title, label, defaultDate, onCo
         <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
         <div className="space-y-1">
           <Label htmlFor="structure-date">{label}</Label>
-          <Input id="structure-date" type="date" value={value} onChange={(e) => setValue(e.target.value)} />
+          <DateInput id="structure-date" value={value} onChange={setValue} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t('common.cancel', 'Отмена')}</Button>

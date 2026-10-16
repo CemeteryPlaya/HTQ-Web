@@ -164,6 +164,30 @@ def test_create_honours_explicit_path(lead_auth):
 
 
 @pytest.mark.django_db
+def test_create_with_taken_name_is_409_not_500(lead_auth):
+    """Название отдела уникально: повтор — 409 с понятным текстом (раньше
+    IntegrityError → 500, прод 12.10 при заведении «Отдела закупок»)."""
+    _dep("Отдел закупок", "otdel_zakupok")
+    resp = Client().post(f"{BASE}/", data={"name": "Отдел закупок"},
+                         content_type="application/json", **lead_auth)
+    assert resp.status_code == 409
+    assert "Отдел закупок" in resp.json()["detail"]
+    assert Department.objects.filter(name="Отдел закупок").count() == 1
+
+
+@pytest.mark.django_db
+def test_rename_to_taken_name_is_409(lead_auth):
+    _dep("Бухгалтерия", "buh")
+    other = _dep("Снабжение", "snab")
+    taken = Client().patch(f"{BASE}/{other.id}/", data={"name": "Бухгалтерия"},
+                           content_type="application/json", **lead_auth)
+    assert taken.status_code == 409
+    same = Client().patch(f"{BASE}/{other.id}/", data={"name": "Снабжение"},
+                          content_type="application/json", **lead_auth)
+    assert same.status_code == 200
+
+
+@pytest.mark.django_db
 def test_create_deduplicates_colliding_path(lead_auth):
     _dep("Старый", "otdel")
     resp = Client().post(f"{BASE}/", data={"name": "Отдел"},

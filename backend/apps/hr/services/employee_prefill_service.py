@@ -326,8 +326,10 @@ def link_user(employee_id: int, user_id: int) -> bool:
         return True
     if Employee.objects.filter(user_id=user_id).exclude(id=employee_id).exists():
         return False
-    employee.user_id = user_id
-    employee.save(update_fields=["user_id"])
+    with transaction.atomic():
+        employee.user_id = user_id
+        employee.save(update_fields=["user_id"])
+        employee_service.ensure_company_membership(user_id)
     return True
 
 
@@ -387,9 +389,12 @@ def apply_prefill(employee_id: int, source_type: str, source_id: int,
     if "user_id" in new_values:
         assert_user_available(new_values["user_id"], exclude_employee_id=employee.id)
 
-    for name, value in new_values.items():
-        setattr(employee, name, value)
-    employee.save()
+    with transaction.atomic():
+        for name, value in new_values.items():
+            setattr(employee, name, value)
+        employee.save()
+        if "user_id" in new_values:
+            employee_service.ensure_company_membership(new_values["user_id"])
 
     audit_service.log(
         entity_type="employee",
@@ -616,6 +621,7 @@ def bulk_import(*, user_ids: list[int], department_id: int, position_id: int,
                     avatar_url=_clean(data["avatar_url"]),
                     bio=_clean(data["bio"]),
                 )
+                employee_service.ensure_company_membership(user_id)
                 audit_service.log(
                     entity_type="employee",
                     entity_id=employee.id,

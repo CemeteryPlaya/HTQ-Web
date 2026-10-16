@@ -447,7 +447,7 @@ POST /api/users/v1/client-events/                     { event, payload, ... }
 
 | Endpoint                                  | Method | Notes                          |
 |-------------------------------------------|--------|---------------------------------|
-| `/api/hr/v1/employees/`                   | GET, POST | Employee CRUD. Тело POST/PUT принимает опциональный `card_t2: {financial?, personal?, certs?}` — секции Т-2 пишутся в той же транзакции, посекционный RBAC `hr.card.<section>.edit` |
+| `/api/hr/v1/employees/`                   | GET, POST | Employee CRUD. Тело POST/PUT принимает опциональный `card_t2: {financial?, personal?, certs?}` — секции Т-2 пишутся в той же транзакции, посекционный RBAC `hr.card.<section>.edit`. Карточка с `user_id` делает учётку участником ТЕКУЩЕЙ компании с базовой ролью (как и привязка через `prefill/apply` и `bulk-import`) — без членства ею не войти |
 | `/api/hr/v1/employees/{id}/`              | GET, PATCH, DELETE |                       |
 | `/api/hr/v1/employees/me`                 | GET    | Current user's own employee row |
 | `/api/hr/v1/employees/me/card`            | GET    | Т-2 employee card (field-gated) |

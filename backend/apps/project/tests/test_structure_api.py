@@ -123,7 +123,13 @@ def test_full_flow_and_error_codes(env):
                   {"date_to": "2026-01-31"})
     assert ended.status_code == 200
     assert _send("delete", slug, MANAGER, f"assignments/{assignment}").status_code == 409
-    closed = _send("patch", slug, MANAGER, f"slots/{crew_id}", {"closed_on": "2026-02-01"})
+    planned = _send("post", slug, MANAGER, f"slots/{crew_id}/assignments",
+                    {"employee_id": env["worker"].id, "date_from": "2099-01-01"})
+    assert planned.status_code == 201
+    # 204 — без тела: «{}» при 204 прокси Vite рвёт (ERR_CONTENT_LENGTH_MISMATCH).
+    dropped = _send("delete", slug, MANAGER, f"assignments/{planned.json()['id']}")
+    assert dropped.status_code == 204 and dropped.content == b""
+    closed =_send("patch", slug, MANAGER, f"slots/{crew_id}", {"closed_on": "2026-02-01"})
     assert closed.status_code == 200
     after = _send("get", slug, MANAGER, f"projects/{own}/structure?on=2026-03-01").json()
     assert [s["id"] for s in after["slots"]] == [top]
@@ -146,7 +152,8 @@ def test_roles_catalog_rights(env):
     role_id = made.json()["id"]
     assert _send("patch", slug, ROLES_EDITOR, f"project-roles/{role_id}",
                  {"is_active": False}).json()["is_active"] is False
-    assert _send("delete", slug, ROLES_EDITOR, f"project-roles/{role_id}").status_code == 204
+    deleted = _send("delete", slug, ROLES_EDITOR, f"project-roles/{role_id}")
+    assert deleted.status_code == 204 and deleted.content == b""
     _top(env)
     used = _send("delete", slug, ROLES_EDITOR, f"project-roles/{env['roles'][1].id}")
     assert used.status_code == 409 and used.json()["code"] == "E-PRJ-07"

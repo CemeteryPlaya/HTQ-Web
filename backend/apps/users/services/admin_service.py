@@ -31,6 +31,9 @@ import json
 from apps.users.models import User, UserStatus
 from apps.users.services.profile_service import roles_for
 
+#: ФИО, у которых пробелы по краям срезаются при создании и правке.
+_NAME_FIELDS = ("first_name", "last_name", "patronymic", "display_name")
+
 
 class DuplicateEmail(Exception):
     """Email already in use by another user. Maps to 400."""
@@ -86,6 +89,10 @@ def create_user(
     """
     email_norm = email.strip().lower()
     username_norm = username.strip()
+    # Пробелы по краям ФИО не несут смысла, а мешают: точный поиск по
+    # фамилии не находит человека, и они же уезжают в кадровую карточку.
+    first_name, last_name = first_name.strip(), last_name.strip()
+    patronymic, display_name = patronymic.strip(), display_name.strip()
 
     if User.objects.filter(email=email_norm).exists():
         raise DuplicateEmail()
@@ -158,6 +165,10 @@ def update_user(user: User, changes: dict) -> User:
         if new_username != user.username and User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
             raise DuplicateUsername()
         update_data["username"] = new_username
+
+    for field in _NAME_FIELDS:
+        if isinstance(update_data.get(field), str):
+            update_data[field] = update_data[field].strip()
 
     touched: set[str] = set()
     for field, value in update_data.items():

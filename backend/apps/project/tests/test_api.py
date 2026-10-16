@@ -70,6 +70,9 @@ def test_members(company_context):
     assert sorted(Client().get(url, **_auth(slug)).json()) == [11, 21]
     refused = Client().delete(f"{url}/11", **_auth(slug))
     assert refused.status_code == 422 and refused.json()["code"] == "E-PRJ-02"
+    removed = Client().delete(f"{url}/21", **_auth(slug))
+    assert removed.status_code == 204 and removed.content == b""
+    assert Client().get(url, **_auth(slug)).json() == [11]
 
 
 @pytest.mark.django_db

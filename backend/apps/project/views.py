@@ -7,7 +7,7 @@ HR, Q-B17). Ключи узлов проверяет ``access.interface.flags_fo
 
 from __future__ import annotations
 
-from django.http import Http404
+from django.http import Http404, HttpResponse
 
 from apps.access import interface as access
 from apps.users import interface as users
@@ -138,7 +138,7 @@ def _remove_member(request, project_id: str, user_id: int):
         projects.remove_member(_project(request, project_id), user_id, actor_id=request.token.user_id)
     except projects.ProjectError as exc:
         raise DomainError("E-PRJ-02", str(exc)) from exc
-    return {}
+    return HttpResponse(status=204)
 
 
 def project_member(request, project_id: str, user_id: int):

@@ -40,6 +40,15 @@ class DepartmentNotFound(Exception):
     """Отдел не найден — вьюха превращает в 404 {"detail": "Department not found"}."""
 
 
+class DepartmentNameTaken(Exception):
+    """409: название отдела уникально (``Department.name``). Без проверки
+    повтор падал в IntegrityError — 500 вместо понятного ответа."""
+
+    def __init__(self, name: str) -> None:
+        self.detail = f"Подразделение «{name}» уже есть — выберите его в списке."
+        super().__init__(self.detail)
+
+
 class DepartmentHasDependents(Exception):
     """409: к отделу привязаны записи, а cascade не запрошен.
 
@@ -191,7 +200,16 @@ def get_employees(department_id: int) -> list[dict]:
 
 # ── запись ──────────────────────────────────────────────────────────────────
 
+def _assert_name_free(name: str, *, exclude_id: int | None = None) -> None:
+    taken = Department.objects.filter(name=name)
+    if exclude_id is not None:
+        taken = taken.exclude(pk=exclude_id)
+    if taken.exists():
+        raise DepartmentNameTaken(name)
+
+
 def create_department(data) -> Department:
+    _assert_name_free(data.name)
     path = data.path
     if not path:
         slug = slugify_name(data.name)
@@ -211,6 +229,8 @@ def create_department(data) -> Department:
 def update_department(department_id: int, data) -> Department:
     dep = get_department(department_id)
     patch = data.model_dump(exclude_none=True)
+    if "name" in patch:
+        _assert_name_free(patch["name"], exclude_id=dep.pk)
     for field, value in patch.items():
         setattr(dep, field, value)
     if patch:

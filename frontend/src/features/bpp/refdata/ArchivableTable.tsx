@@ -58,6 +58,9 @@ interface Props<R extends RefRowBase> {
   onChanged: () => void;
   /** Что-то справа от «Добавить», например подсказка. */
   toolbarExtra?: ReactNode;
+  /** Признак правки из соседнего справочника: у пустой таблицы строк с
+   *  `can_edit` нет, и без него первую запись было бы не добавить. */
+  canEditFallback?: boolean;
 }
 
 const emptyValues = <R,>(fields: RefField<R>[]): Values =>
@@ -115,9 +118,10 @@ function FieldInput<R>({
 
 export function ArchivableTable<R extends RefRowBase>({
   title, rows, isLoading, fields, onCreate, onPatch, onToggleActive, onChanged, toolbarExtra,
+  canEditFallback = false,
 }: Props<R>) {
   const { t } = useTranslation();
-  const canEdit = (rows ?? []).some((row) => row.can_edit);
+  const canEdit = canEditFallback || (rows ?? []).some((row) => row.can_edit);
   const editableFields = fields.filter((f) => f.editable !== false);
   const readOnlyNotice = !isLoading && (rows?.length ?? 0) > 0 && !canEdit;
 

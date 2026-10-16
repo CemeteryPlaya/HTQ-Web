@@ -93,3 +93,41 @@ describe('ArticlesTab — родительская статья', () => {
     expect(parent).toHaveTextContent('— нет —');
   });
 });
+
+describe('ArticlesTab — пустой справочник статей', () => {
+  const country = (can_edit: boolean) => ({
+    id: 'c-kz', code: 'KZ', name: 'Казахстан', is_active: true, can_edit,
+  });
+  const serve = (lists: Record<string, unknown[]>) => get.mockImplementation((url: string) => {
+    const key = Object.keys(lists).find((k) => url.includes(k));
+    return Promise.resolve({ data: key ? lists[key] : [] });
+  });
+  const addArticle = async () => {
+    await screen.findByText('Снабжение');
+    await waitFor(() => expect(get.mock.calls.some(([url]) => String(url).includes('countries')))
+      .toBe(true));
+    const section = screen.getByRole('heading', { name: 'Статьи' }).closest('section')!;
+    return within(section).getByRole('button', { name: 'Добавить' });
+  };
+
+  it('первую статью можно добавить: признак правки берётся из стран', async () => {
+    serve({ 'article-groups': groups, articles: [], countries: [country(true)] });
+    renderWithProviders(<ArticlesTab />);
+
+    const button = await addArticle();
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it('без права правки «Добавить» выключен и у пустого справочника', async () => {
+    serve({
+      'article-groups': groups.map((g) => ({ ...g, can_edit: false })),
+      articles: [],
+      countries: [country(false)],
+    });
+    renderWithProviders(<ArticlesTab />);
+
+    const button = await addArticle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(button).toBeDisabled();
+  });
+});

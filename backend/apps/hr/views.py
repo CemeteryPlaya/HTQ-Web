@@ -116,6 +116,8 @@ def _create_department(request, data: schemas.DepartmentCreate):
     except svc.DepartmentNotFound:
         # parent_id указывает на несуществующий отдел
         return json_error("Department not found", 404)
+    except svc.DepartmentNameTaken as exc:
+        return json_error(exc.detail, 409)
     return svc.serialize(dep)
 
 
@@ -151,6 +153,8 @@ def _update_department(request, department_id: int, data: schemas.DepartmentUpda
         return svc.serialize(svc.update_department(department_id, data))
     except svc.DepartmentNotFound:
         return json_error("Department not found", 404)
+    except svc.DepartmentNameTaken as exc:
+        return json_error(exc.detail, 409)
 
 
 # Гейт — см. комментарий над _create_department; здесь admin, потому что
@@ -288,7 +292,7 @@ def _list_positions(request):
 def _create_position(request, data: schemas.PositionCreate):
     try:
         pos = pos_svc.create_position(data)
-    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
+    except (pos_svc.TitleTaken, pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
     except pos_svc.LevelWeightMismatch as exc:
         return json_error(exc.detail, 422)
@@ -415,7 +419,7 @@ def _update_position(request, id: int, data: schemas.PositionUpdate):
         pos = pos_svc.update_position(id, data, actor_user_id=request.token.user_id)
     except pos_svc.SystemPositionFieldsLocked as exc:
         return json_error(exc.detail, 409)
-    except (pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
+    except (pos_svc.TitleTaken, pos_svc.WeightTaken, pos_svc.LevelFull) as exc:
         return json_error(exc.detail, 409)
     except (pos_svc.WeightInvalid, pos_svc.LevelWeightMismatch) as exc:
         return json_error(exc.detail, 422)
