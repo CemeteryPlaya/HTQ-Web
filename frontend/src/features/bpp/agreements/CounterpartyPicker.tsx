@@ -7,7 +7,7 @@
  * Пустой результат объясняется ссылкой на реестр контрагентов: СН и ПМ
  * заводят контрагента сами (ТЗ §05 п.9).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -37,6 +37,11 @@ export function CounterpartyPicker({ value, onChange, disabled = false, id }: Pr
   const [text, setText] = useState('');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  // Список закрывается с задержкой после ухода фокуса. Таймер гасится при
+  // размонтировании: иначе он менял бы состояние уже снятого компонента — в
+  // тестах это ошибка после снятия среды и плавающее падение CI (16.10).
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(blurTimer.current), []);
 
   useEffect(() => {
     const timer = setTimeout(() => setQuery(text.trim()), 300);
@@ -66,8 +71,8 @@ export function CounterpartyPicker({ value, onChange, disabled = false, id }: Pr
         id={id}
         value={open ? text : value ? `${value.short_name || value.name} · ${value.reg_number}` : text}
         placeholder={t('bpp.counterparties.pickHint', 'Наименование (от 3 букв) или БИН/ИИН (от 4 цифр)')}
-        onFocus={() => { setOpen(true); setText(''); }}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); setText(''); }}
+        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
         onChange={(event) => setText(event.target.value)}
       />
       {open && enoughToSearch(query) && results.isSuccess && (
