@@ -11,9 +11,16 @@ import { render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { fetchCalendarTimeline } from '@/api/calendar';
+
 import { ConferenceNotifier } from '../ConferenceNotifier';
 
 const handlers: Record<string, (payload: unknown) => void> = {};
+
+const companyFromHost = vi.hoisted(() => vi.fn<(host: string) => string | null>());
+vi.mock('@/lib/auth/companySwitch', () => ({
+  companyFromHost: (host: string) => companyFromHost(host),
+}));
 
 vi.mock('@/features/messenger/api/socket', () => ({
   getMessengerSocket: () => ({
@@ -39,7 +46,32 @@ const renderNotifier = () => render(
 );
 
 describe('ConferenceNotifier', () => {
-  beforeEach(() => { toastSpy.mockClear(); });
+  beforeEach(() => {
+    toastSpy.mockClear();
+    vi.mocked(fetchCalendarTimeline).mockClear();
+    companyFromHost.mockReset();
+    companyFromHost.mockReturnValue('htq');
+  });
+
+  it('на адресе компании спрашивает таймлайн встреч', async () => {
+    renderNotifier();
+
+    await waitFor(() => expect(fetchCalendarTimeline).toHaveBeenCalled());
+  });
+
+  it('на голом домене таймлайн не спрашивает, а живые уведомления работают', async () => {
+    companyFromHost.mockReturnValue(null);
+    renderNotifier();
+
+    handlers.notification?.({
+      type: 'conference_started', session_id: 7, room_id: 'room-3',
+      title: 'Разбор', join_url: '/room/room-3',
+      started_at: '2026-08-25T12:00:00Z',
+    });
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+    expect(fetchCalendarTimeline).not.toHaveBeenCalled();
+  });
 
   it('показывает тост на conference_started', async () => {
     renderNotifier();
