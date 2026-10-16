@@ -16,7 +16,7 @@ import { ChevronDown, ChevronRight, Plus, UserPlus } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { reportApiError } from '@/lib/apiError';
 
@@ -188,7 +188,7 @@ export function ProjectStructureSection({ projectId }: { projectId: string }) {
         </div>
         <label className="flex items-center gap-2 text-sm">
           {t('bpp.structure.onDate', 'на дату')}
-          <Input type="date" value={on} onChange={(e) => setOn(e.target.value)} className="h-8 w-40"
+          <DateInput value={on} onChange={setOn} className="h-8 w-40"
             aria-label={t('bpp.structure.onDate', 'на дату')} />
         </label>
         {canEdit && (
