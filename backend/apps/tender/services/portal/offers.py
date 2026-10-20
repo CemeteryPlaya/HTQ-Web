@@ -262,6 +262,8 @@ def draft_document_id(draft: Offer, inv: Invitation, document_id) -> str:
     own = files.current_files(OFFER_OWNER, draft.pk, OFFER_FILE_TYPE)
     if any(str(row["document_id"]) == key for row in own):
         return key
+    # Все отправленные версии, не только последняя: ``document_id`` уникален на
+    # всю подсистему файлов, поэтому ключ находится не больше чем в одной.
     for version in inv.offers.filter(number__isnull=False).exclude(pk=draft.pk):
         for row in files.current_files(OFFER_OWNER, version.pk, OFFER_FILE_TYPE):
             if str(row["document_id"]) != key:
