@@ -118,6 +118,8 @@ export const lazyPages = {
   HRApplications: React.lazy(() => import('@/pages/hr/recruitmentStandalone').then(m => ({ default: m.HRApplicationsPage }))),
   HROffers: React.lazy(() => import('@/pages/hr/recruitmentStandalone').then(m => ({ default: m.HROffersPage }))),
   PublicOrgView: React.lazy(() => import('@/pages/public/PublicOrgView')),
+  // Портал поставщика тендера — публичная страница по ссылке-приглашению.
+  SupplierTender: React.lazy(() => import('@/pages/public/SupplierTender')),
   PublicEmployeeView: React.lazy(() => import('@/pages/public/PublicEmployeeView')),
   HRCalendar: React.lazy(() => import('@/pages/Calendar')),
   HRProductionCalendar: React.lazy(() => import('@/pages/hr/HRProductionCalendar')),

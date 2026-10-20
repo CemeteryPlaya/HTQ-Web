@@ -29,6 +29,14 @@ describe('routeDefinitions', () => {
         expect(isKnownModule('tender')).toBe(true);
     });
 
+    it('портал поставщика /supplier/:token — публичный маршрут без гейта (T3.5)', () => {
+        const portal = publicRoutes.find((r) => r.path === '/supplier/:token');
+        expect(portal).toBeDefined();
+        expect(portal?.requiresAuth).toBeFalsy();
+        expect(portal?.requires).toBeUndefined();
+        expect(protectedRoutes.some((r) => r.path.startsWith('/supplier'))).toBe(false);
+    });
+
     it('не содержит дублирующихся публичных путей', () => {
         const paths = publicRoutes.map((r) => r.path);
         const duplicates = paths.filter((p, i) => paths.indexOf(p) !== i);
