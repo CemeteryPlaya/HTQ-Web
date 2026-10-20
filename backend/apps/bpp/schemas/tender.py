@@ -16,8 +16,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 __all__ = [
-    "BudgetArticle", "BudgetFigures", "RequestRef", "RequestStatusOut", "TenderActor",
-    "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
+    "BudgetArticle", "BudgetFigures", "CounterpartyRef", "ProspectIn", "RequestRef",
+    "RequestStatusOut", "TenderActor", "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
 ]
 
 
@@ -89,3 +89,24 @@ class BudgetArticle(BaseModel):
     name: str
     group_code: str
     available: Decimal
+
+
+# ── этап 5 тендера (T5.4, зона A) ─────────────────────────────────────────
+
+class ProspectIn(BaseModel):
+    """Реквизиты потенциального поставщика из портала — для карточки контрагента."""
+    name: str = Field(min_length=2, max_length=500)
+    country_code: str = Field(default="KZ", max_length=2)
+    reg_number: str = Field(default="", max_length=30)
+    is_vat_payer: bool = False
+    contact_name: str = Field(default="", max_length=255)
+    phone: str = Field(default="", max_length=64)
+    email: str = Field(default="", max_length=254)
+    tender_number: str = Field(default="", max_length=32)
+
+
+class CounterpartyRef(BaseModel):
+    """Карточка контрагента: ``created`` — заведена сейчас, иначе найдена."""
+    id: str
+    created: bool
+    status: str

@@ -17,6 +17,8 @@ from typing import Literal
 from apps.bpp.schemas.tender import (
     BudgetArticle,
     BudgetFigures,
+    CounterpartyRef,
+    ProspectIn,
     RequestRef,
     RequestStatusOut,
     TenderActor,
@@ -27,10 +29,11 @@ from apps.bpp.schemas.tender import (
 from apps.core.services import require_service
 
 __all__ = [
-    "BudgetArticle", "BudgetFigures", "RequestRef", "RequestStatusOut", "TenderActor",
-    "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
+    "BudgetArticle", "BudgetFigures", "CounterpartyRef", "ProspectIn", "RequestRef",
+    "RequestStatusOut", "TenderActor", "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
     "agreement_brief", "budget_articles", "budget_available",
     "cancel_requests_from_tender", "closing_docs_pending_for_user", "counterparty_brief",
+    "create_counterparty_from_prospect",
     "find_by_number", "migrated_targets", "register_request_listener", "release_to_plan",
     "request_status", "search_agreements", "search_counterparties",
     "submit_request_from_tender", "upsert_counterparty_from_1c", "visible_agreement_brief",
@@ -238,3 +241,15 @@ def budget_articles(project_id, *, actor: TenderActor,
     from apps.bpp.services.requests import tender
 
     return tender.budget_articles(project_id, actor=actor, role=role)
+
+
+def create_counterparty_from_prospect(data: ProspectIn, *, actor: TenderActor) -> CounterpartyRef:
+    """Карточка контрагента по реквизитам потенциального поставщика тендера
+    (T5.4): совпадение страна + рег. номер — найденная карточка
+    (``created=False``), иначе новая «Активен» правами закупщика (узел
+    ``bpp.counterparties`` create, иначе 403). Нет рег. номера, карточка
+    заблокирована или в архиве — 422 ``E-TND-14``."""
+    require_service("bpp")
+    from apps.bpp.services.requests import tender_counterparty
+
+    return tender_counterparty.create_from_prospect(data, actor=actor)
