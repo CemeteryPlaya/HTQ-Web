@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from apps.bpp import interface as bpp
-from apps.tender.models import AuditLog, Handover, Tender
+from apps.tender.models import AuditLog, Handover, Tender, TenderRequestPart
 from apps.tender.tests import helpers as h
 from apps.tender.tests.test_award import line
 from apps.tender.tests.test_comparison import _opened
@@ -24,8 +24,14 @@ REASON = "Остаток закупим в следующем квартале"
 @pytest.fixture
 def cancelled(monkeypatch):
     calls: list = []
-    monkeypatch.setattr(bpp, "cancel_requests_from_tender",
-                        lambda ids, *, actor, comment: calls.append((list(ids), comment)))
+
+    def cancel(ids, *, actor, comment):
+        # Как настоящий БЗО: «Закрыть остаток» — ЗЗ «Закрыта», слушатель статусов
+        # пишет зеркало части в той же транзакции.
+        calls.append((list(ids), comment))
+        TenderRequestPart.objects.filter(bpp_request_id__in=list(ids)).update(bpp_status="closed")
+
+    monkeypatch.setattr(bpp, "cancel_requests_from_tender", cancel)
     return calls
 
 
@@ -109,3 +115,21 @@ def test_only_the_author(world, docs, cancelled):  # noqa: F811
     _partial(world)
     assert _close(world, user_id=h.FD).status_code in (403, 404)
     assert Docs
+
+
+def test_open_remainder_keeps_tender_out_of_closed(world, docs, cancelled, monkeypatch):  # noqa: F811
+    """Всё поставлено и оплачено, но невыбранный остаток ЗЗ держит резерв: тендер
+    не закрывается сам, пока закупщик не закроет остаток; закрыл — тендер «Закрыт»."""
+    from apps.tender.services.delivery import closing, stages
+
+    _partial(world)
+    docs.add(world, "A", status="closed", amount="100", paid="100")
+    monkeypatch.setattr(stages, "all_closed", lambda tender: True)
+    with use_company(world.slug):
+        closing.close_if_done(Tender.objects.get(pk=world.tender.pk))
+        assert Tender.objects.get(pk=world.tender.pk).status == "handed_over"
+    assert "close_remainder" in _actions(world)
+    assert _close(world).status_code == 200
+    with use_company(world.slug):
+        assert Tender.objects.get(pk=world.tender.pk).status == "closed"
+

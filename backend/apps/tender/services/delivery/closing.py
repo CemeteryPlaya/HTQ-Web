@@ -63,6 +63,13 @@ def close_if_done(tender) -> None:
         return
     if not stages.all_closed(tender):
         return
+    from apps.tender.services.award import remainder
+
+    # Невыбранный остаток ЗЗ держит резерв бюджета: пока закупщик его не
+    # закрыл, тендер остаётся в поставке — иначе кнопка «Закрыть остаток»
+    # пропала бы, а снять резерв было бы нечем (S5-13).
+    if remainder.candidates(tender):
+        return
     tender.status = TenderStatus.CLOSED
     tenders._touch(tender, tender.author_id)
     req = tender.request

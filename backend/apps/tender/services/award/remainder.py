@@ -88,4 +88,7 @@ def close_remainder(ctx: Ctx, tender_id, *, expected_version: int | None,
     audit.record(tender, "remainder_closed", actor_id=ctx.user_id, comment=comment,
                  changes={"parts": [str(p.pk) for p in parts],
                           "requests": [p.bpp_number for p in parts]})
+    from apps.tender.services.delivery import closing
+
+    closing.close_if_done(tender)          # всё поставлено и оплачено — тендер закрыт
     return tender
