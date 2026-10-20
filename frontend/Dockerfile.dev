@@ -4,8 +4,18 @@ WORKDIR /app
 
 RUN apk add --no-cache python3 make g++
 
+ARG CORPORATE_CA_BASE64=""
+RUN if [ -n "$CORPORATE_CA_BASE64" ]; then \
+      mkdir -p /usr/local/share/ca-certificates \
+      && printf '%s' "$CORPORATE_CA_BASE64" | base64 -d > /usr/local/share/ca-certificates/corporate-ca.crt; \
+    fi
+
 COPY package.json package-lock.json ./
-RUN npm install --legacy-peer-deps --no-audit --no-fund
+RUN if [ -f /usr/local/share/ca-certificates/corporate-ca.crt ]; then \
+      NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/corporate-ca.crt npm install --legacy-peer-deps --no-audit --no-fund; \
+    else \
+      npm install --legacy-peer-deps --no-audit --no-fund; \
+    fi
 
 # Source is mounted as volume at runtime — COPY . . is intentionally omitted
 # so host changes reflect without rebuilding the image.
