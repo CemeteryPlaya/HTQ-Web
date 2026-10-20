@@ -17,20 +17,31 @@ from typing import Literal
 from apps.bpp.schemas.tender import (
     BudgetArticle,
     BudgetFigures,
+    ClosingFileIn,
     CounterpartyRef,
+    DocumentRef,
+    DocumentStatusOut,
+    HandoverDocIn,
+    HandoverLineIn,
     ProspectIn,
+    ReplacedBy,
     RequestRef,
     RequestStatusOut,
     TenderActor,
     TenderItemIn,
+    TenderHandover,
     TenderPartIn,
     TenderRequestSubmit,
 )
 from apps.core.services import require_service
 
 __all__ = [
-    "BudgetArticle", "BudgetFigures", "CounterpartyRef", "ProspectIn", "RequestRef",
-    "RequestStatusOut", "TenderActor", "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
+    "BudgetArticle", "BudgetFigures", "ClosingFileIn", "CounterpartyRef", "DocumentRef",
+    "DocumentStatusOut", "HandoverDocIn", "HandoverLineIn", "ProspectIn", "ReplacedBy",
+    "RequestRef", "RequestStatusOut", "TenderActor", "TenderHandover", "TenderItemIn",
+    "TenderPartIn", "TenderRequestSubmit",
+    "attach_closing_docs", "create_documents_from_tender", "documents_status",
+    "register_document_listener", "set_acceptance",
     "agreement_brief", "budget_articles", "budget_available",
     "cancel_requests_from_tender", "closing_docs_pending_for_user", "counterparty_brief",
     "create_counterparty_from_prospect",
@@ -253,3 +264,57 @@ def create_counterparty_from_prospect(data: ProspectIn, *, actor: TenderActor) -
     from apps.bpp.services.requests import tender_counterparty
 
     return tender_counterparty.create_from_prospect(data, actor=actor)
+
+
+# ── пакет B-2: документы из тендера (T5.3) ────────────────────────────────
+
+def create_documents_from_tender(data: TenderHandover) -> list[DocumentRef]:
+    """Черновики договоров и счетов по утверждённым ЗЗ тендера — от имени
+    закупщика (автора ЗЗ), идемпотентно по ``key`` документа. Схема оплаты:
+    предоплата и аванс — счёт «аванс», постоплата — «оплата после приёмки»."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.create_documents(data)
+
+
+def documents_status(request_ids: list[str]) -> list[DocumentStatusOut]:
+    """Договоры и счета ЗЗ: статус, оплачено по отметкам БУХ, запрос
+    закрывающих, приёмка, замена альтернативой."""
+    require_service("bpp")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.documents_status(request_ids)
+
+
+def set_acceptance(invoice_ids: list[str], *, received_at, originals_at, originals_to: str,
+                   actor: TenderActor) -> None:
+    """Отметка «Товар принят, оригиналы переданы» на счетах из тендера; у
+    счёта «после приёмки» — срок оплаты = приёмка + N банковских дней."""
+    require_service("bpp")
+    require_service("bpp_invoices")
+    from apps.bpp.services.requests import tender_documents
+
+    tender_documents.set_acceptance(invoice_ids, received_at=received_at,
+                                    originals_at=originals_at, originals_to=originals_to,
+                                    actor=actor)
+
+
+def attach_closing_docs(invoice_id: str, files: list[ClosingFileIn], *,
+                        actor: TenderActor) -> list[str]:
+    """Закрывающие из тендера на счёт по D-13: только «Ждёт закрывающих» и
+    только запрошенного типа (иначе 409); повтор не дублирует."""
+    require_service("bpp")
+    require_service("bpp_invoices")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.attach_closing_docs(invoice_id, files, actor=actor)
+
+
+def register_document_listener(fn: Callable[[DocumentStatusOut], None]) -> None:
+    """Слушатель смены статуса документов из тендера — в транзакции смены
+    (как ``register_request_listener``). Зовётся из ``ready()``."""
+    from apps.bpp.services.core import doc_listeners
+
+    doc_listeners.register(fn)

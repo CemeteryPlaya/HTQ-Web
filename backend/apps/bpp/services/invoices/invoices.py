@@ -33,12 +33,12 @@ from apps.bpp.models import (
 )
 from apps.bpp.services import calc
 from apps.bpp.services.actor import Actor
-from apps.bpp.services.alternatives import kpi, lifecycle
+from apps.bpp.services.alternatives import lifecycle
 from apps.bpp.services.agreements import agreements as agreement_service
 from apps.bpp.services.agreements import positions
 from apps.bpp.services.budget import balance as budget_balance
 from apps.bpp.services.budget import committed as committed_calc
-from apps.bpp.services.core import audit
+from apps.bpp.services.core import audit, doc_listeners
 from apps.bpp.services.core import files as core_files
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.core.numbering import next_number
@@ -447,7 +447,7 @@ def delete_draft(actor: Actor, invoice_id, *, expected_version: int | None) -> N
     core_files.owner_deleted(inv, actor_id=actor.user_id)
     pk = inv.pk  # ``delete()`` обнуляет pk экземпляра
     inv.delete()
-    kpi.sync_for_document("invoice", pk)  # удалённый новый счёт аннулирует KPI (A5.2)
+    doc_listeners.status_changed("invoice", pk)  # удалённый новый счёт аннулирует KPI (A5.2)
 
 
 # ── отправка ФД ─────────────────────────────────────────────────────────
@@ -682,7 +682,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
     audit.record(inv, "cancelled", actor_id=actor.user_id, comment=comment)
     lifecycle.close_for_source("invoice", inv.pk, lifecycle.ANNULLED,
                                reason=lifecycle.REASON_INVOICE_CANCELLED)  # АП (A5.1)
-    kpi.sync_for_document("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
+    doc_listeners.status_changed("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
     return inv
 
 
@@ -691,7 +691,7 @@ def cancel(actor: Actor, invoice_id, *, expected_version: int | None, comment: s
 def on_started(invoice_id) -> None:
     Invoice.objects.filter(pk=invoice_id).update(status=InvoiceStatus.UNDER_REVIEW)
     lifecycle.notify_buyers("invoice", invoice_id)  # СН: можно предложить альтернативу (A5.1)
-    kpi.sync_for_document("invoice", invoice_id)  # KPI — на отправленную сумму (A5.2)
+    doc_listeners.status_changed("invoice", invoice_id)  # KPI — на отправленную сумму (A5.2)
 
 
 def on_approved(invoice_id) -> None:
@@ -710,7 +710,7 @@ def on_rejected(invoice_id) -> None:
                                                 fd_decided_at=timezone.now())
     lifecycle.close_for_source("invoice", invoice_id, lifecycle.ANNULLED,
                                reason=lifecycle.REASON_INVOICE_NOT_PAYABLE)  # АП (A5.1)
-    kpi.sync_for_document("invoice", invoice_id)  # KPI снабжения нового счёта (A5.2)
+    doc_listeners.status_changed("invoice", invoice_id)  # KPI снабжения нового счёта (A5.2)
 
 
 def _last_comment(invoice_id, state: str) -> str:
@@ -730,7 +730,7 @@ def on_rework(invoice_id) -> None:
 
 def on_cancelled(invoice_id) -> None:
     # Отзыв идущего решения — это отмена счёта (``cancel``): статус ставит она.
-    kpi.sync_for_document("invoice", invoice_id)
+    doc_listeners.status_changed("invoice", invoice_id)
 
 
 def check_requirement(invoice_id, key: str) -> str | None:

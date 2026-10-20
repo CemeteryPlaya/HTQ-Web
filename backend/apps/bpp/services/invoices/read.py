@@ -148,6 +148,12 @@ def card(actor: Actor, inv: Invoice, *, vat_warning: str | None = None) -> dict:
         "purchase_type": inv.purchase_type, "is_advance": inv.is_advance,
         "due_date": inv.due_date, "planned_pay_date": inv.planned_pay_date,
         "fd_decided_at": inv.fd_decided_at,
+        # Из тендера (пакет B-2): приёмка и оригиналы — основание оплаты остатка
+        # и постоплаты; «после приёмки» без приёмки — ждёт приёмки (Q-T05).
+        "source_tender": inv.source_tender, "pay_after_receipt": inv.pay_after_receipt,
+        "postpay_days": inv.postpay_days, "received_at": inv.received_at,
+        "originals_at": inv.originals_at, "originals_to": inv.originals_to,
+        "awaiting_receipt": inv.pay_after_receipt and inv.received_at is None,
         "status_comment": inv.status_comment,
         "rework_comment": inv.rework_comment if inv.status == InvoiceStatus.RETURNED else "",
         "author_comment": inv.author_comment,
@@ -295,6 +301,8 @@ def _rows(chunk: list[Invoice]) -> list[dict]:
             "amount": inv.amount, "currency_code": inv.currency_code,
             "amount_kzt": inv.amount_kzt, "due_date": inv.due_date,
             "planned_pay_date": inv.planned_pay_date,
+            "awaiting_receipt": inv.pay_after_receipt and inv.received_at is None,
+            "received_at": inv.received_at,
             "overdue": bool(due and due < today and inv.status in (
                 InvoiceStatus.UNDER_REVIEW, InvoiceStatus.TO_PAY, InvoiceStatus.PARTIALLY_PAID)),
             "docs_required": inv.docs_required or {},

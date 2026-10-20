@@ -16,8 +16,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 __all__ = [
-    "BudgetArticle", "BudgetFigures", "CounterpartyRef", "ProspectIn", "RequestRef",
-    "RequestStatusOut", "TenderActor", "TenderItemIn", "TenderPartIn", "TenderRequestSubmit",
+    "BudgetArticle", "BudgetFigures", "ClosingFileIn", "CounterpartyRef", "DocumentRef",
+    "DocumentStatusOut", "HandoverDocIn", "HandoverLineIn", "ProspectIn", "RequestRef",
+    "RequestStatusOut", "ReplacedBy", "TenderActor", "TenderHandover", "TenderItemIn",
+    "TenderPartIn", "TenderRequestSubmit",
 ]
 
 
@@ -110,3 +112,80 @@ class CounterpartyRef(BaseModel):
     id: str
     created: bool
     status: str
+
+
+# ── пакет B-2: документы из тендера (T5.3) ────────────────────────────────
+
+class HandoverLineIn(BaseModel):
+    """Строка документа: позиция ЗЗ, количество и сумма к оплате (с НДС, если
+    поставщик плательщик) в валюте документа. Позиция не указана — единственная
+    позиция ЗЗ (доставка и СМР — ЗЗ из одной позиции)."""
+    bpp_request_item_id: str | None = None
+    qty: Decimal = Field(gt=0, max_digits=15, decimal_places=3)
+    amount: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+
+
+class HandoverDocIn(BaseModel):
+    """Документ «поставщик × ЗЗ»: ``key`` — ключ идемпотентности передачи."""
+    key: str = Field(min_length=1, max_length=80)
+    bpp_request_id: str
+    counterparty_id: str
+    currency_code: str = Field(min_length=3, max_length=3)
+    with_vat: bool
+    vat_rate: Decimal | None = None
+    kind: Literal["agreement", "invoice"]
+    payment: Literal["prepay", "advance", "postpay"]
+    postpay_days: int | None = Field(default=None, ge=1, le=365)
+    lines: list[HandoverLineIn] = Field(min_length=1)
+    #: Файлы КП победителя (``media_file_id``) — в документ файлом КП.
+    offer_media_file_ids: list[str] = []
+
+
+class TenderHandover(BaseModel):
+    actor: TenderActor
+    tender_number: str = Field(min_length=1, max_length=32)
+    docs: list[HandoverDocIn] = Field(min_length=1)
+
+
+class DocumentRef(BaseModel):
+    key: str
+    doc_type: Literal["agreement", "invoice"]
+    doc_id: str
+    number: str
+    status: str
+
+
+class ReplacedBy(BaseModel):
+    """Документ заменён альтернативой БЗО (T-18): новый документ."""
+    doc_type: str | None
+    doc_id: str | None
+    number: str | None
+    offer_number: str
+
+
+class DocumentStatusOut(BaseModel):
+    """Документ ЗЗ для стадий поставки тендера."""
+    request_id: str
+    doc_type: Literal["agreement", "invoice"]
+    doc_id: str
+    number: str
+    status: str
+    amount: Decimal | None
+    currency_code: str
+    counterparty_id: str | None
+    agreement_id: str | None = None
+    paid_amount: Decimal = Decimal("0")
+    is_advance: bool = False
+    pay_after_receipt: bool = False
+    due_date: date | None = None
+    docs_required: dict = {}
+    received_at: date | None = None
+    tender_key: str = ""
+    replaced_by: ReplacedBy | None = None
+
+
+class ClosingFileIn(BaseModel):
+    """Скан закрывающего документа, уже лежащий в хранилище (``media_file_id``)."""
+    media_file_id: str
+    file_type: Literal["waybill", "act", "vat_invoice"]
+    name: str = ""
