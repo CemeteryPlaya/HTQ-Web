@@ -23,7 +23,16 @@ ENV NO_PROXY=$NO_PROXY
 ENV NODE_OPTIONS=--dns-result-order=ipv4first
 
 # Mediasoup native dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Pipeline-Depth=0 / No-Cache: перехватывающий прокси (Falcongaze/Palo Alto)
+# портит HTTP-pipeline и отдаёт протухший кэш — иначе Hash Sum mismatch.
+RUN rm -rf /var/lib/apt/lists/* \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 \
+               -o Acquire::http::No-Cache=true \
+               -o Acquire::https::No-Cache=true \
+               -o Acquire::Retries=3 \
+               update \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 -o Acquire::Retries=3 \
+               install -y --no-install-recommends \
     ca-certificates \
     python3 \
     python3-pip \
@@ -32,9 +41,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+ARG CORPORATE_CA_BASE64=""
+RUN if [ -n "$CORPORATE_CA_BASE64" ]; then \
+      printf '%s' "$CORPORATE_CA_BASE64" | base64 -d > /usr/local/share/ca-certificates/corporate-ca.crt \
+      && update-ca-certificates; \
+    fi
+
 # Install dependencies (layer caching)
 COPY package.json package-lock.json* ./
-RUN npm ci --ignore-scripts=false
+RUN if [ -f /usr/local/share/ca-certificates/corporate-ca.crt ]; then \
+      NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/corporate-ca.crt npm ci --ignore-scripts=false; \
+    else \
+      npm ci --ignore-scripts=false; \
+    fi
 
 # Copy source and build
 COPY tsconfig.json ./
@@ -51,7 +70,14 @@ FROM node:22-bookworm-slim
 # перекодирования, поэтому хватает обычной сборки и CPU почти не тратится;
 # сведение в одно видео и распознавание речи делает отдельный контейнер
 # backend-media-worker.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN rm -rf /var/lib/apt/lists/* \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 \
+               -o Acquire::http::No-Cache=true \
+               -o Acquire::https::No-Cache=true \
+               -o Acquire::Retries=3 \
+               update \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 -o Acquire::Retries=3 \
+               install -y --no-install-recommends \
     ca-certificates \
     libstdc++6 \
     ffmpeg \
