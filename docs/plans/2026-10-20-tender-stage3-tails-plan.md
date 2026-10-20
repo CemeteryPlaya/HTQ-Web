@@ -23,7 +23,7 @@
 
 ## Review Focus
 
-1. **Двойное нажатие «Отправить» на медленной сети** — два `submit` с одним `version`: вторая отправка 409 `E-CON-01`, версия одна. Тест — Task 2, шаг 1.
+1. **Двойное нажатие «Отправить» на медленной сети** — два `submit` с одним `version`: вторая отправка 409 `E-STS-01` (черновика уже нет), версия одна. Тест — Task 2, шаг 1.
 2. **Срок истёк, пока поставщик заполнял форму** — `PUT offer` 409 `E-TND-05`: форма переходит в «только чтение» с баннером «Приём предложений завершён» и не падает. Тест — Task 1, шаг 1.
 3. **429 от самого nginx** (тело — HTML, без `Retry-After`) — клиент не падает на разборе, `retryAfter = null`, экран «Слишком много запросов» без числа. Тест — Task 1, шаг 1.
 4. **Одна cookie на двух приглашениях, сброс одного** — привязка к другому приглашению остаётся. Тест — Task 5, шаг 1.
@@ -113,7 +113,7 @@
   - `test_portal_offers.py::test_broken_json_from_unbound_device_is_403` — `PUT offer` с телом `b"{oops"`, верным Origin, без cookie → 403 `E-TND-06` (сейчас 422).
   - `test_portal_offers.py::test_broken_json_from_bound_device_is_422_in_envelope` — то же с привязанной cookie → 422, `code == "E-VAL-01"`, `fields` — список.
   - `test_portal_access.py::test_multipart_only_for_upload` — `POST submit` и `POST bind` с `multipart/form-data` → 415 `E-VAL-02`.
-  - `test_portal_offers.py::test_double_submit_keeps_one_version` — два `POST submit` с одним `version` → второй 409 `E-CON-01`; `Offer.objects.filter(number__isnull=False).count() == 1` (Review Focus 1).
+  - `test_portal_offers.py::test_double_submit_keeps_one_version` — два `POST submit` с одним `version` → второй 409 `E-STS-01`; `Offer.objects.filter(number__isnull=False).count() == 1` (Review Focus 1).
 - [ ] **Step 2: Прогнать — падают первый и третий** (второй может упасть по конверту, четвёртый должен пройти — тогда это сторож на будущее):
   `../.venv/Scripts/python.exe -m pytest -q apps/tender/tests/test_portal_offers.py apps/tender/tests/test_portal_access.py -k "broken_json or multipart_only or double_submit"`
 - [ ] **Step 3: `access.py`** — `parse_body`, флаг `multipart` по Interfaces.

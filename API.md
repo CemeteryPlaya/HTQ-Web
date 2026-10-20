@@ -135,7 +135,7 @@ same backend.
 | `/api/refdata/v1/*`                 | `backend` (WSGI)   | Общие справочники БЗО: страны, валюты, курсы, НДС, МРП, ед. изм., статьи |
 | `/api/notifications/v1/*`           | `backend` (WSGI)   | Центр уведомлений: лента, прочтение, каналы доставки |
 | `/api/bpp/v1/*`                     | `backend` (WSGI)   | Модуль БЗО: бюджеты, заявки, план закупок, договоры, счета, выписки, альтернативы, KPI. Подмодули `budgets`/`requests`+`plan`/`agreements`/`invoices`/`bank`/`alternatives`+`kpi`/`accountable` выключаются отдельно. `history/<тип>/<id>` — журнал изменений документа |
-| `/api/tender/v1/*`                  | `backend` (WSGI)   | Тендерный модуль закупок: заявки на закуп, тендеры, участники ([мастер-план](docs/plans/2026-10-06-tender-master-plan.md)); портал поставщика — с этапа 3 |
+| `/api/tender/v1/*`                  | `backend` (WSGI)   | Тендерный модуль закупок: заявки на закуп, тендеры, участники, портал поставщика `supplier/<token>` (без JWT, своя локация nginx `^~ /api/tender/v1/supplier/`) ([мастер-план](docs/plans/2026-10-06-tender-master-plan.md)) |
 | `/ws/`                              | `backend_asgi`     | Messenger Socket.IO, mounted at `ws/messenger/socket.io` |
 | `/ws/sfu/`                          | `sfu` (mediasoup)  | WebRTC signalling for `/conference` — not Django. JWT обязателен: подпротокол `htqweb.jwt`, `Authorization: Bearer` или `?token=` (иначе 401 на upgrade) |
 | `:4433/udp` (в обход nginx)         | `webtransport`     | QUIC-сигналинг того же SFU: браузер ходит прямо на UDP-порт, nginx его не проксирует. Токен — в `?token=` |
@@ -2093,7 +2093,7 @@ filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
 
 ## `apps.tender` — `/api/tender/v1` (тендерный модуль закупок)
 
-Тендерный модуль: заявка на закуп → запрос предложений поставщикам → выбор → передача в БЗО. ТЗ — [docs/tz/TZ-tender-procurement-v1.0.md](docs/tz/TZ-tender-procurement-v1.0.md), мастер-план — [docs/plans/2026-10-06-tender-master-plan.md](docs/plans/2026-10-06-tender-master-plan.md), план этапов 0–2 (формы ответов, правила) — [docs/plans/2026-10-07-tender-stages-0-2-plan.md](docs/plans/2026-10-07-tender-stages-0-2-plan.md). Все ручки — JWT + компания + `api_view(module="tender", level=read|write)` и узлы `tender.*`; ошибки — `{detail, code, fields}` (`E-CON-01` версия, `E-STS-01` статус, `E-TND-01…04`), ошибки типов тела — штатный 422 Pydantic. Портал поставщика (`supplier/<token>`, без JWT) — с этапа 3.
+Тендерный модуль: заявка на закуп → запрос предложений поставщикам → выбор → передача в БЗО. ТЗ — [docs/tz/TZ-tender-procurement-v1.0.md](docs/tz/TZ-tender-procurement-v1.0.md), мастер-план — [docs/plans/2026-10-06-tender-master-plan.md](docs/plans/2026-10-06-tender-master-plan.md), план этапов 0–2 (формы ответов, правила) — [docs/plans/2026-10-07-tender-stages-0-2-plan.md](docs/plans/2026-10-07-tender-stages-0-2-plan.md). Все ручки — JWT + компания + `api_view(module="tender", level=read|write)` и узлы `tender.*`; ошибки — `{detail, code, fields}` (`E-CON-01` версия, `E-STS-01` статус, `E-TND-01…04`), ошибки типов тела — штатный 422 Pydantic. Портал поставщика (`supplier/<token>`, без JWT) — ниже, план этапа 3 — [docs/plans/2026-10-07-tender-stage3-portal-plan.md](docs/plans/2026-10-07-tender-stage3-portal-plan.md).
 
 **Заявки на закуп** (`tender.requests`; «свои» — автор, все — `tender.requests.all`):
 
@@ -2114,14 +2114,30 @@ filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
 | Метод и путь | Назначение |
 |---|---|
 | `GET/POST tenders` | Реестр / объявить тендер по утверждённой заявке `{request_id}` (номер `ТН-ГГГГ-NNNNNN`, один активный на заявку — 409 `E-TND-01`) |
-| `GET/PATCH tenders/<id>` | Карточка (`allowed_actions`, `payment_scheme`, `counters`, `invitations`) / правка черновика, проверяющего качества |
+| `GET/PATCH tenders/<id>` | Карточка (`allowed_actions`, `payment_scheme`, `counters`, `invitations` — у каждого свои `allowed_actions`) / правка черновика, проверяющего качества |
 | `PUT tenders/<id>/payment-scheme` | `{kind: prepay\|advance\|postpay, advance_pct?, postpay_days?}` — шаблоны 1–3 |
 | `POST tenders/<id>/publish` · `extend` · `cancel` | Публикация — `{links: [{invitation_id, link}]}` (ссылки показываются один раз, в БД только SHA-256 токена) · новый срок · отмена с причиной (заявка — снова «Утверждена») |
 | `GET/POST tenders/<id>/invitations` | Участники: активный контрагент БЗО (+ контакт) или потенциальный поставщик; после публикации ответ несёт `link` |
-| `POST tenders/<id>/invitations/<inv>/revoke` · `reissue` · `reset-device` | Отозвать · перевыпустить ссылку (`{link}`, старая недействительна, привязки устройств сняты) · сбросить привязку |
+| `POST tenders/<id>/invitations/<inv>/revoke` · `reissue` · `reset-device` | Отозвать · перевыпустить ссылку (`{link}`, старая недействительна, привязки устройств сняты) · сбросить привязку. Можно только то, что есть в `allowed_actions` приглашения (`tenders.invitation_actions`): отзыв — в черновике и на приёме, перевыпуск и сброс — пока приём идёт (срок не прошёл); у отозванного, отказавшегося, с итогом или истёкшего — ничего; иначе 409 `E-STS-01` |
+| `GET tenders/<id>/invitations/<inv>/events` | Журнал портала по приглашению: `[{id, kind, ip, user_agent, meta, created_at}]` (`bound`, `bind_refused`, `offer_saved`, `offer_submitted`, `offer_withdrawn`, `declined`, `file_uploaded`, `file_removed`, `device_reset`) |
 | `GET/POST contacts?counterparty_id` · `PATCH/DELETE contacts/<id>` | Контакты контрагентов (несколько адресов на компанию) |
 | `GET/POST prospects` · `GET/PATCH prospects/<id>` | Потенциальные поставщики без БИН |
 | `GET counterparties?q` | Поиск активных контрагентов БЗО |
+
+**Портал поставщика** (`/api/tender/v1/supplier/<token>/…`, без JWT; T3.1–T3.8). Доступ — пара «токен ссылки + cookie устройства»: в БД только SHA-256 токена и секрета. Cookie — `__Secure-tender_device` (`HttpOnly; Secure; SameSite=Strict; Path=/api/tender/v1/supplier/`, живёт до срока + 30 дней); на стенде без HTTPS (`TENDER_PORTAL_INSECURE_COOKIE`, только `settings.dev`/`test`) — `tender_device` без `Secure`. Компания — по поддомену: токен другой компании, неизвестный, отозванный, перевыпущенный и тендер-черновик — одинаковый 404 «Ссылка недействительна»; архивная компания — 404, выключенный сервис — 503. Каждая ручка, кроме карточки и `bind`, требует cookie привязанного устройства (иначе 403 `E-TND-06`, `details.rebind`). Небезопасные методы — `Origin` хоста компании (иначе 403 `E-ACC-01`) и тело `application/json` (415 `E-VAL-02`; `multipart/form-data` — только у загрузки файла); тело разбирается после проверки устройства, ошибка тела — 422 `E-VAL-01` в конверте портала. Лимиты — `TENDER_PORTAL_TOKEN_LIMIT` (120/мин на токен), `IP_LIMIT` (300/мин на IP), `BIND_LIMIT` (10/ч на токен), `UPLOAD_LIMIT` (30/ч на приглашение): 429 `E-RATE-01` + `Retry-After` + `details.retry_after`. Ответы — белым списком: ни плановых цен, ни бюджета, ни других участников (сторож `test_portal_whitelist.py` проходит каждый маршрут). IP в журнале — только `X-Real-IP`.
+
+| Метод и путь | Назначение |
+|---|---|
+| `GET supplier/<token>` | Промежуточная карточка, ничего не пишет: `{company_name, tender_number, deadline_at, intake_open, bound}` |
+| `POST supplier/<token>/bind` | Привязать устройство (`Set-Cookie`; занято — 409 `E-TND-06`), событие `bound`/`bind_refused` |
+| `GET supplier/<token>/tender` | Тендер для поставщика: `customer`, номер, срок, валюта, схема оплаты, условия и адрес поставки, позиции без плановых цен, признаки доставки/СМР/аналогов/частичного, файлы ТЗ `{id, name, size}`, `intake_open`, `participation_status`, `result` |
+| `GET supplier/<token>/files/<doc_id>` | 302 на временную ссылку файла ТЗ этой заявки (выдача журналируется подсистемой файлов) |
+| `GET/PUT supplier/<token>/offer` | Черновик (пока идёт приём — заводится на `GET`) или последняя версия + `editable`, `intake_open`, `declined`, `invitation_status`, `requisites_readonly`, `can_withdraw`, `history` / сохранить черновик `{version, …, extras: {delivery?, works?}, lines: [...], payment_scheme?, requisites?}` |
+| `POST supplier/<token>/offer/submit` · `offer/withdraw` | `{version, pd_consent?}` (без согласия при первой отправке — 422 `E-TND-08`; прежняя версия → «Заменено») / `{version}` |
+| `POST supplier/<token>/decline` | `{reason}` (≥ 10) — отказ от участия, черновик удаляется |
+| `GET/POST supplier/<token>/offer/files` · `DELETE …/offer/files/<doc_id>` | Файлы КП черновика (тип `tender_offer`: PDF/DOCX/XLSX/JPG/PNG до 20 МБ, до 10 штук — 11-й 409, `.xml` — 415). Загрузка только при включённом антивирусе (иначе 503 `E-SYS-01`), угроза — 422 `E-FIL-08` |
+
+После срока или вне статуса «Приём» правка, отправка, отзыв, отказ и файлы — 409 `E-TND-05` «Приём предложений завершён» (проверка под блокировкой тендера). Аналог или частичное предложение без разрешения — 422 `E-TND-09`.
 
 ## Django admin — `/django-admin/`
 
@@ -2198,6 +2214,7 @@ in-process Python contract instead.
 | `media_upload`    | 5 req/s     | `POST /api/media/v1/files/`                                  | 10    |
 | `websocket`       | 10 req/s    | `/ws/sfu/` (burst 5), `/ws/` (burst 20)                       | 5–20  |
 | `api_auth`        | 5 req/min   | `/api/users/v1/token`, `token/refresh`, `register` (exact-match, both spellings) | 2     |
+| `tender_portal`   | 60 req/min  | `^~ /api/tender/v1/supplier/` (429; token masked in the access log, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, 21M body) | 30    |
 
 `/api/email/v1/webhooks/` is explicitly exempt from rate limiting (webhook
 senders retry aggressively; false-positive 429s would just cause more
