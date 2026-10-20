@@ -24,6 +24,13 @@ class TenderConfig(AppConfig):
         # Журнал тендера — по правилам его видимости (T2.1).
         tenders.register()
         self._listen_to_bpp()
+        # Выбор поставщиков — предмет согласования «Проверка качества → ФД» (T5.2).
+        from django.apps import apps as registry
+
+        if registry.is_installed("apps.signoff"):
+            from . import approval_hooks
+
+            approval_hooks.register()
 
     @staticmethod
     def _listen_to_bpp() -> None:

@@ -33,6 +33,8 @@ urlpatterns = [
     path(f"{T}/comparison/export", views.tender_comparison_export),
     path(f"{T}/award", views.tender_award),
     path(f"{T}/award/", views.tender_award),
+    path(f"{T}/award/submit", views.tender_award_submit),
+    path(f"{T}/award/submit/", views.tender_award_submit),
     path(f"{T}/comparison/export/", views.tender_comparison_export),
     path(f"{T}/offers/<str:offer_id>/files/<str:doc_id>", views.tender_offer_file),
     path(f"{T}/offers/<str:offer_id>/files/<str:doc_id>/", views.tender_offer_file),

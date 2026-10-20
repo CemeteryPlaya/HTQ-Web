@@ -16,6 +16,7 @@ from htqweb.http import api_view, json_error
 from . import schemas
 from .services.comparison import export as comparison_export
 from .services.award import selection
+from .services.award import submit as award_submit
 from .services.comparison import opening, table
 from .services.portal import access as portal_access
 from .services.tenders import invitations, tenders
@@ -138,6 +139,13 @@ def tender_award_get(request, tender_id):
 @api_view(methods=("PUT",), module="tender", level="write", body=schemas.AwardIn)
 def tender_award_put(request, tender_id, data):
     return selection.save(Ctx.from_request(request), tender_id, data.model_dump())
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.TenderVersion,
+          idempotent=True)
+def tender_award_submit(request, tender_id, data):
+    return award_submit.submit(Ctx.from_request(request), tender_id,
+                               expected_version=data.version)
 
 
 def tender_award(request, tender_id):
