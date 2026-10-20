@@ -157,7 +157,7 @@ def test_offer_file_link_journals_download(world, memory_storage):  # noqa: F811
     assert [f["id"] for f in listed] == [doc["document_id"]]
     resp = h.call("get", f"tenders/{world.tender.id}/offers/{offer.pk}/files/{doc['document_id']}",
                   world.slug, h.SN)
-    assert resp.status_code == 302 and resp["Location"]
+    assert resp.status_code == 200 and resp.json()["url"]
     with use_company(world.slug):
         assert FileEvent.objects.filter(event="file_downloaded").exists()
 

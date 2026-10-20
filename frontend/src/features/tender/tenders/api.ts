@@ -9,12 +9,18 @@
  */
 import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
+import { filenameFromDisposition } from '@/features/bpp/core/registryExport';
+
+import type { AwardInput, AwardView, Comparison } from './comparison';
 
 export type TenderStatus =
   | 'draft' | 'intake' | 'opened' | 'on_approval' | 'awarded' | 'handed_over' | 'delivery'
   | 'closed' | 'cancelled' | 'failed' | 'rework';
 
-export type TenderAction = 'edit' | 'publish' | 'extend' | 'cancel' | 'invite';
+export type TenderAction =
+  | 'edit' | 'publish' | 'extend' | 'cancel' | 'invite'
+  // этап 5: вскрытие, выбор и его отправка, смена проверяющего, передача, приёмка
+  | 'open' | 'award' | 'award_submit' | 'reviewer' | 'handover' | 'receipt';
 export type SchemeKind = 'prepay' | 'advance' | 'postpay';
 
 export const TENDERS_BASE = '/tender/tenders';
@@ -148,6 +154,8 @@ export const tenderKeys = {
   all: ['tender', 'tenders'] as const,
   list: (params: object) => ['tender', 'tenders', 'list', params] as const,
   card: (id: string) => ['tender', 'tenders', 'card', id] as const,
+  comparison: (id: string) => ['tender', 'tenders', 'comparison', id] as const,
+  award: (id: string) => ['tender', 'tenders', 'award', id] as const,
   counterparties: (q: string) => ['tender', 'counterparties', q] as const,
   contacts: (counterpartyId: string) => ['tender', 'contacts', counterpartyId] as const,
 };
@@ -167,6 +175,34 @@ export const compactParams = (params: object) =>
 
 const path = (suffix = '') => apiPath('tender', suffix ? `tenders/${suffix}` : 'tenders');
 const withKey = (key: string) => ({ headers: { 'Idempotency-Key': key } });
+
+/** Отозвать объектный URL не сразу: браузер начинает скачивание асинхронно. */
+const REVOKE_DELAY_MS = 1000;
+
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
+}
+
+/** Ошибка при `responseType: 'blob'` приходит Blob'ом — разобрать в JSON,
+ * иначе текст сервера не дойдёт до тоста. */
+async function unblobError(error: unknown): Promise<never> {
+  const response = (error as { response?: { data?: unknown } })?.response;
+  if (response && typeof Blob !== 'undefined' && response.data instanceof Blob) {
+    try {
+      response.data = JSON.parse(await response.data.text());
+    } catch {
+      // Не JSON — оставляем как есть.
+    }
+  }
+  throw error;
+}
 
 export const tendersApi = {
   list: (params: { status?: string; q?: string } = {}) =>
@@ -196,6 +232,30 @@ export const tendersApi = {
   resetDevice: (id: string, invitationId: string, key: string) =>
     api.post(path(`${id}/invitations/${invitationId}/reset-device`), {}, withKey(key))
       .then(() => undefined),
+  // ── этап 5 ──
+  open: (id: string, key: string, version: number) =>
+    api.post<TenderCard>(path(`${id}/open`), { version }, withKey(key)).then((r) => r.data),
+  comparison: (id: string) => api.get<Comparison>(path(`${id}/comparison`)).then((r) => r.data),
+  /** xlsx сравнения (TND-021) — скачивается файлом; имя — из `Content-Disposition`. */
+  exportComparison: (id: string, fallbackName: string) =>
+    api.get<Blob>(path(`${id}/comparison/export`), { responseType: 'blob' })
+      .then((r) => {
+        const headers = (r.headers ?? {}) as Record<string, string | undefined>;
+        const filename = filenameFromDisposition(headers['content-disposition'], `${fallbackName}.xlsx`);
+        saveBlob(r.data, filename);
+        return filename;
+      }, unblobError),
+  /** Временная ссылка на файл КП вскрытого предложения; каждая выдача — в журнале. */
+  offerFileLink: (id: string, offerId: string, documentId: string) =>
+    api.get<{ url: string }>(path(`${id}/offers/${offerId}/files/${documentId}`)).then((r) => r.data.url),
+  getAward: (id: string) => api.get<AwardView>(path(`${id}/award`)).then((r) => r.data),
+  saveAward: (id: string, body: AwardInput) =>
+    api.put<AwardView>(path(`${id}/award`), body).then((r) => r.data),
+  submitAward: (id: string, key: string, version: number) =>
+    api.post<TenderCard>(path(`${id}/award/submit`), { version }, withKey(key)).then((r) => r.data),
+  /** Смена проверяющего качества после публикации (до утверждения выбора). */
+  setReviewer: (id: string, reviewerId: number | null, version: number) =>
+    api.patch<TenderCard>(path(id), { quality_reviewer_user_id: reviewerId, version }).then((r) => r.data),
   counterparties: (q: string) =>
     api.get<unknown>(apiPath('tender', 'counterparties'), { params: compactParams({ q }) })
       .then((r) => rowsOf<Counterparty>(r.data)),

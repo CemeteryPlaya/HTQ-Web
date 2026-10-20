@@ -410,3 +410,47 @@ describe('TenderCardPage — участники', () => {
     expect(screen.queryByRole('button', { name: 'Добавить участника' })).not.toBeInTheDocument();
   });
 });
+
+describe('TenderCardPage — вскрытие и выбор (этап 5)', () => {
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+    patch.mockReset();
+  });
+
+  it('до вскрытия вкладок нет; «Вскрыть» уходит с версией', async () => {
+    const intake = tenderCard({ status: 'intake', allowed_actions: ['extend', 'cancel', 'open'] });
+    serve(intake);
+    post.mockResolvedValue({ data: { ...intake, status: 'opened', opened_at: '2026-10-20T10:00:00+05:00' } });
+    renderCard();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Вскрыть' }));
+    expect(screen.queryByRole('tab', { name: 'Сравнение' })).toBeNull();
+    const confirm = await screen.findByRole('dialog');
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Вскрыть' }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0][0]).toContain(`tenders/${TENDER_ID}/open`);
+    expect(post.mock.calls[0][1]).toEqual({ version: 2 });
+  });
+
+  it('после вскрытия — вкладки «Сравнение» и «Выбор»', async () => {
+    serve(tenderCard({ status: 'opened', opened_at: '2026-10-20T10:00:00+05:00', allowed_actions: ['cancel', 'award'] }));
+    renderCard();
+    expect(await screen.findByRole('tab', { name: 'Сравнение' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Выбор' })).toBeInTheDocument();
+    expect(screen.getByText('sales@metall.kz')).toBeInTheDocument();
+  });
+
+  it('смена проверяющего после публикации — PATCH с версией', async () => {
+    serve(tenderCard({ status: 'intake', allowed_actions: ['extend', 'cancel', 'reviewer'] }));
+    patch.mockResolvedValue({ data: tenderCard({ status: 'intake', quality_reviewer_user_id: 77 }) });
+    renderCard();
+    await userEvent.click(await screen.findByRole('button', { name: 'Сменить' }));
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Найти пользователя'), 'Сер');
+    await userEvent.click(await screen.findByRole('button', { name: 'Серикова Д.' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0][1]).toEqual({ quality_reviewer_user_id: 77, version: 2 });
+  });
+});

@@ -9,6 +9,9 @@
  * - Ссылки видны один раз (`LinksDialog`): в кэш не кладутся.
  * - Счётчики «отправлено / открыто / подано» — из ответа сервера (TND-013).
  * - Отказ 409 `E-CON-01` — плашка «тендер уже изменили» с «Обновить».
+ * - Этап 5: `open` — «Вскрыть»; после вскрытия — вкладки «Сравнение» и
+ *   «Выбор» (`ComparisonTab`, `AwardTab`); `reviewer` — смена проверяющего
+ *   качества после публикации, до утверждения выбора.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -24,6 +27,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -44,6 +48,8 @@ import {
   type TenderPatch,
 } from './api';
 import { AddParticipantDialog } from './AddParticipantDialog';
+import { AwardTab } from './AwardTab';
+import { ComparisonTab } from './ComparisonTab';
 import { ExtendDialog } from './ExtendDialog';
 import { LinksDialog, type ShownLink } from './LinksDialog';
 import { PaymentSchemeField } from './PaymentSchemeField';
@@ -118,6 +124,8 @@ export function TenderCardPage() {
   const [adding, setAdding] = useState(false);
   const [extending, setExtending] = useState(false);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [tab, setTab] = useState('main');
+  const [reviewerDraft, setReviewerDraft] = useState<{ id: number | null; label: string | null } | null>(null);
 
   const stamp = card ? `${card.id}:${card.version}` : '';
   useEffect(() => {
@@ -160,6 +168,7 @@ export function TenderCardPage() {
     }
     void queryClient.invalidateQueries({ queryKey: tenderKeys.card(card.id) });
     void queryClient.invalidateQueries({ queryKey: [...tenderKeys.all, 'list'] });
+    void queryClient.invalidateQueries({ queryKey: tenderKeys.award(card.id) });
   };
   const fail = (failure: unknown) => {
     if (isConflict(failure)) setConflict(true);
@@ -253,6 +262,32 @@ export function TenderCardPage() {
       refresh(await tendersApi.cancel(card.id, key, comment ?? '', card.version))),
   };
 
+  const openTender: BppDocumentAction = {
+    label: t('tender.tenders.open', 'Вскрыть'),
+    confirm: {
+      title: t('tender.tenders.openConfirm', 'Вскрыть предложения?'),
+      description: t('tender.tenders.openHint',
+        'Предложения станут видны в сравнении, поставщики больше не смогут их изменить. Курс валют — на дату вскрытия.'),
+    },
+    run: guarded(async (key) => {
+      refresh(await tendersApi.open(card.id, key, card.version));
+      setTab('comparison');
+    }),
+  };
+  const saveReviewer = async () => {
+    if (!reviewerDraft) return;
+    setSaving(true);
+    try {
+      refresh(await tendersApi.setReviewer(card.id, reviewerDraft.id, card.version));
+      setReviewerDraft(null);
+      toast.success(t('tender.tenders.reviewerSaved', 'Проверяющий изменён'));
+    } catch (failure) {
+      fail(failure);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const invitationActions = (row: Invitation): [string, BppDocumentAction][] => {
     // Действия приглашения считает сервер (`invitation_actions`): после срока
     // остаётся только отзыв, у закрытого приглашения — ничего.
@@ -311,77 +346,8 @@ export function TenderCardPage() {
     [t('tender.tenders.countSubmitted', 'Подано'), card.counters.submitted],
   ];
 
-  return (
-    <div className="space-y-6">
-      <BackToTenders />
-
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-2xl font-bold">
-          {t('tender.tenders.cardTitle', 'Тендер {{number}}', { number: card.number })}
-        </h2>
-        <TenderStatusBadge kind="tender" status={card.status} />
-        {card.round > 1 && (
-          <span className="text-sm text-muted-foreground">
-            {t('tender.tenders.round', 'Раунд {{round}}', { round: card.round })}
-          </span>
-        )}
-      </div>
-      <p className="text-sm">
-        {t('tender.tenders.request', 'Заявка')}:{' '}
-        <Link to={tenderRequestHref(card.request_id)} className="text-primary hover:underline">
-          {card.request_number}
-        </Link>
-      </p>
-
-      {conflict && (
-        <ConflictAlert
-          message={t('tender.tenders.conflict',
-            'Тендер уже изменили — в другом окне или другой пользователь. Обновите его и повторите действие.')}
-          onReload={() => { setConflict(false); void refetch(); }}
-        />
-      )}
-      {card.cancel_reason && (
-        <p className="text-sm text-muted-foreground">
-          {t('tender.tenders.cancelReason', 'Причина отмены')}: {card.cancel_reason}
-        </p>
-      )}
-
-      <dl data-testid="tender-counters" className="grid grid-cols-3 gap-3">
-        {counters.map(([label, value]) => (
-          <div key={label} className="rounded-2xl border bg-card p-3">
-            <dt className="text-xs text-muted-foreground">{label}</dt>
-            <dd className="text-2xl font-semibold">{value}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {allowed.includes('publish') && (
-          <DocumentActionButton
-            actionKey="publish" action={publish}
-            disabled={publishBlockers.length > 0 || (anyBusy && !busy.publish)}
-            onPendingChange={onPendingChange} onDone={onDone}
-          />
-        )}
-        {allowed.includes('extend') && (
-          <Button type="button" variant="outline" disabled={anyBusy} onClick={() => setExtending(true)}>
-            <CalendarClock className="mr-1.5 h-4 w-4" />
-            {t('tender.tenders.extendButton', 'Продлить срок')}
-          </Button>
-        )}
-        {allowed.includes('cancel') && (
-          <DocumentActionButton
-            actionKey="cancel" action={cancel} disabled={anyBusy && !busy.cancel}
-            onPendingChange={onPendingChange} onDone={onDone}
-          />
-        )}
-      </div>
-      {allowed.includes('publish') && publishBlockers.length > 0 && (
-        <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
-          {publishBlockers.map((text) => <li key={text}>{text}</li>)}
-        </ul>
-      )}
-
+  const mainSection = (
+    <>
       {editable && form ? (
         <section className="space-y-4 rounded-2xl border bg-card p-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -447,10 +413,44 @@ export function TenderCardPage() {
           <Detail label={t('tender.tenders.deadline', 'Срок приёма предложений')}>{formatDateTime(card.deadline_at)}</Detail>
           <Detail label={t('tender.tenders.currency', 'Валюта')}>{card.currency_code}</Detail>
           <Detail label={t('tender.tenders.reviewer', 'Проверяющий качества выбора')}>
-            {card.quality_reviewer_user_id === null
-              ? t('tender.tenders.reviewerDefault', 'Технический директор (по должности)')
-              : card.quality_reviewer_name
-                ?? t('tender.tenders.reviewerUser', 'Пользователь № {{id}}', { id: card.quality_reviewer_user_id })}
+            {reviewerDraft ? (
+              <div className="space-y-2">
+                <ReviewerPicker
+                  value={reviewerDraft.id}
+                  valueLabel={reviewerDraft.label}
+                  onChange={(reviewerId, label) => setReviewerDraft({ id: reviewerId, label })}
+                />
+                {serverErrors.quality_reviewer_user_id && (
+                  <p className="text-xs text-destructive">{serverErrors.quality_reviewer_user_id}</p>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    type="button" size="sm" disabled={anyBusy || reviewerDraft.id === card.quality_reviewer_user_id}
+                    onClick={() => { void saveReviewer(); }}
+                  >
+                    {t('tender.tenders.save', 'Сохранить')}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setReviewerDraft(null)}>
+                    {t('tender.tenders.cancelEdit', 'Отмена')}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {card.quality_reviewer_user_id === null
+                  ? t('tender.tenders.reviewerDefault', 'Технический директор (по должности)')
+                  : card.quality_reviewer_name
+                    ?? t('tender.tenders.reviewerUser', 'Пользователь № {{id}}', { id: card.quality_reviewer_user_id })}
+                {allowed.includes('reviewer') && !editable && (
+                  <Button
+                    type="button" size="sm" variant="link" className="h-auto p-0" disabled={anyBusy}
+                    onClick={() => setReviewerDraft({ id: card.quality_reviewer_user_id, label: card.quality_reviewer_name ?? null })}
+                  >
+                    {t('tender.tenders.changeReviewer', 'Сменить')}
+                  </Button>
+                )}
+              </span>
+            )}
           </Detail>
           <Detail label={t('tender.tenders.scheme', 'Желаемая схема оплаты')}>
             {describeScheme(card.payment_scheme, translate)}
@@ -523,6 +523,103 @@ export function TenderCardPage() {
           </div>
         )}
       </section>
+
+    </>
+  );
+
+  return (
+    <div className="space-y-6">
+      <BackToTenders />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-2xl font-bold">
+          {t('tender.tenders.cardTitle', 'Тендер {{number}}', { number: card.number })}
+        </h2>
+        <TenderStatusBadge kind="tender" status={card.status} />
+        {card.round > 1 && (
+          <span className="text-sm text-muted-foreground">
+            {t('tender.tenders.round', 'Раунд {{round}}', { round: card.round })}
+          </span>
+        )}
+      </div>
+      <p className="text-sm">
+        {t('tender.tenders.request', 'Заявка')}:{' '}
+        <Link to={tenderRequestHref(card.request_id)} className="text-primary hover:underline">
+          {card.request_number}
+        </Link>
+      </p>
+
+      {conflict && (
+        <ConflictAlert
+          message={t('tender.tenders.conflict',
+            'Тендер уже изменили — в другом окне или другой пользователь. Обновите его и повторите действие.')}
+          onReload={() => { setConflict(false); void refetch(); }}
+        />
+      )}
+      {card.cancel_reason && (
+        <p className="text-sm text-muted-foreground">
+          {t('tender.tenders.cancelReason', 'Причина отмены')}: {card.cancel_reason}
+        </p>
+      )}
+
+      <dl data-testid="tender-counters" className="grid grid-cols-3 gap-3">
+        {counters.map(([label, value]) => (
+          <div key={label} className="rounded-2xl border bg-card p-3">
+            <dt className="text-xs text-muted-foreground">{label}</dt>
+            <dd className="text-2xl font-semibold">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {allowed.includes('publish') && (
+          <DocumentActionButton
+            actionKey="publish" action={publish}
+            disabled={publishBlockers.length > 0 || (anyBusy && !busy.publish)}
+            onPendingChange={onPendingChange} onDone={onDone}
+          />
+        )}
+        {allowed.includes('open') && (
+          <DocumentActionButton
+            actionKey="open" action={openTender} disabled={anyBusy && !busy.open}
+            onPendingChange={onPendingChange} onDone={onDone}
+          />
+        )}
+        {allowed.includes('extend') && (
+          <Button type="button" variant="outline" disabled={anyBusy} onClick={() => setExtending(true)}>
+            <CalendarClock className="mr-1.5 h-4 w-4" />
+            {t('tender.tenders.extendButton', 'Продлить срок')}
+          </Button>
+        )}
+        {allowed.includes('cancel') && (
+          <DocumentActionButton
+            actionKey="cancel" action={cancel} disabled={anyBusy && !busy.cancel}
+            onPendingChange={onPendingChange} onDone={onDone}
+          />
+        )}
+      </div>
+      {allowed.includes('publish') && publishBlockers.length > 0 && (
+        <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+          {publishBlockers.map((text) => <li key={text}>{text}</li>)}
+        </ul>
+      )}
+
+      {card.opened_at ? (
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="main">{t('tender.tenders.tabMain', 'Тендер')}</TabsTrigger>
+            <TabsTrigger value="comparison">{t('tender.tenders.tabComparison', 'Сравнение')}</TabsTrigger>
+            <TabsTrigger value="award">{t('tender.tenders.tabAward', 'Выбор')}</TabsTrigger>
+          </TabsList>
+          <TabsContent value="main" className="space-y-6">{mainSection}</TabsContent>
+          <TabsContent value="comparison">
+            <ComparisonTab tenderId={card.id} tenderNumber={card.number} />
+          </TabsContent>
+          <TabsContent value="award">
+            <AwardTab tenderId={card.id} onChanged={refresh} onConflict={() => setConflict(true)} />
+          </TabsContent>
+        </Tabs>
+      ) : mainSection}
 
       <AddParticipantDialog
         open={adding}

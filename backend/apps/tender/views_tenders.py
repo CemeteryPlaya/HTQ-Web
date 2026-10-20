@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-from django.http import HttpResponseRedirect
 
 from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error
@@ -209,10 +208,12 @@ def tender_comparison_export(request, tender_id):
 
 @api_view(methods=("GET",), module="tender", level="read")
 def tender_offer_file(request, tender_id, offer_id, doc_id):
-    """Файл КП вскрытого предложения — 302 на временную ссылку (журнал выдачи)."""
-    return HttpResponseRedirect(table.offer_file_link(
+    """Файл КП вскрытого предложения — ``{url}`` временной ссылки, как
+    ``…/versions/<id>/link`` подсистемы файлов: SPA ходит с JWT в заголовке,
+    и 302 браузерной ссылкой не открыть. Каждая выдача — в журнале."""
+    return {"url": table.offer_file_link(
         Ctx.from_request(request), tender_id, offer_id, doc_id,
-        ip=portal_access.client_ip(request), user_agent=portal_access.user_agent(request)))
+        ip=portal_access.client_ip(request), user_agent=portal_access.user_agent(request))}
 
 
 # ── участники ───────────────────────────────────────────────────────────
