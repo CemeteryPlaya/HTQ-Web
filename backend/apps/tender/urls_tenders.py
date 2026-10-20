@@ -25,6 +25,13 @@ urlpatterns = [
     path(f"{T}/extend/", views.tender_extend),
     path(f"{T}/cancel", views.tender_cancel),
     path(f"{T}/cancel/", views.tender_cancel),
+    # Этап 5: вскрытие, сравнение, выбор, передача, поставка.
+    path(f"{T}/open", views.tender_open),
+    path(f"{T}/open/", views.tender_open),
+    path(f"{T}/comparison", views.tender_comparison),
+    path(f"{T}/comparison/", views.tender_comparison),
+    path(f"{T}/offers/<str:offer_id>/files/<str:doc_id>", views.tender_offer_file),
+    path(f"{T}/offers/<str:offer_id>/files/<str:doc_id>/", views.tender_offer_file),
     path(f"{T}/invitations", views.invitations_collection),
     path(f"{T}/invitations/", views.invitations_collection),
     path(f"{INV}/revoke", views.invitation_revoke),

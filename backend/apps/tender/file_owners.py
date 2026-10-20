@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from apps.files import interface as files
 from apps.tender.models import Offer, TenderRequest
+from apps.tender.services.tenders import tenders
+from apps.tender.services.tenders.ctx import Ctx
 from apps.tender.services.core import audit
 from apps.tender.services.requests import crud
 
@@ -91,9 +93,15 @@ def _on_event(owner_id, event: str, actor_id: int | None, payload: dict) -> None
 # ── файлы КП поставщика (T3.4) ──────────────────────────────────────────
 
 def _offer_can_view(owner_id, token) -> bool:
-    """До вскрытия (этап 5) — только суперпользователь: цены и КП участников
-    закрыты от всех до срока (ТЗ TND-020)."""
-    return bool(getattr(token, "is_superuser", False))
+    """До вскрытия — только суперпользователь (обход платформы): цены и КП
+    участников закрыты от всех до срока (ТЗ TND-020). После вскрытия — тот,
+    кто видит тендер (автор, держатели ``tender.tenders.all``)."""
+    if getattr(token, "is_superuser", False):
+        return True
+    offer = Offer.objects.select_related("invitation__tender").filter(pk=owner_id).first()
+    if offer is None or offer.invitation.tender.opened_at is None:
+        return False
+    return tenders.can_view(Ctx.from_token(token), offer.invitation.tender)
 
 
 def _offer_can_modify(owner_id, token) -> None:

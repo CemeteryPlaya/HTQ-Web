@@ -12,6 +12,8 @@ from __future__ import annotations
 from django.db import models
 from django.db.models import Q
 
+from apps.signoff import interface as signoff
+
 from .core import TenderModel, VersionedModel
 from .request import TenderRequest
 
@@ -40,7 +42,11 @@ FINISHED_TENDER_STATUSES = (TenderStatus.CANCELLED, TenderStatus.FAILED, TenderS
 ACTIVE_TENDER_STATUSES = tuple(s for s in TenderStatus if s not in FINISHED_TENDER_STATUSES)
 
 
-class Tender(VersionedModel):
+class Tender(signoff.Approvable, VersionedModel):
+    # Предмет согласования выбора поставщиков (этап 5, маршрут
+    # «Проверка качества → ФД», ``approval_hooks.py``).
+    SIGNOFF_SUBJECT_TYPE = "tender.award"
+
     number = models.CharField(max_length=32)
     request = models.ForeignKey(TenderRequest, on_delete=models.PROTECT,
                                 related_name="tenders")
@@ -50,6 +56,9 @@ class Tender(VersionedModel):
     currency_code = models.CharField(max_length=3, default="KZT")
     delivery_terms = models.TextField(default="", blank=True)
     opened_at = models.DateTimeField(null=True, blank=True)
+    # Дата курса сравнения — местная дата вскрытия (T-12: курс НБРК
+    # последнего дня не позже неё).
+    rate_date = models.DateField(null=True, blank=True)
     round = models.PositiveSmallIntegerField(default=1, db_default=1)
     parent_tender = models.ForeignKey("self", on_delete=models.PROTECT, null=True,
                                       blank=True, related_name="rounds")
@@ -57,6 +66,9 @@ class Tender(VersionedModel):
     # закупщиком пользователь с ролью ``tender-quality``.
     quality_reviewer_user_id = models.IntegerField(null=True, blank=True)
     cancel_reason = models.TextField(default="", blank=True)
+    # Общий комментарий выбора (S5-07) и комментарий возврата с утверждения.
+    award_comment = models.TextField(default="", blank=True)
+    status_comment = models.TextField(default="", blank=True)
     status = models.CharField(max_length=16, choices=TenderStatus.choices,
                               default=TenderStatus.DRAFT)
 

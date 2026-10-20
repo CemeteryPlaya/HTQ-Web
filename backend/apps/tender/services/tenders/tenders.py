@@ -122,13 +122,28 @@ def intake_open(tender: Tender) -> bool:
             and tender.deadline_at > timezone.now())
 
 
+def everyone_answered(tender: Tender) -> bool:
+    """Каждое живое приглашение подало предложение или отказалось — тогда
+    вскрыть можно и до срока (S5-02): ни у кого не отнимут обещанное время."""
+    live = tender.invitations.filter(revoked_at__isnull=True)
+    return live.exists() and not live.exclude(
+        status__in=[InvitationStatus.SUBMITTED, InvitationStatus.DECLINED]).exists()
+
+
+def may_open(tender: Tender) -> bool:
+    """Вскрыть можно на приёме — после срока или когда ответили все."""
+    return tender.status == TenderStatus.INTAKE and (
+        not intake_open(tender) or everyone_answered(tender))
+
+
 def allowed_actions(ctx: Ctx, tender: Tender) -> list[str]:
     if tender.author_id != ctx.user_id or not ctx.can(NODE, "edit"):
         return []
     if tender.status == TenderStatus.DRAFT:
         return ["edit", "publish", "cancel", "invite"]
     if tender.status == TenderStatus.INTAKE:
-        return ["extend", "cancel", *(["invite"] if intake_open(tender) else [])]
+        return ["extend", "cancel", *(["invite"] if intake_open(tender) else []),
+                *(["open"] if may_open(tender) else [])]
     if tender.status in CANCELLABLE:
         return ["cancel"]
     return []

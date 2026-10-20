@@ -8,10 +8,14 @@
 
 from __future__ import annotations
 
+from django.http import HttpResponseRedirect
+
 from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services.comparison import opening, table
+from .services.portal import access as portal_access
 from .services.tenders import invitations, tenders
 from .services.tenders.ctx import Ctx
 
@@ -110,6 +114,26 @@ def tender_extend(request, tender_id, data):
 def tender_cancel(request, tender_id, data):
     return _card(request, tenders.cancel(Ctx.from_request(request), tender_id,
                                          expected_version=data.version, reason=data.reason))
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.TenderVersion,
+          idempotent=True)
+def tender_open(request, tender_id, data):
+    return _card(request, opening.open_tender(Ctx.from_request(request), tender_id,
+                                              expected_version=data.version))
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_comparison(request, tender_id):
+    return table.comparison(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_offer_file(request, tender_id, offer_id, doc_id):
+    """Файл КП вскрытого предложения — 302 на временную ссылку (журнал выдачи)."""
+    return HttpResponseRedirect(table.offer_file_link(
+        Ctx.from_request(request), tender_id, offer_id, doc_id,
+        ip=portal_access.client_ip(request), user_agent=portal_access.user_agent(request)))
 
 
 # ── участники ───────────────────────────────────────────────────────────

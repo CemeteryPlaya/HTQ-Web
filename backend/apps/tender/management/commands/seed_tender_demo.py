@@ -53,6 +53,7 @@ from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.signoff import interface as signoff
 from apps.tender.models import Invitation, Tender, TenderRequest
+from apps.tender.services.portal import access as portal_access
 from apps.tender.services.portal import offers
 from apps.tender.services.portal.actor import portal_actor
 from apps.tender.services.requests import crud, submit
@@ -338,7 +339,10 @@ class Command(BaseCommand):
                            "contact_name": "Сейткали А.", "phone": "+77010000001",
                            "email": PROSPECTS[0][1]}})
         # D: отказ с причиной; E молчит — при вскрытии станет «Срок истёк».
-        offers.decline(_portal(d), {"reason": "Нет нужного проката на складе до конца месяца"})
+        decliner = _portal(d)
+        offers.decline(decliner, {"reason": "Нет нужного проката на складе до конца месяца"},
+                       event=lambda kind, meta: portal_access.log_event(
+                           decliner.invitation, kind, user_agent="seed_tender_demo", meta=meta))
         self._close(tender)
         return tender
 
