@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { fetchCalendarTimeline } from '@/api/calendar';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { companyFromHost } from '@/lib/auth/companySwitch';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { Video } from 'lucide-react';
@@ -20,6 +21,11 @@ export const ConferenceNotifier = () => {
 
     // Only active if logged in
     const isAuth = Boolean(activeProfile);
+    // The timeline lives in the company's schema, so on the bare domain
+    // (company picker, /join links) there is nothing to ask for: a superuser
+    // passes the module gate there and the request failed with 500 every
+    // minute. The live socket notifications below don't depend on it.
+    const onCompanyHost = companyFromHost(window.location.host) !== null;
 
     // Fetch this month's timeline to find upcoming conferences
     const now = new Date();
@@ -29,7 +35,7 @@ export const ConferenceNotifier = () => {
     const { data: timeline } = useQuery({
         queryKey: ['calendar-timeline', format(startDate, 'yyyy-MM-dd'), format(endDate, 'yyyy-MM-dd')],
         queryFn: () => fetchCalendarTimeline(format(startDate, 'yyyy-MM-dd'), format(endDate, 'yyyy-MM-dd')),
-        enabled: isAuth,
+        enabled: isAuth && onCompanyHost,
         refetchInterval: 60000, // Refetch every minute just in case
     });
 

@@ -266,6 +266,9 @@ def apply_profile_fields(
         ("bio", bio),
         ("phone", phone),
     ]:
+        if isinstance(value, str) and field in ("display_name", "first_name",
+                                                 "last_name", "patronymic"):
+            value = value.strip()  # пробелы по краям ФИО — только мешают поиску
         if value is not None:
             limit = User._meta.get_field(field).max_length
             if limit is not None and len(value) > limit:

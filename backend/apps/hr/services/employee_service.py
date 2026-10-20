@@ -18,6 +18,7 @@ from django.db.models.functions import Concat
 
 from apps.hr.models import AuditLog, Department, Employee, EmployeeStatus, Position
 from apps.hr.services import audit_service
+from htqweb.tenancy.context import current_company_or_none
 
 
 class EmployeeNotFound(Exception):
@@ -132,6 +133,27 @@ def get_history(id: int) -> list[dict]:
 
 # ── запись ──────────────────────────────────────────────────────────────────
 
+def ensure_company_membership(user_id: int | None) -> None:
+    """Учётка, привязанная к карточке, — участник компании этой карточки.
+
+    Без членства токен на поддомен компании не выдаётся, и учётка оставалась
+    без входа, пока суперпользователь не выдаст членство руками, — хотя форма
+    «Создать нового пользователя» затем показывает пароль именно затем, чтобы
+    человек вошёл. Членство — только в ТЕКУЩЕЙ компании, с базовой ролью
+    ``employee-basic``; уже выданное не трогается (``grant_membership``
+    идемпотентна). Увольнение и удаление карточки членство не отзывают: это
+    отдельное решение, как и снятие ролей при отзыве членства.
+    """
+    if user_id is None:
+        return
+    slug = current_company_or_none()
+    if slug is None:  # public: компании ещё не заведены (pytest, dev до bootstrap)
+        return
+    from apps.companies import interface as companies
+
+    companies.grant_membership(slug, user_id)
+
+
 @transaction.atomic
 def create_employee(data, *, changed_by_id: int) -> Employee:
     _assert_department_exists(data.department_id)
@@ -151,6 +173,7 @@ def create_employee(data, *, changed_by_id: int) -> Employee:
         link_svc.assert_user_available(data.user_id)
 
     employee = Employee.objects.create(**data.model_dump())
+    ensure_company_membership(employee.user_id)
     audit_service.log(
         entity_type="employee",
         entity_id=employee.id,

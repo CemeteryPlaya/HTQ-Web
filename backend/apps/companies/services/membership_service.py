@@ -71,9 +71,11 @@ def grant_membership(company: Company, user_id: int, *,
     (``apps.access.interface.ensure_basic_role``, рулинг M финальной волны
     блока I): это ЕДИНСТВЕННАЯ точка ЛОГИКИ создания членства — через неё
     идут ``company_grant``, ``tenancy_bootstrap --grant-all``, экран
-    участников (``POST companies/<slug>/memberships``), ``seed_group_demo``
-    и ``CompanyMembershipAdmin.save_model`` (блок I.2, задача 9 — раньше
-    админка создавала строку напрямую, в обход сервиса), — и без роли новый
+    участников (``POST companies/<slug>/memberships``), ``seed_group_demo``,
+    ``CompanyMembershipAdmin.save_model`` (блок I.2, задача 9 — раньше
+    админка создавала строку напрямую, в обход сервиса) и привязка кадровой
+    карточки к учётке (``hr`` через ``companies.interface.grant_membership``,
+    только текущая компания), — и без роли новый
     участник получал бы 403 на подбор коллег и весь ``tasks``.
     Одной транзакцией: членство без роли не остаётся, если выдача упала.
     Уже существующему членству роль не довыдаётся — это делал перенос

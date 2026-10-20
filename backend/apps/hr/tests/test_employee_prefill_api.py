@@ -634,3 +634,76 @@ def test_create_employee_rejects_user_id_taken_by_another(admin_auth, hr_dep):
         "hire_date": "2026-02-01", "user_id": user.id,
     }, admin_auth)
     assert resp.status_code == 409
+
+
+# ── Членство: учётка, привязанная к карточке, входит в компанию ───────────
+#
+# Прод 12.10: учётки, заведённые из кадровой формы, оставались без членства,
+# и войти ими было нельзя, пока суперпользователь не выдаст его руками.
+
+def _member(user_id, slug):
+    from apps.companies import interface as companies
+
+    return companies.user_may_enter_company(user_id, slug)
+
+
+def _has_basic_role(user_id, slug):
+    from apps.access.models import RoleAssignment
+
+    return RoleAssignment.objects.filter(
+        company_slug=slug, user_id=user_id, role__code="employee-basic").exists()
+
+
+@pytest.mark.django_db
+def test_card_with_account_makes_it_a_company_member(admin_auth, hr_dep, company_row):
+    pos = _pos("Инженер", hr_dep, weight=104)
+    user = _user("new-member@htq.test")
+    assert not _member(user.id, company_row)
+
+    resp = _post(f"{BASE}/", {
+        "first_name": "Новый", "last_name": "Сотрудник", "email": "new-member@htq.test",
+        "department_id": hr_dep.id, "position_id": pos.id,
+        "hire_date": "2026-02-01", "user_id": user.id,
+    }, admin_auth)
+    assert resp.status_code == 201, resp.content
+    assert _member(user.id, company_row)
+    assert _has_basic_role(user.id, company_row)
+
+
+@pytest.mark.django_db
+def test_linking_account_on_existing_card_makes_it_a_member(admin_auth, target, company_row):
+    user = _user("link-member@htq.test", first_name="Иван", last_name="Иванов")
+
+    resp = _post(f"{BASE}/{target.id}/prefill/apply",
+                 {"source": {"type": "user", "id": user.id}, "fields": ["user_id"]},
+                 admin_auth)
+    assert resp.status_code == 200
+    assert _member(user.id, company_row)
+
+
+@pytest.mark.django_db
+def test_bulk_import_makes_accounts_company_members(admin_auth, hr_dep, company_row):
+    pos = _pos("Инженер", hr_dep, weight=97)
+    user = _user("bulk-member@htq.test", first_name="Первый", last_name="Участник")
+
+    resp = _post(f"{BASE}/bulk-import/", {
+        "user_ids": [user.id], "department_id": hr_dep.id,
+        "position_id": pos.id, "hire_date": "2026-01-15",
+    }, admin_auth)
+    assert resp.status_code == 200 and resp.json()["created_count"] == 1
+    assert _member(user.id, company_row)
+
+
+@pytest.mark.django_db
+def test_link_outside_company_context_still_links(hr_dep):
+    """Без компании (public, до заведения компаний) членство выдавать некуда —
+    привязка работает как раньше, без ошибки."""
+    from apps.hr.services import employee_prefill_service
+
+    pos = _pos("Инженер", hr_dep, weight=96)
+    card = _emp(hr_dep, pos, "no-company@htq.test")
+    user = _user("no-company-acc@htq.test")
+
+    assert employee_prefill_service.link_user(card.id, user.id) is True
+    card.refresh_from_db()
+    assert card.user_id == user.id

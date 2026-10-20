@@ -226,6 +226,12 @@ class ActingAssignmentUpdate(OrderedDates):
 _STATUS_PATTERN = r"^(active|inactive|terminated|suspended|pending|rejected)$"
 
 
+def _strip_name(v):
+    """Пробелы по краям ФИО только мешают: точный поиск по фамилии не находит
+    человека, и в списках он встаёт не на своё место."""
+    return v.strip() if isinstance(v, str) else v
+
+
 class EmployeeCreate(BaseModel):
     first_name: str = Field(..., max_length=100)
     last_name: str = Field(..., max_length=100)
@@ -239,6 +245,11 @@ class EmployeeCreate(BaseModel):
     avatar_url: str | None = Field(default=None, max_length=500)
     bio: str | None = None
     user_id: int | None = None
+
+    @field_validator("first_name", "last_name", "middle_name", mode="before")
+    @classmethod
+    def _strip_names(cls, v):
+        return _strip_name(v)
 
 
 class EmployeeUpdate(BaseModel):
@@ -256,6 +267,11 @@ class EmployeeUpdate(BaseModel):
     avatar_url: str | None = None
     bio: str | None = None
     termination_date: date | None = None
+
+    @field_validator("first_name", "last_name", "middle_name", mode="before")
+    @classmethod
+    def _strip_names(cls, v):
+        return _strip_name(v)
 
 
 class EmployeeTransfer(BaseModel):

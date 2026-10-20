@@ -50,6 +50,15 @@ class WeightTaken(Exception):
         super().__init__(self.detail)
 
 
+class TitleTaken(Exception):
+    """409: название должности уникально (``Position.title``). Без проверки
+    повтор падал в IntegrityError — 500 вместо понятного ответа."""
+
+    def __init__(self, title: str) -> None:
+        self.detail = f"Должность «{title}» уже есть — выберите её в списке."
+        super().__init__(self.detail)
+
+
 class WeightInvalid(Exception):
     """422: отрицательный вес."""
 
@@ -320,6 +329,14 @@ def _assert_weight_free(weight: int, exclude_id: int | None = None) -> None:
         raise WeightTaken(weight, existing)
 
 
+def _assert_title_free(title: str, exclude_id: int | None = None) -> None:
+    qs = Position.objects.filter(title=title)
+    if exclude_id is not None:
+        qs = qs.exclude(id=exclude_id)
+    if qs.exists():
+        raise TitleTaken(title)
+
+
 def _assert_threshold_range_free(*, level_number: int, weight_from: int, weight_to: int) -> None:
     if weight_from > weight_to:
         raise ThresholdRangeInvalid()
@@ -385,6 +402,7 @@ def get_position(id: int) -> Position:
 
 @transaction.atomic
 def create_position(data) -> Position:
+    _assert_title_free(data.title)
     payload = data.model_dump()
     requested_level = payload.pop("level", None)
     if requested_level is not None:
@@ -437,6 +455,9 @@ def update_position(id: int, data, *, actor_user_id: int | None = None) -> Posit
         blocked = {"title", "department_id", "is_active"} & patch.keys()
         if blocked:
             raise SystemPositionFieldsLocked(blocked)
+
+    if "title" in patch:
+        _assert_title_free(patch["title"], exclude_id=pos.id)
 
     if patch:
         for field, value in patch.items():
