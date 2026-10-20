@@ -45,6 +45,8 @@ export const ACCESS_MODULES: readonly AccessModule[] = [
   { name: 'project', titleKey: 'access.modules.project', fallback: 'Проекты' },
   { name: 'refdata', titleKey: 'access.modules.refdata', fallback: 'Справочники' },
   { name: 'notifications', titleKey: 'access.modules.notifications', fallback: 'Уведомления' },
+  // Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md).
+  { name: 'tender', titleKey: 'access.modules.tender', fallback: 'Тендеры' },
 ] as const;
 
 export const MODULE_NAMES: readonly string[] = ACCESS_MODULES.map((m) => m.name);

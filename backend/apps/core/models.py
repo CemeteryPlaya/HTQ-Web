@@ -5,7 +5,7 @@ from django.db import models
 KNOWN_SERVICES = ["users", "hr", "tasks", "approvals", "cms",
                   "media", "mail", "messenger", "conference", "contracts",
                   "signoff", "companies", "access", "files",
-                  "project", "refdata", "notifications", "bpp"]
+                  "project", "refdata", "notifications", "bpp", "tender"]
 
 # Подмодули с собственным рубильником: подмодуль → родительский сервис из
 # KNOWN_SERVICES (вложенность одна). Подмодуль гаснет вместе с родителем

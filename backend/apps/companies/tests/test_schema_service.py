@@ -30,5 +30,7 @@ def test_drop_is_idempotent():
 def test_tenant_apps_are_the_fixed_domain_apps(settings):
     # Состав фиксирован архитектурным решением: новая тенантная аппка
     # добавляется сюда осознанно (модуль БЗО — bpp и project, мастер-план
-    # D-01, D-02).
-    assert settings.TENANT_APPS == ("hr", "tasks", "contracts", "signoff", "bpp", "project")
+    # D-01, D-02; тендерный модуль — tender, docs/plans/2026-10-06-tender-
+    # master-plan.md, T-01).
+    assert settings.TENANT_APPS == ("hr", "tasks", "contracts", "signoff", "bpp", "project",
+                                    "tender")

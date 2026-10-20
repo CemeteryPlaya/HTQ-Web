@@ -140,6 +140,8 @@ INSTALLED_APPS = [
     "apps.notifications",  # центр уведомлений, public · /api/notifications/v1/
     "apps.project",        # «Проект» · /api/project/v1/ (TENANT_APPS — с 0001_initial)
     "apps.bpp",            # закупки и оплаты · /api/bpp/v1/ (TENANT_APPS — с 0001_core)
+    # Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md).
+    "apps.tender",         # тендеры · /api/tender/v1/ (TENANT_APPS — с 0001_core)
 ]
 
 # Аппки, чьи таблицы живут в схеме КОМПАНИИ, а не в public. Всё остальное
@@ -148,7 +150,7 @@ INSTALLED_APPS = [
 #
 # Кортеж, а не список: набор фиксирован архитектурным решением, и случайный
 # .append() в чужом модуле не должен его расширять.
-TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project")
+TENANT_APPS = ("hr", "tasks", "contracts", "signoff", "bpp", "project", "tender")
 
 MIDDLEWARE = [
     # Prometheus-пара обязана обнимать ВЕСЬ список: Before — первой, After —
@@ -332,8 +334,14 @@ LOGGING = {
     "formatters": {
         "app": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
     },
+    # Токен ссылки портала поставщика — часть пути, а django.request пишет путь
+    # каждого 4xx: фильтр меняет его на ``***`` (htqweb/logmask.py).
+    "filters": {
+        "mask_secret_paths": {"()": "htqweb.logmask.MaskSecretPaths"},
+    },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "app"},
+        "console": {"class": "logging.StreamHandler", "formatter": "app",
+                    "filters": ["mask_secret_paths"]},
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", "INFO")},
     # Логгеры БЕЗ собственных handlers + propagate=True (дефолт): записи идут в
@@ -341,7 +349,8 @@ LOGGING = {
     # root) их видит. Здесь — только уровни.
     "loggers": {
         "django": {"level": "INFO"},
-        "django.request": {"level": "WARNING"},
+        "django.request": {"level": "WARNING", "filters": ["mask_secret_paths"]},
+        "django.server": {"filters": ["mask_secret_paths"]},
         "django.db.backends": {"level": "WARNING"},
         "apps": {"level": env("APP_LOG_LEVEL", "INFO")},
         "htqweb": {"level": env("APP_LOG_LEVEL", "INFO")},
@@ -409,6 +418,18 @@ CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
 # Публичный адрес платформы для сборки ссылок в письмах и сообщениях: там,
 # в отличие от браузера, origin взять неоткуда.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
+
+# ── Портал поставщика тендерного модуля (план этапа 3, §1; T-21) ────────────
+# Cookie устройства — ``__Secure-tender_device`` (HttpOnly; Secure;
+# SameSite=Strict). ``True`` — имя ``tender_device`` без Secure: только стенд
+# без HTTPS (settings.dev, settings.test). На бою — всегда False.
+TENDER_PORTAL_INSECURE_COOKIE = False
+# Лимиты портала: запросов в минуту на токен ссылки и на IP, привязок
+# устройства в час на токен, загрузок файлов КП в час на приглашение.
+TENDER_PORTAL_TOKEN_LIMIT = int(env("TENDER_PORTAL_TOKEN_LIMIT", "120"))
+TENDER_PORTAL_IP_LIMIT = int(env("TENDER_PORTAL_IP_LIMIT", "300"))
+TENDER_PORTAL_BIND_LIMIT = int(env("TENDER_PORTAL_BIND_LIMIT", "10"))
+TENDER_PORTAL_UPLOAD_LIMIT = int(env("TENDER_PORTAL_UPLOAD_LIMIT", "30"))
 
 # ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
 # Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию

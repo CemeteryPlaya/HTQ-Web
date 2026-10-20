@@ -85,6 +85,7 @@ rules_count="$("$RULES_PYTHON" scripts/monitoring/grafana_rules_to_promtool.py \
     infra/logging/grafana-provisioning/alerting/rules.yml \
     "$RULES_TMP_HOST/grafana_rules.yml" \
     --match htqweb_bpp_ \
+    --match htqweb_tender_ \
     --uid htqweb-auth-lockout-burst \
     --uid htqweb-antivirus-unavailable \
     --tests infra/logging/promtool-tests/bpp_rules_test.yml)" \
@@ -95,7 +96,7 @@ docker run --rm \
     -v "$HOST_PWD/infra/logging/promtool-tests:/tests:ro" \
     --entrypoint promtool "$PROM_IMAGE" test rules /tests/bpp_rules_test.yml >&2 \
     || fail "правила не срабатывают так, как ждут тесты infra/logging/promtool-tests/bpp_rules_test.yml"
-ok "правила БЗО срабатывают на подложенных данных ($rules_count)"
+ok "правила БЗО и тендеров срабатывают на подложенных данных ($rules_count)"
 
 # ─── 2. compose-файлы ────────────────────────────────────────────────────────
 # Значения-заглушки: у прод-файла обязательные переменные объявлены через :?,

@@ -157,6 +157,16 @@ def test_text_starting_with_equals_is_not_a_formula():
     assert (cell.value, cell.data_type) == ("=1+2", "s")
 
 
+@pytest.mark.parametrize("value", ["+7701000", "-2+3", "@SUM(A1)", "	cmd"])
+def test_every_formula_prefix_is_text(value):
+    """T-27: не только «=» — плюс, минус, @ и табуляция тоже пишутся текстом."""
+    columns = (export.Column("name", "Наименование"),)
+    ws = openpyxl.load_workbook(
+        io.BytesIO(export.write_xlsx("Р", columns, [{"name": value}]))).active
+    cell = ws.cell(row=2, column=1)
+    assert (cell.value, cell.data_type) == (value, "s")
+
+
 def test_sheet_title_drops_characters_excel_forbids():
     data = export.write_xlsx("Реестр: счета [2026]/сентябрь", COLUMNS, ())
     assert openpyxl.load_workbook(io.BytesIO(data)).active.title == "Реестр счета 2026сентябрь"

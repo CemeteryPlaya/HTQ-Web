@@ -118,6 +118,17 @@ class Invoice(signoff.Approvable, VersionedModel):
     # Лимит альтернативных предложений (A5.1, ТЗ §12.1, D-S5-2): 3 по
     # умолчанию, как у договора; поднимает СН — автор счёта, не выше 10.
     alt_limit = models.PositiveSmallIntegerField(default=3, db_default=3)
+    # Документ из тендера (пакет B-2, тендер T5.3): номер ТН и ключ передачи
+    # «приглашение:часть» — идемпотентность ``create_documents_from_tender``.
+    source_tender = models.CharField(max_length=32, default="", blank=True, db_default="")
+    tender_key = models.CharField(max_length=80, default="", blank=True, db_default="")
+    # Схема 3 тендера (T-15): оплата после приёмки, срок — приёмка + N
+    # банковских дней (S5-12); отметку приёмки ставит тендер (``set_acceptance``).
+    pay_after_receipt = models.BooleanField(default=False, db_default=False)
+    postpay_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    received_at = models.DateField(null=True, blank=True)
+    originals_at = models.DateField(null=True, blank=True)
+    originals_to = models.CharField(max_length=255, default="", blank=True, db_default="")
 
     class Meta:
         constraints = [
@@ -133,6 +144,9 @@ class Invoice(signoff.Approvable, VersionedModel):
                                          "not_payable"]) & ~Q(ext_number=""),
                 name="uq_bpp_invoice_ext"),
             models.CheckConstraint(condition=Q(amount__gte=0), name="ck_bpp_invoice_amount"),
+            # Передача тендера идемпотентна: один счёт на ключ передачи.
+            models.UniqueConstraint(fields=["tender_key"], condition=~Q(tender_key=""),
+                                    name="uq_bpp_invoice_tender_key"),
             models.CheckConstraint(
                 condition=(Q(basis="contract", agreement__isnull=False)
                            | Q(basis="no_contract", agreement__isnull=True)),

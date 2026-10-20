@@ -26,7 +26,8 @@ from django.db import transaction
 from apps.bpp.models import AlternativeOffer, Invoice, InvoiceStatus
 from apps.bpp.models.alternatives import OfferSource
 from apps.bpp.services.actor import Actor
-from apps.bpp.services.alternatives import kpi, lifecycle
+from apps.bpp.services.alternatives import lifecycle
+from apps.bpp.services.core import doc_listeners
 from apps.bpp.services.core.errors import check_version
 from apps.bpp.services.invoices import decisions
 from apps.bpp.services.invoices import invoices as service
@@ -82,7 +83,8 @@ def select(actor: Actor, invoice_id, *, offer_id, comment: str,
         inv.refresh_from_db()
     inv.status, inv.status_comment = InvoiceStatus.REPLACED, comment
     service.touch(inv, actor.user_id, "status", "status_comment")
-    kpi.sync_for_document("invoice", inv.pk)       # B-5: переход тоже синхронизирует KPI
+    # B-5: переход синхронизирует KPI; документ из тендера узнаёт о замене (T-18).
+    doc_listeners.status_changed("invoice", inv.pk)
     offer.refresh_from_db()
     replaced = documents.replace_with(offer, inv, selector_id=actor.user_id)
     return {"invoice": inv, **replaced}

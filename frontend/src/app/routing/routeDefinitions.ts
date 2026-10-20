@@ -16,6 +16,9 @@ export const publicRoutes: RouteConfig[] = [
   // Вход в конференцию по ссылке-приглашению: сюда приходит внешний
   // участник, у которого учётки нет вовсе (см. ConferenceJoin.tsx).
   { path: '/join/:token', component: lazyPages.ConferenceJoin },
+  // Портал поставщика тендера (этап 3): внешний участник без учётки, вход по
+  // токену ссылки и cookie устройства, без layout приложения.
+  { path: '/supplier/:token', component: lazyPages.SupplierTender },
   // Комната открыта без обязательной авторизации намеренно: в ней может
   // оказаться гость с токеном из sessionStorage. Право войти проверяет не
   // маршрут, а SFU — он принимает гостевой токен только в ту комнату, на
@@ -164,6 +167,12 @@ export const protectedRoutes: RouteConfig[] = [
   // Сюда же ведут ссылки согласования и уведомлений (`/bpp/requests/<id>`,
   // `/bpp/accountable/<id>`). Права на сам документ проверяет бэкенд.
   { path: '/bpp/*', component: lazyPages.BppLayout, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
+
+  // ─── Тендерный модуль (apps.tender): раздел «Тендеры» ─────────────────
+  // Как у БЗО: один маршрут на раздел, меню и экраны приносят подразделы
+  // (`features/tender/<подраздел>/module.tsx`), `TenderLayout` раскладывает их.
+  // Портал поставщика (этап 3) — отдельно, в `publicRoutes`, без общего layout.
+  { path: '/tender/*', component: lazyPages.TenderLayout, requiresAuth: true, requires: { module: 'tender', level: 'read' } },
 
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },

@@ -15,11 +15,15 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
+
+from django.db import transaction
+from django.utils import timezone
 
 from apps.core.services import require_service
 
-from .errors import E_REQUIRED, FilesError, envelope
+from .errors import E_REQUIRED, FilesError, envelope, not_found
 from .models import FileObject, FileType
 from .services import documents
 from .services.documents import owner_company
@@ -33,7 +37,7 @@ __all__ = [
     "register_owner", "live_document_count", "missing_required",
     "required_files_error", "owners_with_documents", "owner_deleted",
     "adopt_media_file", "assign_company", "current_files",
-    "attach_bytes", "replace_bytes", "download_link", "find_version",
+    "attach_bytes", "replace_bytes", "download_link", "find_version", "remove_document",
 ]
 
 
@@ -196,3 +200,41 @@ def find_version(file_id) -> dict | None:
     версия»."""
     require_service("files")
     return documents.find_version(file_id)
+
+
+def remove_document(owner_type: str, owner_id: Any, document_id, *, actor_id: int | None,
+                    ip: str | None = None, user_agent: str | None = None) -> None:
+    """Удалить документ со всеми версиями из кода владельца (права проверил
+    он сам — у портала поставщика ``token`` нет). Правила — как у ручки
+    удаления: у ни разу не отправленного владельца строки и байты уходят
+    физически (байты — после коммита), иначе версии получают ``deleted_at``;
+    журнал — ``file_deleted`` с IP и user-agent. Нет такого документа у
+    владельца — ``FilesError`` 404 ``E-FIL-05``; уже удалён — ничего."""
+    require_service("files")
+    ref = documents.owner_ref(owner_type, owner_id)
+    try:
+        document_id = uuid.UUID(str(document_id))
+    except (TypeError, ValueError, AttributeError):
+        raise not_found() from None
+    with transaction.atomic():
+        ref.entry.lock(ref.owner_id)
+        rows = list(documents._owner_qs(ref).filter(document_id=document_id)
+                    .order_by("version_no"))
+        if not rows:
+            raise not_found()
+        live = [row for row in rows if row.deleted_at is None]
+        if not live:
+            return
+        current = rows[-1]
+        physical = not ref.entry.was_sent(ref.owner_id)
+        if physical:
+            FileObject.objects.filter(pk__in=[row.pk for row in rows]).delete()
+            documents._discard_after_commit([row.media_file_id for row in rows])
+        else:
+            FileObject.objects.filter(pk__in=[row.pk for row in live]).update(
+                deleted_at=timezone.now(), deleted_by_id=actor_id)
+        documents._event(ref, documents.EVENT_DELETED, actor_id, {
+            "document_id": str(document_id), "name": current.name,
+            "file_type": current.file_type_id, "versions": len(rows),
+            "physical": physical,
+        }, {"ip": ip or "", "user_agent": user_agent or ""})

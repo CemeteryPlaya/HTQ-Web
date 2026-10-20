@@ -22,6 +22,21 @@ describe('routeDefinitions', () => {
         expect(duplicates).toEqual([]);
     });
 
+    it('раздел «Тендеры» — один маршрут /tender/* под гейтом tender:read (T0.4)', () => {
+        const tender = protectedRoutes.filter((r) => r.path.startsWith('/tender'));
+        expect(tender.map((r) => r.path)).toEqual(['/tender/*']);
+        expect(tender[0].requires).toEqual({ module: 'tender', level: 'read' });
+        expect(isKnownModule('tender')).toBe(true);
+    });
+
+    it('портал поставщика /supplier/:token — публичный маршрут без гейта (T3.5)', () => {
+        const portal = publicRoutes.find((r) => r.path === '/supplier/:token');
+        expect(portal).toBeDefined();
+        expect(portal?.requiresAuth).toBeFalsy();
+        expect(portal?.requires).toBeUndefined();
+        expect(protectedRoutes.some((r) => r.path.startsWith('/supplier'))).toBe(false);
+    });
+
     it('не содержит дублирующихся публичных путей', () => {
         const paths = publicRoutes.map((r) => r.path);
         const duplicates = paths.filter((p, i) => paths.indexOf(p) !== i);

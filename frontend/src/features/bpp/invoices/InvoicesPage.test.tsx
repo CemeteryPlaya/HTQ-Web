@@ -254,6 +254,18 @@ describe('InvoicesPage', () => {
     expect(locationSearch()).toBe('');
   });
 
+  it('счёт из тендера без приёмки — «ждёт приёмки» под сроком оплаты', { timeout: 20000 }, async () => {
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.includes('invoices') ? {
+      items: [{ ...ROW, awaiting_receipt: true }, { ...ROW, id: 'inv2', number: 'СЧ-2026-000002' }],
+      total: 2, page: 1, page_size: 50, totals: { amount_kzt: '2000.00', paid_bank_amount: '0.00' },
+    } : [] }));
+    renderAt('/bpp/invoices');
+    const waiting = (await screen.findByText('СЧ-2026-000001')).closest('tr')!;
+    expect(within(waiting).getByText('ждёт приёмки')).toBeInTheDocument();
+    const plain = screen.getByText('СЧ-2026-000002').closest('tr')!;
+    expect(within(plain).queryByText('ждёт приёмки')).toBeNull();
+  });
+
   it.each(['all', 'bogus'])('?tab=%s приводится к адресу без параметра — вкладка «Все»', { timeout: 20000 }, async (value) => {
     renderAt(`/bpp/invoices?tab=${value}`);
     expect(await screen.findByRole('tab', { name: 'Все' })).toHaveAttribute('aria-selected', 'true');

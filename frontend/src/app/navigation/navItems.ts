@@ -19,6 +19,7 @@ import {
   FileSignature,
   FileText,
   FolderOpen,
+  Gavel,
   Mail,
   MessageCircle,
   Newspaper,
@@ -30,7 +31,7 @@ import {
 
 /** Какое право нужно, чтобы раздел был виден. */
 export type NavRequirement =
-  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail' | 'bpp' | 'contracts';
+  'always' | 'editor' | 'hr' | 'tasks' | 'department' | 'messenger' | 'mail' | 'bpp' | 'tender' | 'contracts';
 
 export interface NavItem {
   /** Стабильный ключ для React и тестов. */
@@ -56,6 +57,8 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'signoff', href: '/signoff', icon: Stamp, labelKey: 'signoff.nav.title', labelFallback: 'Согласования', requires: 'always' },
   // Модуль БЗО: раздел со своим левым меню (`features/bpp/BppLayout`).
   { id: 'bpp', href: '/bpp', icon: ShoppingCart, labelKey: 'bpp.nav.title', labelFallback: 'Закупки и оплаты', requires: 'bpp' },
+  // Тендерный модуль: раздел со своим левым меню (`features/tender/TenderLayout`).
+  { id: 'tender', href: '/tender', icon: Gavel, labelKey: 'tender.nav.title', labelFallback: 'Тендеры', requires: 'tender' },
   { id: 'employees', href: '/hr/employees', icon: Users, labelKey: 'profile.sidebar.employees', labelFallback: 'Сотрудники', requires: 'hr', inBottomNav: true },
   { id: 'files', href: '/files', icon: FolderOpen, labelKey: 'nav.files', labelFallback: 'Файлы', requires: 'department', inBottomNav: true },
   { id: 'news', href: '/news', icon: Newspaper, labelKey: 'header.news', labelFallback: 'Новости', requires: 'always' },
@@ -71,6 +74,8 @@ export interface NavAbilities {
   hasMail: boolean;
   /** `bpp:read` — раздел «Закупки и оплаты» (гейт маршрута `/bpp/*` тот же). */
   hasBpp: boolean;
+  /** `tender:read` — раздел «Тендеры» (гейт маршрута `/tender/*` тот же). */
+  hasTender?: boolean;
   /**
    * Раздел «Договоры» заморожен после переноса в БЗО (A6.2). Тогда пункт
    * «Договоры» уходит из шапки в меню «Закупок и оплат» как «Архив
@@ -90,6 +95,7 @@ const allowed = (item: NavItem, a: NavAbilities): boolean => {
     case 'messenger': return a.hasMessenger;
     case 'mail': return a.hasMail;
     case 'bpp': return a.hasBpp;
+    case 'tender': return Boolean(a.hasTender);
     case 'contracts': return !(a.contractsFrozen && a.hasBpp);
     default: return false;
   }
