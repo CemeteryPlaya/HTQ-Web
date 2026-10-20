@@ -45,3 +45,7 @@ class TenderConfig(AppConfig):
         from .services.requests import status
 
         bpp.register_request_listener(status.on_bpp_status)
+        # Счета и договоры из тендера (этап 5): закрывающие на счёт и закрытие тендера.
+        from .services.delivery import closing
+
+        bpp.register_document_listener(closing.on_document)

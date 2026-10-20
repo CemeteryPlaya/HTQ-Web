@@ -7,6 +7,7 @@
 
 from .award import Award
 from .core import AuditLog, NumberSequence, TenderModel, VersionedModel
+from .delivery import Handover, Receipt, ReceiptKind, ReceiptLine
 from .offer import ExtraKind, Offer, OfferExtra, OfferLine, OfferStatus
 from .portal import PortalEvent, PortalEventKind
 from .request import (
@@ -36,7 +37,8 @@ from .tender import (
 )
 
 __all__ = [
-    "Award", "PortalEvent", "PortalEventKind",
+    "Award", "Handover", "PortalEvent", "PortalEventKind", "Receipt", "ReceiptKind",
+    "ReceiptLine",
     "ExtraKind", "Offer", "OfferExtra", "OfferLine", "OfferStatus",
     "ACTIVE_TENDER_STATUSES", "DeviceBinding", "Invitation", "InvitationStatus",
     "PaymentKind", "PaymentScheme", "PaymentStage", "PaymentTrigger", "SupplierContact",

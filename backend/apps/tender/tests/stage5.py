@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 from django.utils import timezone
 
+from apps.bpp.management.commands.seed_bpp_demo import bin_with_checksum
 from apps.refdata.models import ExchangeRate
 from apps.tender.models import (
     Invitation,
@@ -110,7 +111,7 @@ def build(slug: str, *, close: bool = True, rate_on=None, offers_from: str = "AB
                               name="ТОО «Демо Электро»")
         prospects = {key: SupplierProspect.objects.create(
             name=name, email=f"{key.lower()}{n}@supplier.kz", reg_number=reg, country_code="KZ")
-            for key, name, reg in (("C", "ТОО «Демо Снаб»", f"9{n:02d}0000000003"),
+            for key, name, reg in (("C", "ТОО «Демо Снаб»", bin_with_checksum(f"98{n:02d}0000003")),
                                    ("D", "ИП «Демо Склад»", ""),
                                    ("E", "ТОО «Демо Молчун»", ""))}
 

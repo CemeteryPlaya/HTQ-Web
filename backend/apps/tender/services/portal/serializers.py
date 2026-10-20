@@ -13,7 +13,7 @@ from django.utils import timezone
 from apps.companies import interface as companies
 from apps.files import interface as files
 from apps.refdata import interface as refdata
-from apps.tender.models import PaymentScheme, Tender, TenderStatus
+from apps.tender.models import Award, InvitationStatus, PaymentScheme, Tender, TenderStatus
 from apps.tender.services.tenders import schemes
 
 from .access import PortalContext, company_slug
@@ -49,9 +49,33 @@ def spec_files(tender: Tender) -> list[dict]:
             for row in files.current_files(SPEC_OWNER, tender.request_id, SPEC_TYPE)]
 
 
-def _result(tender: Tender) -> str:
-    """Итог для поставщика. До утверждения выбора (этап 5) — «ожидается»."""
+#: Тендер, по которому выбор утверждён, — итог известен (TND-035).
+_DECIDED = (TenderStatus.AWARDED, TenderStatus.HANDED_OVER, TenderStatus.DELIVERY,
+            TenderStatus.CLOSED)
+
+
+def _result(tender: Tender, invitation) -> str:
+    """Итог для поставщика (TND-035): «ожидается решение», «выбрано по
+    позициям», «не выбрано», «отменён», «не состоялся»."""
+    if tender.status == TenderStatus.CANCELLED:
+        return "cancelled"
+    if tender.status == TenderStatus.FAILED:
+        return "failed"
+    if tender.status in _DECIDED:
+        return "awarded" if invitation.status == InvitationStatus.AWARDED else "not_awarded"
     return "awaiting"
+
+
+def _result_items(tender: Tender, invitation) -> list[dict]:
+    """Свои выбранные позиции — только у победителя и только после утверждения;
+    чужих сумм и поставщиков здесь нет (белый список)."""
+    if tender.status not in _DECIDED or invitation.status != InvitationStatus.AWARDED:
+        return []
+    rows = (Award.objects.filter(tender=tender, offer__invitation=invitation,
+                                 line__isnull=False)
+            .select_related("line__item").order_by("line__item__line_no"))
+    return [{"line_no": a.line.item.line_no, "name": a.line.item.name, "qty": str(a.qty)}
+            for a in rows]
 
 
 def tender_view(request, ctx: PortalContext) -> dict:
@@ -81,5 +105,6 @@ def tender_view(request, ctx: PortalContext) -> dict:
         "files": spec_files(tender),
         "intake_open": intake_open(tender),
         "participation_status": ctx.invitation.status,
-        "result": _result(tender),
+        "result": _result(tender, ctx.invitation),
+        "result_items": _result_items(tender, ctx.invitation),
     }

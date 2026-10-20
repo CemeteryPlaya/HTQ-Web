@@ -246,6 +246,31 @@ class AwardIn(BaseModel):
     extras: list[AwardExtraIn] = []
 
 
+class ReceiptLineIn(BaseModel):
+    award_id: str
+    qty: Decimal
+
+
+class ReceiptIn(BaseModel):
+    """``POST tenders/<id>/receipts`` — приёмка товара или работ."""
+    invitation_id: str
+    received_at: date
+    kind: str = "goods"
+    lines: list[ReceiptLineIn] = []
+    comment: str = ""
+    originals_at: date | None = None
+    originals_to: str = ""
+
+
+class ReceiptOriginalsIn(BaseModel):
+    originals_at: date | None = None
+    originals_to: str = ""
+
+
+class ReceiptCancelIn(BaseModel):
+    comment: str = ""
+
+
 class PortalVersionIn(BaseModel):
     version: int
 

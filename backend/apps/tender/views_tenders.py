@@ -15,6 +15,8 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .services.comparison import export as comparison_export
+from .services.delivery import receipts, stages
+from .services.award import handover as award_handover
 from .services.award import selection
 from .services.award import submit as award_submit
 from .services.comparison import opening, table
@@ -146,6 +148,50 @@ def tender_award_put(request, tender_id, data):
 def tender_award_submit(request, tender_id, data):
     return award_submit.submit(Ctx.from_request(request), tender_id,
                                expected_version=data.version)
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.TenderVersion,
+          idempotent=True)
+def tender_handover(request, tender_id, data):
+    return award_handover.handover(Ctx.from_request(request), tender_id,
+                                   expected_version=data.version)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_delivery(request, tender_id):
+    return stages.delivery(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_receipts_get(request, tender_id):
+    return receipts.list_for(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.ReceiptIn,
+          idempotent=True, status=201)
+def tender_receipts_post(request, tender_id, data):
+    return receipts.create(Ctx.from_request(request), tender_id, data.model_dump())
+
+
+def tender_receipts(request, tender_id):
+    if request.method == "GET":
+        return tender_receipts_get(request, tender_id)
+    if request.method == "POST":
+        return tender_receipts_post(request, tender_id)
+    return json_error("Method Not Allowed", 405)
+
+
+@api_view(methods=("PATCH",), module="tender", level="write", body=schemas.ReceiptOriginalsIn)
+def tender_receipt_originals(request, tender_id, receipt_id, data):
+    return receipts.set_originals(Ctx.from_request(request), tender_id, receipt_id,
+                                  data.model_dump())
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.ReceiptCancelIn,
+          idempotent=True)
+def tender_receipt_cancel(request, tender_id, receipt_id, data):
+    return receipts.cancel(Ctx.from_request(request), tender_id, receipt_id,
+                           comment=data.comment)
 
 
 def tender_award(request, tender_id):

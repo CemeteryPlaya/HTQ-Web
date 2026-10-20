@@ -149,6 +149,10 @@ def allowed_actions(ctx: Ctx, tender: Tender) -> list[str]:
         actions = ["cancel", "award", *(["award_submit"] if tender.awards.exists() else [])]
     elif tender.status in CANCELLABLE:
         actions = ["cancel"]
+    elif tender.status == TenderStatus.AWARDED:
+        actions = ["handover"]              # документы в БЗО (этап 5)
+    elif tender.status in (TenderStatus.HANDED_OVER, TenderStatus.DELIVERY):
+        actions = ["receipt"]               # отметить получение (этап 5)
     else:
         actions = []
     if tender.status in REVIEWER_EDITABLE:

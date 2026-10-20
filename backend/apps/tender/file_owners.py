@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 from apps.files import interface as files
-from apps.tender.models import Offer, TenderRequest
+from apps.tender.models import Offer, Receipt, TenderRequest
 from apps.tender.services.tenders import tenders
 from apps.tender.services.tenders.ctx import Ctx
 from apps.tender.services.core import audit
@@ -117,7 +117,72 @@ def _offer_lock(owner_id) -> None:
     Offer.objects.select_for_update().filter(pk=owner_id).first()
 
 
+# ── сканы и фото приёмки (T5.5) ──────────────────────────────────────────
+
+RECEIPT_OWNER = "tender.receipt"
+CLOSING_TYPES = ("tender_waybill", "tender_act", "tender_vat_invoice")
+
+
+def _receipt(owner_id):
+    return Receipt.objects.select_related("tender").filter(pk=owner_id).first()
+
+
+def _receipt_can_view(owner_id, token) -> bool:
+    receipt = _receipt(owner_id)
+    if receipt is None:
+        return False
+    if getattr(token, "is_superuser", False):
+        return True
+    return tenders.can_view(Ctx.from_token(token), receipt.tender)
+
+
+def _receipt_can_view_type(owner_id, token, file_type) -> bool:
+    """Сканы закрывающих видит тот же круг, что в БЗО (T-17): автор
+    (закупщик), ФД, БУХ, ГД — но не ОД (``tender-viewer``) и не проверяющий
+    качества. Фото поставки — все, кто видит тендер."""
+    if file_type not in CLOSING_TYPES or getattr(token, "is_superuser", False):
+        return True
+    receipt = _receipt(owner_id)
+    ctx = Ctx.from_token(token)
+    if receipt is not None and receipt.tender.author_id == ctx.user_id:
+        return True
+    return (ctx.can("tender.award.approve", "edit") or ctx.can("bpp.invoices.payment", "edit")
+            or ctx.can("bpp.invoices.closing_docs", "view"))
+
+
+def _receipt_can_modify(owner_id, token) -> None:
+    receipt = _receipt(owner_id)
+    if receipt is None or receipt.tender.author_id != int(getattr(token, "user_id", 0) or 0):
+        raise files.FilesForbidden("Сканы и фото приёмки прикладывает автор тендера.")
+    if receipt.cancelled_at is not None:
+        raise files.FilesLocked("Приёмка отменена — файлы к ней не прикладываются.")
+
+
+def _receipt_lock(owner_id) -> None:
+    Receipt.objects.select_for_update().filter(pk=owner_id).first()
+
+
+def _receipt_on_event(owner_id, event, actor_id, payload) -> None:
+    """Новый скан — сразу на счёт поставщика, если БУХ уже ждёт закрывающих."""
+    if event != "file_attached":
+        return
+    from apps.tender.services.delivery import closing
+
+    receipt = _receipt(owner_id)
+    if receipt is not None:
+        closing.attach_for_supplier(receipt.tender, receipt.invitation_id)
+
+
 def register() -> None:
+    files.register_owner(
+        RECEIPT_OWNER, label="Приёмка (тендер)", service="tender", tenant=True,
+        folder="tender-receipt", model=Receipt,
+        file_types=tuple(files.FileTypeSpec(code, max_documents=10)
+                         for code in (*CLOSING_TYPES, "tender_photo")),
+        can_view=_receipt_can_view, can_modify=_receipt_can_modify,
+        was_sent=lambda owner_id: False, lock=_receipt_lock, on_event=_receipt_on_event,
+        can_view_type=_receipt_can_view_type,
+    )
     files.register_owner(
         OFFER_OWNER, label="Предложение поставщика (тендер)", service="tender",
         tenant=True, folder="tender-offer", model=Offer,
