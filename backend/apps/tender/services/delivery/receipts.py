@@ -137,6 +137,8 @@ def create(ctx: Ctx, tender_id, data: dict) -> dict:
     _moved(tender, ctx.user_id)
     sync_acceptance(tender, invitation_id, ctx.user_id)
     closing.attach_for_supplier(tender, invitation_id)
+    # Счета могли закрыться раньше приёмки — тогда тендер закрывает она.
+    closing.close_if_done(tender)
     audit.record(tender, "receipt_added", actor_id=ctx.user_id,
                  changes={"receipt": str(receipt.pk), "invitation": invitation_id,
                           "received_at": receipt.received_at.isoformat(),

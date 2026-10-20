@@ -172,4 +172,21 @@ describe('AwardTab', () => {
     expect(screen.queryByRole('button', { name: 'Сохранить выбор' })).toBeNull();
     expect(screen.getByText('Альфа надёжнее')).toBeInTheDocument();
   });
+
+  it('ошибка количества — у поля количества, а не у комментария', async () => {
+    serve(awardView());
+    put.mockRejectedValue(failure(422, {
+      detail: 'Неверные данные', code: 'E-VAL-01',
+      fields: [{ field: 'lines[0].qty', message: 'количество — больше нуля и не больше предложенного (10)' }],
+    }));
+    const user = userEvent.setup();
+    renderTab();
+    await choose(user, 'Поставщик позиции 1', /ТОО «Альфа»/);
+    await user.type(screen.getByRole('textbox', { name: 'Количество позиции 1' }), '11');
+    await user.click(screen.getByRole('button', { name: 'Сохранить выбор' }));
+    const qty = screen.getByRole('textbox', { name: 'Количество позиции 1' });
+    await waitFor(() => expect(qty).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByRole('textbox', { name: 'Комментарий к позиции 1' })).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByText(/не больше предложенного \(10\)/)).toBeInTheDocument();
+  });
 });

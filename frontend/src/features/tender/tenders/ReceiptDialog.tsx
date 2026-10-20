@@ -26,7 +26,7 @@ import { todayIso } from '@/lib/dates';
 
 import { fieldErrorsOf } from '../core/fieldErrors';
 import {
-  remainingOf, type DeliveryAward, type DeliverySupplier, type ReceiptInput, type ReceiptKind,
+  milli, remainingOf, type DeliveryAward, type DeliverySupplier, type ReceiptInput, type ReceiptKind,
 } from './delivery';
 
 interface Props {
@@ -67,7 +67,7 @@ export function ReceiptDialog({ supplier, onOpenChange, onSave, onError }: Props
     if (!raw) return null;
     const value = Number(raw);
     if (!Number.isFinite(value) || value <= 0) return t('tender.delivery.qtyPositive', 'Количество — больше нуля');
-    if (value > remainingOf(row)) {
+    if (milli(raw) > milli(remainingOf(row))) {
       return t('tender.delivery.qtyTooMuch', 'Не больше {{left}} — остальное уже принято', { left: remainingOf(row) });
     }
     return null;

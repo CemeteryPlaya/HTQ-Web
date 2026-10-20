@@ -240,20 +240,27 @@ export function rowErrors(
   fields: Record<string, string>,
   lineKeys: string[],
   extraKeys: string[],
-): { lines: Record<string, string>; extras: Record<string, string>; rest: Record<string, string> } {
-  const lines: Record<string, string> = {};
-  const extras: Record<string, string> = {};
+): RowErrors {
+  const lines: RowErrors['lines'] = {};
+  const extras: RowErrors['extras'] = {};
   const rest: Record<string, string> = {};
   for (const [field, message] of Object.entries(fields)) {
-    const line = /^lines\[(\d+)\]/.exec(field);
-    const extra = /^extras\[(\d+)\]/.exec(field);
+    const line = /^lines\[(\d+)\]\.?(\w*)/.exec(field);
+    const extra = /^extras\[(\d+)\]\.?(\w*)/.exec(field);
     const lineKey = line ? lineKeys[Number(line[1])] : undefined;
     const extraKey = extra ? extraKeys[Number(extra[1])] : undefined;
-    if (lineKey) lines[lineKey] ??= message;
-    else if (extraKey) extras[extraKey] ??= message;
+    if (line && lineKey) (lines[lineKey] ??= {})[line[2] || 'line_id'] ??= message;
+    else if (extra && extraKey) (extras[extraKey] ??= {})[extra[2] || 'extra_id'] ??= message;
     else rest[field] = message;
   }
   return { lines, extras, rest };
+}
+
+/** Ошибки строк по полю: `lines[key].qty`, `lines[key].comment`, `lines[key].line_id`. */
+export interface RowErrors {
+  lines: Record<string, Record<string, string>>;
+  extras: Record<string, Record<string, string>>;
+  rest: Record<string, string>;
 }
 
 /** Строка выбрана не у самого дешёвого — нужен комментарий строки. */

@@ -41,7 +41,7 @@ import { fieldErrorsOf, reportFormError } from '../core/fieldErrors';
 import { tenderKeys, tendersApi, type TenderCard } from './api';
 import {
   AWARD_COMMENT_MIN, awardInput, choicesOf, needsLineComment, rowErrors, winnersOf,
-  type Comparison, type Deficit,
+  type Comparison, type Deficit, type RowErrors,
 } from './comparison';
 
 const NONE = '__none__';
@@ -68,7 +68,7 @@ export function AwardTab({ tenderId, onChanged, onConflict }: Props) {
   });
 
   const [choice, setChoice] = useState<Choice>(() => choicesOf(undefined));
-  const [errors, setErrors] = useState<ReturnType<typeof rowErrors>>({ lines: {}, extras: {}, rest: {} });
+  const [errors, setErrors] = useState<RowErrors>({ lines: {}, extras: {}, rest: {} });
   const [deficits, setDeficits] = useState<Deficit[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -197,7 +197,8 @@ export function AwardTab({ tenderId, onChanged, onConflict }: Props) {
               const options = data.suppliers.filter((s) => item.offers[s.invitation_id]?.participates);
               const cell = row ? item.offers[row.invitationId] : undefined;
               const needComment = needsLineComment(item, row?.invitationId ?? '');
-              const error = errors.lines[item.item_id];
+              const rowError = errors.lines[item.item_id] ?? {};
+              const error = rowError.comment;
               return (
                 <TableRow key={item.item_id} data-testid={`award-item-${item.line_no}`}>
                   <TableCell className="max-w-xs whitespace-normal">
@@ -227,15 +228,20 @@ export function AwardTab({ tenderId, onChanged, onConflict }: Props) {
                         </SelectContent>
                       </Select>
                     ) : (row ? supplierName.get(row.invitationId) ?? '—' : '—')}
+                    {rowError.line_id && <p className="mt-1 text-xs text-destructive">{rowError.line_id}</p>}
                   </TableCell>
                   <TableCell className="text-right">
                     {row && cell && (editable ? (
-                      <Input
-                        className="ml-auto w-28 text-right" inputMode="decimal" value={row.qty}
-                        placeholder={cell.qty}
-                        aria-label={t('tender.award.qtyFor', 'Количество позиции {{n}}', { n: item.line_no })}
-                        onChange={(event) => patchLine(item.item_id, { qty: event.target.value })}
-                      />
+                      <>
+                        <Input
+                          className="ml-auto w-28 text-right" inputMode="decimal" value={row.qty}
+                          placeholder={cell.qty}
+                          aria-label={t('tender.award.qtyFor', 'Количество позиции {{n}}', { n: item.line_no })}
+                          aria-invalid={Boolean(rowError.qty) || undefined}
+                          onChange={(event) => patchLine(item.item_id, { qty: event.target.value })}
+                        />
+                        {rowError.qty && <p className="mt-1 text-xs text-destructive">{rowError.qty}</p>}
+                      </>
                     ) : (row.qty || cell.qty))}
                   </TableCell>
                   <TableCell className="min-w-64">
@@ -264,7 +270,8 @@ export function AwardTab({ tenderId, onChanged, onConflict }: Props) {
               const options = data.suppliers.filter((s) => winners.has(s.invitation_id)
                 && extra.offers[s.invitation_id] && !extra.offers[s.invitation_id]?.included_in_price);
               const row = choice.extras[extra.kind];
-              const error = errors.extras[extra.kind];
+              const extraError = errors.extras[extra.kind] ?? {};
+              const error = extraError.comment ?? extraError.extra_id;
               return (
                 <TableRow key={extra.kind} data-testid={`award-extra-${extra.kind}`}>
                   <TableCell>{label}</TableCell>

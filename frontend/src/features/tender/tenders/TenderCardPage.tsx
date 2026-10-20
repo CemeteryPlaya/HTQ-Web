@@ -176,9 +176,10 @@ export function TenderCardPage() {
     if (saved && typeof saved === 'object' && 'invitations' in saved) {
       queryClient.setQueryData(tenderKeys.card(card.id), saved);
     }
-    void queryClient.invalidateQueries({ queryKey: tenderKeys.card(card.id) });
-    void queryClient.invalidateQueries({ queryKey: [...tenderKeys.all, 'list'] });
-    void queryClient.invalidateQueries({ queryKey: tenderKeys.award(card.id) });
+    // Карточка, реестр и вкладки (сравнение, выбор, поставка) — у всех ключ
+    // `['tender', 'tenders', …]`: после действия и после «Обновить» на 409
+    // ни одна вкладка не должна слать старую версию.
+    void queryClient.invalidateQueries({ queryKey: tenderKeys.all });
   };
   const fail = (failure: unknown) => {
     if (isConflict(failure)) setConflict(true);
@@ -299,6 +300,18 @@ export function TenderCardPage() {
       }));
       setTab('delivery');
     }),
+  };
+  const closeRemainder: BppDocumentAction = {
+    label: t('tender.tenders.closeRemainder', 'Закрыть остаток'),
+    variant: 'outline',
+    confirm: {
+      title: t('tender.tenders.closeRemainderConfirm', 'Закрыть невыбранный остаток заявки в БЗО?'),
+      description: t('tender.tenders.closeRemainderHint',
+        'Позиции и количество, которые не выбраны в тендере, будут аннулированы в заявке на закуп, резерв бюджета под ними освободится. Документы частей должны быть согласованы.'),
+      commentMin: REASON_MIN,
+    },
+    run: guarded(async (key, comment) =>
+      refresh(await tendersApi.closeRemainder(card.id, key, comment ?? '', card.version))),
   };
   const saveReviewer = async () => {
     if (!reviewerDraft) return;
@@ -579,7 +592,7 @@ export function TenderCardPage() {
         <ConflictAlert
           message={t('tender.tenders.conflict',
             'Тендер уже изменили — в другом окне или другой пользователь. Обновите его и повторите действие.')}
-          onReload={() => { setConflict(false); void refetch(); }}
+          onReload={() => { setConflict(false); refresh(); void refetch(); }}
         />
       )}
       {card.cancel_reason && (
@@ -614,6 +627,12 @@ export function TenderCardPage() {
         {allowed.includes('handover') && (
           <DocumentActionButton
             actionKey="handover" action={handover} disabled={anyBusy && !busy.handover}
+            onPendingChange={onPendingChange} onDone={onDone}
+          />
+        )}
+        {allowed.includes('close_remainder') && (
+          <DocumentActionButton
+            actionKey="close_remainder" action={closeRemainder} disabled={anyBusy && !busy.close_remainder}
             onPendingChange={onPendingChange} onDone={onDone}
           />
         )}

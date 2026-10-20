@@ -92,7 +92,13 @@ export const RECEIVABLE: string[] = [
 export const bppDocumentHref = (docType: string, docId: string) =>
   (docType === 'agreement' ? `/bpp/agreements/${docId}` : `/bpp/invoices/${docId}`);
 
+/** Количество в тысячных: у количества в БД три знака, а целые тысячные
+ * складываются и вычитаются без ошибок плавающей точки (0,3 − 0,1 = 0,2). */
+export function milli(value: string | number): number {
+  return Math.round(Number(String(value).trim().replace(',', '.')) * 1000);
+}
+
 /** Остаток к приёмке строки выбора: выбрано − принято, не меньше нуля. */
 export function remainingOf(award: DeliveryAward): number {
-  return Math.max(Number(award.qty) - Number(award.received), 0);
+  return Math.max(milli(award.qty) - milli(award.received), 0) / 1000;
 }

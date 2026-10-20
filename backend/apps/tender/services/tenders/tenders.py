@@ -153,6 +153,10 @@ def allowed_actions(ctx: Ctx, tender: Tender) -> list[str]:
         actions = ["handover"]              # документы в БЗО (этап 5)
     elif tender.status in (TenderStatus.HANDED_OVER, TenderStatus.DELIVERY):
         actions = ["receipt"]               # отметить получение (этап 5)
+        from apps.tender.services.award import remainder
+
+        if remainder.candidates(tender):
+            actions.append("close_remainder")   # невыбранный остаток ЗЗ (S5-13)
     else:
         actions = []
     if tender.status in REVIEWER_EDITABLE:

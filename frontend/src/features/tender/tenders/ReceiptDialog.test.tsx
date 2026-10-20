@@ -71,4 +71,20 @@ describe('ReceiptDialog', () => {
     expect(await within(dialog).findByText('Не больше 2')).toBeInTheDocument();
     expect(onError).toHaveBeenCalledWith(failure);
   });
+
+  it('дробный остаток без ошибки плавающей точки: 0,3 − 0,1 = 0,2', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn(() => Promise.resolve());
+    const supplier = deliverySupplier({
+      awards: [{ award_id: 'aw-9', kind: 'line', name: 'Кабель', qty: '0.300', received: '0.100', needs_receipt: true }],
+    });
+    render(<ReceiptDialog supplier={supplier} onOpenChange={vi.fn()} onSave={onSave} onError={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Принято: Кабель'), '0,2');
+    expect(within(dialog).queryByText(/Не больше/)).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить приёмку' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect((onSave.mock.calls[0] as unknown as [string, { lines: unknown[] }])[1].lines)
+      .toEqual([{ award_id: 'aw-9', qty: '0.2' }]);
+  });
 });

@@ -74,6 +74,7 @@ export function ComparisonTab({ tenderId, tenderNumber }: Props) {
   const openFile = async (supplier: ComparisonSupplier, documentId: string) => {
     // Вкладку открываем сразу — иначе браузер сочтёт её всплывающим окном.
     const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
     try {
       const url = await tendersApi.offerFileLink(tenderId, supplier.offer_id, documentId);
       if (tab) tab.location.href = url;

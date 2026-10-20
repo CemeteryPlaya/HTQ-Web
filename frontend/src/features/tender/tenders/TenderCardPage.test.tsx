@@ -506,4 +506,18 @@ describe('TenderCardPage — утверждение, передача, пост�
     await waitFor(() => expect(get.mock.calls.some(([url, config]) => String(url).includes('signoff')
       && JSON.stringify(config ?? {}).includes('tender.award'))).toBe(true));
   });
+
+  it('«Закрыть остаток» — с причиной и версией', async () => {
+    const card = tenderCard({ status: 'delivery', opened_at: OPENED, allowed_actions: ['receipt', 'close_remainder'] });
+    serveCard(card);
+    post.mockResolvedValue({ data: card });
+    renderCard();
+    await userEvent.click(await screen.findByRole('button', { name: 'Закрыть остаток' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByRole('textbox'), 'Остаток закупим в следующем квартале');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Закрыть остаток' }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0][0]).toContain(`tenders/${TENDER_ID}/close-remainder`);
+    expect(post.mock.calls[0][1]).toEqual({ version: 2, comment: 'Остаток закупим в следующем квартале' });
+  });
 });

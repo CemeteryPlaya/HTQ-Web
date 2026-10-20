@@ -20,10 +20,10 @@ def _rate(on: date, value: str, currency: str = "USD") -> None:
 
 
 def test_weekend_takes_friday():
-    _rate(date(2026, 10, 16), "514.80")
-    _rate(date(2026, 10, 17), "515.20")      # пятница
-    got = interface.exchange_rate_on_or_before("USD", date(2026, 10, 19))   # воскресенье
-    assert got == interface.RateOut(rate=Decimal("515.200000"), on_date=date(2026, 10, 17))
+    _rate(date(2026, 10, 15), "514.80")      # четверг
+    _rate(date(2026, 10, 16), "515.20")      # пятница
+    got = interface.exchange_rate_on_or_before("USD", date(2026, 10, 18))   # воскресенье
+    assert got == interface.RateOut(rate=Decimal("515.200000"), on_date=date(2026, 10, 16))
 
 
 def test_exact_date_wins():

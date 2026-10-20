@@ -21,7 +21,7 @@ export type TenderStatus =
 export type TenderAction =
   | 'edit' | 'publish' | 'extend' | 'cancel' | 'invite'
   // этап 5: вскрытие, выбор и его отправка, смена проверяющего, передача, приёмка
-  | 'open' | 'award' | 'award_submit' | 'reviewer' | 'handover' | 'receipt';
+  | 'open' | 'award' | 'award_submit' | 'reviewer' | 'handover' | 'receipt' | 'close_remainder';
 export type SchemeKind = 'prepay' | 'advance' | 'postpay';
 
 export const TENDERS_BASE = '/tender/tenders';
@@ -258,6 +258,9 @@ export const tendersApi = {
     api.post<TenderCard>(path(`${id}/award/submit`), { version }, withKey(key)).then((r) => r.data),
   handover: (id: string, key: string, version: number) =>
     api.post<HandoverResult>(path(`${id}/handover`), { version }, withKey(key)).then((r) => r.data),
+  /** «Закрыть остаток» (S5-13): невыбранное в ЗЗ аннулируется, резерв освобождается. */
+  closeRemainder: (id: string, key: string, comment: string, version: number) =>
+    api.post<TenderCard>(path(`${id}/close-remainder`), { version, comment }, withKey(key)).then((r) => r.data),
   delivery: (id: string) => api.get<Delivery>(path(`${id}/delivery`)).then((r) => r.data),
   receipts: (id: string) => api.get<Receipt[]>(path(`${id}/receipts`)).then((r) => r.data),
   addReceipt: (id: string, key: string, body: ReceiptInput) =>

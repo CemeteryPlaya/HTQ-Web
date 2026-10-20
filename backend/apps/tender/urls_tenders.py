@@ -36,6 +36,8 @@ urlpatterns = [
     path(f"{T}/award/submit", views.tender_award_submit),
     path(f"{T}/handover", views.tender_handover),
     path(f"{T}/handover/", views.tender_handover),
+    path(f"{T}/close-remainder", views.tender_close_remainder),
+    path(f"{T}/close-remainder/", views.tender_close_remainder),
     path(f"{T}/delivery", views.tender_delivery),
     path(f"{T}/delivery/", views.tender_delivery),
     path(f"{T}/receipts", views.tender_receipts),

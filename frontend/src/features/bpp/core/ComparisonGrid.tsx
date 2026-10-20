@@ -44,12 +44,14 @@ export interface ComparisonGridProps<Row, Column> {
   dim?: (column: Column) => string | undefined;
   footer?: (column: Column) => ReactNode;
   footerLabel?: ReactNode;
+  /** Класс заголовка строки; по умолчанию без переноса (короткие подписи). */
+  rowHeadClassName?: string;
   testId?: string;
 }
 
 export function ComparisonGrid<Row, Column>({
   columns, columnKey, renderColumn, rows, rowKey, renderRow, rowHeader, leading = [], cell,
-  cellClassName, highlight, dim, footer, footerLabel, testId,
+  cellClassName, highlight, dim, footer, footerLabel, rowHeadClassName = 'whitespace-nowrap', testId,
 }: ComparisonGridProps<Row, Column>) {
   const { t } = useTranslation();
   return (
@@ -68,7 +70,7 @@ export function ComparisonGrid<Row, Column>({
       <TableBody>
         {rows.map((row) => (
           <TableRow key={rowKey(row)}>
-            <TableHead scope="row" className="whitespace-nowrap font-normal text-foreground">
+            <TableHead scope="row" className={cn(rowHeadClassName, 'font-normal text-foreground')}>
               {renderRow(row)}
             </TableHead>
             {leading.map((col) => <TableCell key={col.key} className={col.className}>{col.cell(row)}</TableCell>)}

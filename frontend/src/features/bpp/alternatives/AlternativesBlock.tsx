@@ -255,6 +255,7 @@ function ComparisonTable({ data, offers, dim, renderSelect }: {
         dim={dim}
         cellClassName="text-right"
         rowHeader={t('bpp.alternatives.item', 'Позиция')}
+        rowHeadClassName="whitespace-normal"
         renderColumn={(offer) => offer.number}
         leading={[
           { key: 'qty', className: 'text-right', header: t('bpp.alternatives.qty', 'Кол-во'),

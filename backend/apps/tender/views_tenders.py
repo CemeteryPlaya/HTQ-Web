@@ -16,6 +16,7 @@ from . import schemas
 from .services.comparison import export as comparison_export
 from .services.delivery import receipts, stages
 from .services.award import handover as award_handover
+from .services.award import remainder as award_remainder
 from .services.award import selection
 from .services.award import submit as award_submit
 from .services.comparison import opening, table
@@ -154,6 +155,14 @@ def tender_award_submit(request, tender_id, data):
 def tender_handover(request, tender_id, data):
     return award_handover.handover(Ctx.from_request(request), tender_id,
                                    expected_version=data.version)
+
+
+@api_view(methods=("POST",), module="tender", level="write", body=schemas.RemainderIn,
+          idempotent=True)
+def tender_close_remainder(request, tender_id, data):
+    return _card(request, award_remainder.close_remainder(
+        Ctx.from_request(request), tender_id, expected_version=data.version,
+        comment=data.comment))
 
 
 @api_view(methods=("GET",), module="tender", level="read")

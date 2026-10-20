@@ -5482,7 +5482,10 @@
       "handoverConfirm": "Hand the selection over to BPP?",
       "handoverHint": "Draft invoices or contracts will be created in the budget, procurement and payments module for each supplier; unselected parts of the request will be closed.",
       "handoverDone": "Handed over to BPP: {{numbers}}",
-      "tabDelivery": "Delivery"
+      "tabDelivery": "Delivery",
+      "closeRemainder": "Close remainder",
+      "closeRemainderConfirm": "Close the unselected remainder of the request in BPP?",
+      "closeRemainderHint": "Items and quantities not selected in the tender will be annulled in the purchase request and the budget reserve under them released. The documents of the parts must be approved."
     },
     "portal": {
       "commentCounter": "At least {{min}} characters, now {{count}}",

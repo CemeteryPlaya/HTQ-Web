@@ -271,6 +271,12 @@ class ReceiptCancelIn(BaseModel):
     comment: str = ""
 
 
+class RemainderIn(BaseModel):
+    """``POST tenders/<id>/close-remainder`` — «Закрыть остаток» (S5-13)."""
+    version: int
+    comment: str = ""
+
+
 class PortalVersionIn(BaseModel):
     version: int
 
