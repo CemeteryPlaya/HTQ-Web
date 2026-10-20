@@ -335,6 +335,14 @@ export function RequestFormPage() {
             placeholder={t('tender.requests.projectSearchHint', 'Найти проект: код или название')}
             onChange={(event) => setProjectSearch(event.target.value)}
           />
+          {projects.isSuccess && projectOptions.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {projectQuery
+                ? t('tender.requests.noProjectsFound', 'Проектов по запросу не найдено — уточните код или название.')
+                : t('tender.requests.noProjects',
+                  'Нет действующих проектов, доступных для заявки. Руководитель проекта видит только проекты, в которых участвует.')}
+            </p>
+          )}
         </Field>
         <Field label={t('tender.requests.article', 'Статья бюджета')} error={shown('article_id')} htmlFor="tender-request-article">
           <ArticleSelect

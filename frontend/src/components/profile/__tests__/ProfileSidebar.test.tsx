@@ -210,12 +210,37 @@ describe('ProfileSidebar — блок «Подтверждения»', () => {
     }
   });
 
-  it('tender:read — пункт «Тендеры» → /tender перед архивом договоров (T0.4)', () => {
-    const restore = setRights({ tender: 'read' });
+  it('тендерный модуль — свой блок сразу после «Подтверждений», не внутри него', () => {
+    const restore = setRights(
+      { tender: 'read' },
+      { 'tender.requests': ['view'], 'tender.tenders': ['view'] },
+    );
     try {
       const { container } = renderSidebar();
-      expect(sectionHrefs(container, 'approvals')).toEqual(['/signoff', '/tender', '/contracts']);
-      expect(screen.getByRole('link', { name: 'Тендеры' })).toHaveAttribute('href', '/tender');
+      expect(sectionHrefs(container, 'approvals')).toEqual(['/signoff', '/contracts']);
+
+      const sections = [...container.querySelectorAll('button[aria-controls^="sidebar-section-"]')]
+        .map((b) => b.getAttribute('aria-controls'));
+      expect(sections.indexOf('sidebar-section-tender'))
+        .toBe(sections.indexOf('sidebar-section-approvals') + 1);
+      expect(screen.getByRole('button', { name: /^Тендерные закупки/ })).toHaveAttribute('aria-expanded', 'true');
+
+      // Меню подразделов — как в `TenderLayout`: по `order` и по правам
+      // (поставщиков без узла `tender.prospects` нет).
+      expect(sectionHrefs(container, 'tender'))
+        .toEqual(['/tender/overview', '/tender/requests', '/tender/tenders']);
+      expect(screen.getByRole('link', { name: 'Тендеры' })).toHaveAttribute('href', '/tender/tenders');
+    } finally {
+      restore();
+    }
+  });
+
+  it('без tender:read блока «Тендерные закупки» нет, даже при узлах', () => {
+    const restore = setRights({ hr: 'read' }, { 'tender.requests': ['view'] });
+    try {
+      const { container } = renderSidebar();
+      expect(container.querySelector('#sidebar-section-tender')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Тендерные закупки/ })).toBeNull();
     } finally {
       restore();
     }
