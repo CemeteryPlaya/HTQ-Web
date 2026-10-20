@@ -150,6 +150,14 @@ function PaymentsTab({ card, canUnmark, onUnmark }: {
   );
 }
 
+/** «Товар принят 20.10.2026, оригиналы переданы 21.10.2026 — Бухгалтерия». */
+function receiptText(card: InvoiceCard, t: (key: string, fallback: string, options?: Record<string, unknown>) => string): string {
+  const accepted = t('bpp.invoices.receivedAt', 'Товар принят {{date}}', { date: formatDate(card.received_at ?? null) });
+  if (!card.originals_at) return accepted;
+  const originals = t('bpp.invoices.originalsAt', 'оригиналы переданы {{date}}', { date: formatDate(card.originals_at) });
+  return `${accepted}, ${originals}${card.originals_to ? ` — ${card.originals_to}` : ''}`;
+}
+
 export function InvoiceFormPage() {
   const { t } = useTranslation();
   const { id = '' } = useParams<{ id: string }>();
@@ -598,6 +606,17 @@ export function InvoiceFormPage() {
             {card.planned_pay_date && (
               <Field label={t('bpp.invoices.plannedPayDate', 'Плановая дата оплаты')}>
                 <p className="text-sm">{formatDate(card.planned_pay_date)}</p>
+              </Field>
+            )}
+            {(card.received_at || card.awaiting_receipt) && (
+              <Field label={t('bpp.invoices.receipt', 'Приёмка')}>
+                <p className="text-sm" data-testid="invoice-receipt">
+                  {card.received_at
+                    ? receiptText(card, t)
+                    : t('bpp.invoices.awaitingReceipt', 'Ждёт приёмки: оплата — через {{days}} дн. после приёмки товара', {
+                      days: card.postpay_days ?? '—',
+                    })}
+                </p>
               </Field>
             )}
             <Field label={t('bpp.invoices.purchaseType', 'Тип приобретения')} error={shown('purchase_type')}>

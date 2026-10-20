@@ -288,4 +288,21 @@ describe('InvoiceFormPage', () => {
     expect(comparisonAsked()).toBe(false);
     expect(screen.queryByTestId('alternatives-block')).toBeNull();
   });
+
+  it('счёт из тендера: «Товар принят …, оригиналы переданы …»', { timeout: 15000 }, async () => {
+    serve(card({
+      status: 'paid', source_tender: 'tender-1', received_at: '2026-10-20',
+      originals_at: '2026-10-21', originals_to: 'Бухгалтерия',
+    }));
+    renderForm();
+    expect(await screen.findByTestId('invoice-receipt', {}, { timeout: 4000 }))
+      .toHaveTextContent('Товар принят 20.10.2026, оригиналы переданы 21.10.2026 — Бухгалтерия');
+  });
+
+  it('постоплата после приёмки без приёмки — «Ждёт приёмки»', { timeout: 15000 }, async () => {
+    serve(card({ status: 'to_pay', pay_after_receipt: true, postpay_days: 14, awaiting_receipt: true }));
+    renderForm();
+    expect(await screen.findByTestId('invoice-receipt', {}, { timeout: 4000 }))
+      .toHaveTextContent('Ждёт приёмки: оплата — через 14 дн. после приёмки товара');
+  });
 });

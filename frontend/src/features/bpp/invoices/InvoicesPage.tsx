@@ -220,6 +220,11 @@ export function InvoicesPage() {
       render: (row) => (
         <span className={row.overdue ? 'text-destructive' : undefined}>
           {formatDate(row.planned_pay_date ?? row.due_date)}
+          {row.awaiting_receipt && (
+            <span className="block text-xs text-muted-foreground">
+              {t('bpp.invoices.awaitingReceiptShort', 'ждёт приёмки')}
+            </span>
+          )}
         </span>
       ),
     },
