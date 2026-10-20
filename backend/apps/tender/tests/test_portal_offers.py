@@ -447,6 +447,57 @@ def test_http_offer_needs_the_bound_device_and_origin(company_context, portal_en
     assert text.status_code == 415
 
 
+#: Ручки портала с телом запроса (T3.6: тело разбирается ПОСЛЕ проверки устройства).
+BODY_ROUTES = (("put", "offer"), ("post", "offer/submit"), ("post", "offer/withdraw"),
+               ("post", "decline"))
+
+
+def _raw(client, world, portal, method, path, data):
+    return getattr(client, method)(
+        f"{portal.BASE}/{world.token}/{path}", data=data, content_type="application/json",
+        HTTP_X_HTQ_COMPANY=world.slug, HTTP_X_REAL_IP=portal.REAL_IP,
+        HTTP_ORIGIN=portal.origin(world.slug))
+
+
+def test_broken_json_from_unbound_device_is_403(company_context, portal_env):
+    """Чужое устройство не узнаёт, разбирается ли его тело: 403 раньше 422."""
+    from django.test import Client
+
+    world, _client, portal = _http_world(company_context["slug"])
+    for method, path in BODY_ROUTES:
+        resp = _raw(Client(), world, portal, method, path, b"{oops")
+        assert (resp.status_code, resp.json()["code"]) == (403, "E-TND-06"), (path, resp.content)
+
+
+def test_broken_json_from_bound_device_is_422_in_envelope(company_context, portal_env):
+    """Своё устройство получает ошибку тела в конверте портала, а не голый список."""
+    world, client, portal = _http_world(company_context["slug"])
+    for method, path in BODY_ROUTES:
+        resp = _raw(client, world, portal, method, path, b"{oops")
+        body = resp.json()
+        assert (resp.status_code, body.get("code")) == (422, "E-VAL-01"), (path, resp.content)
+        assert isinstance(body["fields"], list) and body["fields"], path
+
+
+def test_double_submit_keeps_one_version(company_context, portal_env):
+    """Двойное нажатие «Отправить»: второй запрос с той же версией — отказ, версия одна."""
+    world, client, portal = _http_world(company_context["slug"])
+    offer = portal.get(client, world.slug, f"{world.token}/offer").json()
+    saved = _put(portal, client, world, {
+        "version": offer["version"],
+        "valid_until": str(timezone.localdate() + timedelta(days=30)),
+        "lines": [{"item_id": offer["lines"][0]["item_id"], "participates": True,
+                   "price": "750", "qty": "10"}],
+        "extras": {"works": {"amount": "450000", "note": "Монтаж"}}}).json()
+    body = {"version": saved["version"], "pd_consent": True}
+    first = portal.post(client, world.slug, f"{world.token}/offer/submit", body)
+    second = portal.post(client, world.slug, f"{world.token}/offer/submit", body)
+    assert first.status_code == 200, first.content
+    assert (second.status_code, second.json()["code"]) == (409, "E-STS-01")
+    with use_company(world.slug):
+        assert Offer.objects.filter(invitation=world.inv, number__isnull=False).count() == 1
+
+
 def test_http_offer_after_the_deadline_is_409(company_context, portal_env, pinned_clock):
     world, client, portal = _http_world(company_context["slug"])
     offer = portal.get(client, world.slug, f"{world.token}/offer").json()

@@ -5,7 +5,10 @@
 ``test_gate.py`` ищет литерал). Доступ — пара «токен ссылки + cookie
 устройства»: ``access.require_device(request, token)`` первой строкой каждой
 ручки, кроме промежуточной карточки и ``bind``. Небезопасные методы — ещё
-``Origin`` компании и тело JSON (там же). Ответы — белым списком
+``Origin`` компании и тело JSON (там же; ``multipart`` — только у загрузки
+файла). Тело разбирается ПОСЛЕ этих проверок (``access.parse_body``), а не
+``api_view(body=…)``: иначе чужое устройство узнавало бы ответ разбора
+раньше отказа, а битые запросы проходили мимо лимитов. Ответы — белым списком
 (``services/portal/serializers.py``).
 
 Ручки предложения и файлов КП (T3.3/T3.4) добавляются в этот же файл — по
@@ -90,9 +93,10 @@ def portal_offer_get(request, token):
     return offers.offer_view(ctx)
 
 
-@api_view(methods=("PUT",), auth=None, body=schemas.PortalOfferIn)
-def portal_offer_put(request, token, data):
+@api_view(methods=("PUT",), auth=None)
+def portal_offer_put(request, token):
     ctx = access.require_device(request, token)
+    data = access.parse_body(request, schemas.PortalOfferIn)
     offers.save_draft(ctx, data.model_dump(exclude_unset=True), event=_event(ctx))
     return offers.offer_view(ctx)
 
@@ -105,23 +109,26 @@ def portal_offer(request, token):
     return json_error("Method Not Allowed", 405)
 
 
-@api_view(methods=("POST",), auth=None, body=schemas.PortalSubmitIn)
-def portal_offer_submit(request, token, data):
+@api_view(methods=("POST",), auth=None)
+def portal_offer_submit(request, token):
     ctx = access.require_device(request, token)
+    data = access.parse_body(request, schemas.PortalSubmitIn)
     offers.submit(ctx, data.model_dump(), event=_event(ctx))
     return offers.offer_view(ctx)
 
 
-@api_view(methods=("POST",), auth=None, body=schemas.PortalVersionIn)
-def portal_offer_withdraw(request, token, data):
+@api_view(methods=("POST",), auth=None)
+def portal_offer_withdraw(request, token):
     ctx = access.require_device(request, token)
+    data = access.parse_body(request, schemas.PortalVersionIn)
     offers.withdraw(ctx, data.model_dump(), event=_event(ctx))
     return offers.offer_view(ctx)
 
 
-@api_view(methods=("POST",), auth=None, body=schemas.PortalDeclineIn)
-def portal_decline(request, token, data):
+@api_view(methods=("POST",), auth=None)
+def portal_decline(request, token):
     ctx = access.require_device(request, token)
+    data = access.parse_body(request, schemas.PortalDeclineIn)
     offers.decline(ctx, data.model_dump(), event=_event(ctx))
     return offers.offer_view(ctx)
 
@@ -138,7 +145,7 @@ def portal_offer_files_get(request, token):
 def portal_offer_files_post(request, token):
     """Загрузка (multipart, поле ``file``): сканер выключен — 503, лимит —
     30 в час на приглашение (429 + ``Retry-After``)."""
-    ctx = access.require_device(request, token)
+    ctx = access.require_device(request, token, multipart=True)
     portal_files.scanner_required()
     bucket, key = "tender_portal_upload", str(ctx.invitation.pk)
     if not ratelimit.hit(bucket, key, limit=portal_files.UPLOADS_PER_HOUR,

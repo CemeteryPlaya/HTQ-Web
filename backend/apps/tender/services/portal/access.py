@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.utils import timezone
+from pydantic import BaseModel, ValidationError
 
 from apps.companies import interface as companies
 from apps.tender.models import (
@@ -257,27 +258,42 @@ def check_origin(request) -> None:
     raise refused
 
 
-def check_body(request) -> None:
-    """Тело небезопасного запроса — только JSON (415), кроме загрузки файлов
-    (``multipart/form-data``). DELETE без тела проверку проходит."""
+def check_body(request, *, multipart: bool = False) -> None:
+    """Тело небезопасного запроса — только JSON (415); ``multipart/form-data``
+    — только там, где грузят файл (``multipart=True``). DELETE без тела
+    проверку проходит."""
     content_type = (request.META.get("CONTENT_TYPE") or "").split(";")[0].strip().lower()
     if request.method == "DELETE" and not request.body:
         return
-    if content_type not in (JSON_TYPE, MULTIPART_TYPE):
+    allowed = (JSON_TYPE, MULTIPART_TYPE) if multipart else (JSON_TYPE,)
+    if content_type not in allowed:
         raise DomainError("E-VAL-02", "Тело запроса — только application/json.", status=415)
 
 
-def check_write(request) -> None:
+def check_write(request, *, multipart: bool = False) -> None:
     """Origin и тело — для любого метода с побочным эффектом."""
     if request.method not in SAFE_METHODS:
         check_origin(request)
-        check_body(request)
+        check_body(request, multipart=multipart)
 
 
-def require_device(request, token: str) -> PortalContext:
+def parse_body(request, schema: type[BaseModel]) -> BaseModel:
+    """Тело JSON по схеме — ПОСЛЕ ``require_device``: чужое устройство
+    получает 403, не узнав, разбирается ли его тело, а ошибка тела своего —
+    422 ``E-VAL-01`` в конверте портала (поле — путь через точку)."""
+    try:
+        return schema.model_validate_json(request.body or b"{}")
+    except ValidationError as exc:
+        fields = [{"field": ".".join(str(part) for part in error["loc"]) or "body",
+                   "message": error["msg"]} for error in exc.errors(include_input=False)]
+        raise DomainError("E-VAL-01", "Проверьте заполнение полей.", fields=fields) from None
+
+
+def require_device(request, token: str, *, multipart: bool = False) -> PortalContext:
     """Первая строка каждой ручки портала, кроме карточки и ``bind``:
-    токен → приглашение, cookie этого устройства привязана к нему."""
-    check_write(request)
+    токен → приглашение, cookie этого устройства привязана к нему.
+    ``multipart`` — ручка загрузки файла."""
+    check_write(request, multipart=multipart)
     invitation, tender = resolve(request, token)
     binding = active_binding(invitation, device_secret(request))
     if binding is None:

@@ -344,6 +344,17 @@ def test_post_needs_the_company_origin_and_json(world):
 
 
 @pytest.mark.django_db
+def test_multipart_only_for_upload(world):
+    """``multipart/form-data`` — только у загрузки файла КП; на прочих POST — 415."""
+    client = Client()
+    bound = post(client, world.slug, f"{world.token}/bind")
+    assert bound.status_code == 200, bound.content
+    for path in ("bind", "offer/submit", "offer/withdraw", "decline"):
+        resp = post(client, world.slug, f"{world.token}/{path}", {"version": 1},
+                    content_type="multipart/form-data")
+        assert (resp.status_code, resp.json()["code"]) == (415, "E-VAL-02"), (path, resp.content)
+
+
 def test_forwarded_for_never_reaches_the_journal(world):
     resp = post(Client(), world.slug, f"{world.token}/bind",
                 HTTP_X_FORWARDED_FOR="6.6.6.6, 7.7.7.7")
