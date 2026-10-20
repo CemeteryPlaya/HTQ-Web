@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -39,6 +40,24 @@ def exchange_rate(currency: str, on_date: date) -> Decimal | None:
         return Decimal("1")
     row = ExchangeRate.objects.filter(currency_code=currency, on_date=on_date).first()
     return row.rate if row else None
+
+
+@dataclass(frozen=True)
+class RateOut:
+    """Курс к KZT и дата, на которую он опубликован."""
+
+    rate: Decimal
+    on_date: date
+
+
+def exchange_rate_on_or_before(currency: str, on_date: date) -> RateOut | None:
+    """Последний курс не позже даты: на выходной — пятничный (T-12). Нужен
+    сравнению тендера на дату вскрытия; ``exchange_rate`` ищет строго на дату."""
+    if currency == "KZT":
+        return RateOut(rate=Decimal("1"), on_date=on_date)
+    row = (ExchangeRate.objects.filter(currency_code=currency, on_date__lte=on_date)
+           .order_by("-on_date").first())
+    return RateOut(rate=row.rate, on_date=row.on_date) if row else None
 
 
 def article_brief(ids: list[str]) -> dict[str, dict]:
