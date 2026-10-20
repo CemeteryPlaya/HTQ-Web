@@ -2139,6 +2139,33 @@ filename=)`, WeasyPrint; шаблон `templates/bpp/print/base.html`
 
 После срока или вне статуса «Приём» правка, отправка, отзыв, отказ и файлы — 409 `E-TND-05` «Приём предложений завершён» (проверка под блокировкой тендера). Аналог или частичное предложение без разрешения — 422 `E-TND-09`.
 
+**Вскрытие, сравнение, выбор, утверждение** (этап 5, T5.1–T5.2; спека — [docs/plans/2026-10-20-tender-stage5-spec.md](docs/plans/2026-10-20-tender-stage5-spec.md)). До вскрытия сравнение, выбор и файлы КП — 409 `E-TND-07`. Деньги — к оплате (с НДС, если поставщик плательщик), в KZT по курсу НБРК последнего дня не позже даты вскрытия (`refdata.exchange_rate_on_or_before`); нет курса — суммы в KZT `null` и предупреждение `no_rate`.
+
+| Метод и путь | Назначение |
+|---|---|
+| `POST tenders/<id>/open` | `{version}` — вскрыть: после срока или когда ответили все приглашённые; без предложений — «Не состоялся». Ответ — карточка (`opened_at`) |
+| `GET tenders/<id>/comparison` | `{rate_date, opened_at, suppliers, items, extras, totals: {declined, suppliers}, warnings}`: поставщики (валюта и курс, НДС, срок действия и `valid_expired`, схема оплаты, `coverage` «N из M», `total_common_kzt`/`total_full_kzt`, `saving_common_kzt` — к плану, удорожание отрицательное, файлы КП), позиции с клетками предложений (`price`, `qty`, `partial_qty`, `is_analog`, `delivery_date`, `unit_price_kzt`) и `cheapest_invitation_id`, доставка и СМР (`included_in_price`) |
+| `GET tenders/<id>/comparison/export` | xlsx того же набора; формульные префиксы (`= + - @`, табуляция, CR) — текстом (`htqweb/xlsx_safe.py`) |
+| `GET tenders/<id>/offers/<offer_id>/files/<doc_id>` | `{url}` — временная ссылка на файл КП вскрытого предложения; каждая выдача — `file_downloaded` в журнале файлов |
+| `GET/PUT tenders/<id>/award` | Выбор: `{version, status, comment, status_comment, lines, extras, suppliers, parts: [{part_id, kind, plan_kzt, amount_kzt, over_plan_kzt}], allowed_actions}` / заменить целиком `{version, comment, lines: [{line_id, qty?, comment?}], extras: [{extra_id, comment?}]}` — автор в «Вскрыт» и «Возвращён на доработку». У позиции один поставщик, количество — не больше предложенного; доставка и СМР — только у победителя позиции (у него «в цене» выбираются сами). Не самый дешёвый вариант (цена за единицу в KZT, у доставки и СМР — сумма) — нужны общий комментарий и комментарий строки от 10 символов: 422 `E-TND-12` (`fields` — `comment`, `lines[i].comment`; `details.rows`) |
+| `POST tenders/<id>/award/submit` | `{version}` — на утверждение (signoff `tender.award`, «Проверка качества → ФД»): нет выбора — 422 `E-VAL-01`; нет курса у выбранного — 422 `E-TND-10` (`details.suppliers`); выбор дороже плана сверх свободного остатка статьи — 422 `E-TND-11` (`details.deficits: [{article_id, article_code, over, available}]`); маршрута нет или он неприменим — 409 `E-SGN-01`. Утверждение — «Выбор утверждён», возврат — «Возвращён на доработку» (`status_comment`), отклонение — тоже на доработку |
+
+Проверяющий качества — назначенный в тендере (`PATCH tenders/<id>` `{quality_reviewer_user_id, version}` до утверждения, действие `reviewer`), иначе держатели должности «Технический директор» своей компании, затем вышестоящих. Итог для поставщика — `result` портала (`awaiting`, `awarded`, `not_awarded`, `cancelled`, `failed`) и `result_items` — свои выбранные позиции победителя после утверждения.
+
+**Передача в БЗО и поставка** (этап 5, T5.5; документы БЗО — пакет B-2, «Стык с БЗО» ниже).
+
+| Метод и путь | Назначение |
+|---|---|
+| `POST tenders/<id>/handover` | `{version}` — по утверждённому выбору черновики документов БЗО на каждого поставщика и часть заявки: договор, если сумма документа в KZT выше 1000 МРП, иначе счёт (порог — на документ); потенциальный поставщик становится контрагентом (без рег. номера — 422 `E-TND-14`); невыбранные части заявки закрываются. Повтор — то же `{tender_id, status, documents: [{invitation_id, supplier, part_id, doc_type, doc_id, number}]}` |
+| `GET tenders/<id>/delivery` | `{suppliers: [{invitation_id, supplier, stage, total, paid, shipment_share, documents, awards}]}`. Стадии: `awaiting_documents` → `awaiting_shipment_payment` (оплачено меньше доли «до отгрузки» схемы) → `in_delivery` → `partially_received` / `received` → `awaiting_final_payment` → `closed` (всё принято, счета «Закрыт»). Заменённый альтернативой документ — с `replaced_by` |
+| `GET/POST tenders/<id>/receipts` | Приёмки / `{invitation_id, received_at, kind: goods\|works, lines: [{award_id, qty}], comment?, originals_at?, originals_to?}` — дата не позже сегодня, количество не больше остатка (422 `E-TND-13`), СМР — «Работы приняты», доставка — вместе с товаром. Дата приёмки и оригиналы уходят на счета поставщика (`bpp.set_acceptance`; у постоплаты после приёмки срок оплаты — от неё, 14 банковских дней по умолчанию) |
+| `PATCH tenders/<id>/receipts/<rid>` | `{originals_at, originals_to}` — «Оригиналы переданы» |
+| `POST tenders/<id>/receipts/<rid>/cancel` | `{comment}` (≥ 10) — отменить приёмку (количество — к остатку, отметка на счёте пересчитывается) |
+
+Сканы закрывающих (`tender_waybill`, `tender_act`, `tender_vat_invoice`) и фото (`tender_photo`) — панель `/api/files/v1` владельца `tender.receipt`; закрывающие видят автор, ФД, БУХ и ГД (T-17), фото — все, кто видит тендер. Скан запрошенного БУХ типа сразу ложится на счёт (`bpp.attach_closing_docs`, D-13); тендер закрывается, когда все поставщики в `closed`.
+
+**Стык с БЗО — `bpp.interface`** (мастер-план, §3.4; вызовы in-process, своих HTTP-ручек у стыка нет). Пакет B-1 (этап 1): `submit_request_from_tender` — ЗЗ `source="tender"` по паре «статья × вид» (в самом БЗО заперта замком T-07), `withdraw_requests_from_tender`, `cancel_requests_from_tender`, `release_to_plan`, `register_request_listener` (статус ЗЗ — в транзакции смены статуса), `budget_available`, `budget_articles`. Этап 5: `create_counterparty_from_prospect` (страна + рег. номер — без дубля), пакет B-2 — `create_documents_from_tender` (черновики счёта/договора по ключу передачи `tender_key` — повтор не дублирует; автор — закупщик), `documents_status` (статусы, оплаты по отметкам БУХ, `replaced_by` — замена альтернативой), `set_acceptance` (`received_at`, оригиналы; постоплата после приёмки — срок от неё), `attach_closing_docs` (только запрошенные БУХ типы у счёта «Ждёт закрывающих»), `register_document_listener` (смена статуса документа из тендера). Карточка и реестр счёта отдают `source_tender`, `pay_after_receipt`, `postpay_days`, `received_at`, `originals_at`, `originals_to`, `awaiting_receipt`.
+
 ## Django admin — `/django-admin/`
 
 Replaces the old `sqladmin` aggregator. Standard Django admin, session +
