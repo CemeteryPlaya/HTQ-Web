@@ -45,7 +45,7 @@ intake ──open──▶ opened ──award/submit──▶ on_approval ──
 
 ## 2. Модель данных
 
-Миграция **`tender/0006_award_delivery`** (expand; на стенде и в бою — `migrate_companies`):
+Миграции tender — по задачам (expand; на стенде и в бою — `migrate_companies`): **`0006_opening`** (поля `Tender`), **`0007_awards`** (`Award`), **`0008_delivery`** (`Handover`, `Receipt`, `ReceiptLine`):
 
 | Модель / поле | Состав |
 |---|---|
@@ -215,7 +215,7 @@ DoD: передача на трёх схемах создаёт счёт (ава
 
 ### T5.7 — ранбук и закрытие модуля в пилот
 
-- Ранбук `docs/deploy/tender-rollout-runbook.md` по образцу `bpp-rollout-runbook.md`: репетиция на дампе → `migrate_shared` (`files/0006–0008`, `access/0026–0027`) → `migrate_companies` (`bpp/0021–0022`, `tender/0001–0006`) → `tender_assign_roles --company hi-tech-group` → `tender_configure_route --company hi-tech-group` → ClamAV (обязателен для портала) → ящик `tender@` (этап 4) → `manage.py service tender --on` и `CompanyModule` только у холдинга. Откат — выключить сервис, данные не трогать.
+- Ранбук `docs/deploy/tender-rollout-runbook.md` по образцу `bpp-rollout-runbook.md`: репетиция на дампе → `migrate_shared` (`files/0006–0008`, `access/0026–0027`) → `migrate_companies` (`bpp/0021–0022`, `tender/0001–0008`) → `tender_assign_roles --company hi-tech-group` → `tender_configure_route --company hi-tech-group` → ClamAV (обязателен для портала) → ящик `tender@` (этап 4) → `manage.py service tender --on` и `CompanyModule` только у холдинга. Откат — выключить сервис, данные не трогать.
 - Итоговое `harness-review` всего модуля, регрессия (сторожа CI + `apps/tender`, `apps/bpp`, `apps/signoff`, `apps/files`, `apps/refdata`), `nginx -t` (хвост T3.1). **Пуш и PR `tender` → `sanzhar` — только после этапа 5 и по команде пользователя** (правило 20.10).
 
 ---
@@ -227,10 +227,10 @@ DoD: передача на трёх схемах создаёт счёт (ава
 | Задача | Файлы |
 |---|---|
 | T5.4 | `apps/refdata/interface.py`, `refdata/services/lookup.py` (+тест); `apps/bpp/interface.py`, `bpp/schemas/tender.py`, `bpp/services/requests/tender_counterparty.py` (+тест) |
-| T5.1 | `tender/migrations/0006_award_delivery.py` (общая на этап), `models/tender.py`, `services/comparison/{__init__,opening,table,money,export}.py`, `htqweb/xlsx_safe.py` (+тест), `bpp/services/core/export.py`, `file_owners.py` (`_offer_can_view`), ручки в `urls_tenders.py`/`views_tenders.py`, `tests/test_opening.py`, `tests/test_comparison.py` |
-| T5.2 | `models/award.py`, `services/award/{__init__,selection,submit}.py`, `approval_hooks.py`, `apps.py` (`ready`), `management/commands/tender_configure_route.py`, `tests/test_award.py`, `tests/test_award_signoff.py` |
+| T5.1 | `tender/migrations/0006_opening.py`, `models/tender.py`, `services/comparison/{__init__,opening,table,money,export}.py`, `htqweb/xlsx_safe.py` (+тест), `bpp/services/core/export.py`, `file_owners.py` (`_offer_can_view`), ручки в `urls_tenders.py`/`views_tenders.py`, `tests/test_opening.py`, `tests/test_comparison.py` |
+| T5.2 | `models/award.py`, `migrations/0007_awards.py`, `services/award/{__init__,selection,submit}.py`, `approval_hooks.py`, `apps.py` (`ready`), `management/commands/tender_configure_route.py`, `tests/test_award.py`, `tests/test_award_signoff.py` |
 | T5.3 [B] | `bpp/migrations/0022_invoice_receipt.py`, `bpp/models/invoices.py`, `bpp/services/requests/tender_documents.py`, `bpp/services/invoices/{read,invoices}.py` (показ приёмки, «ждёт приёмки»), `bpp/interface.py`, `bpp/schemas/tender.py`, `bpp/tests/test_tender_documents.py`, фронт карточки счёта БЗО (строка «Товар принят…») |
-| T5.5 | `models/delivery.py` (`Handover`, `Receipt`, `ReceiptLine`), `services/award/handover.py`, `services/delivery/{__init__,stages,receipts,closing}.py`, `file_owners.py` (`tender.receipt`), `files/migrations/0008_tender_receipt_types.py`, `portal/serializers.py` (`_result`), `tests/test_handover.py`, `tests/test_delivery.py` |
+| T5.5 | `models/delivery.py` (`Handover`, `Receipt`, `ReceiptLine`), `migrations/0008_delivery.py`, `services/award/handover.py`, `services/delivery/{__init__,stages,receipts,closing}.py`, `file_owners.py` (`tender.receipt`), `files/migrations/0008_tender_receipt_types.py`, `portal/serializers.py` (`_result`), `tests/test_handover.py`, `tests/test_delivery.py` |
 | T5.6 | `metrics.py`, `infra/logging/grafana-dashboards/htqweb-tender.json`, `alerting/rules.yml`; фронт `features/tender/tenders/{ComparisonTab,AwardTab,DeliveryTab,ReceiptDialog}.tsx`, `features/bpp/core/ComparisonGrid.tsx`, `features/tender/portal` (итог); `tests/test_stage5_e2e.py`, `frontend/tests/e2e/41_tender_award.spec.ts` |
 | T5.7 | `docs/deploy/tender-rollout-runbook.md`, `API.md`, `STRUCTURE.md`, `CLAUDE.md` |
 

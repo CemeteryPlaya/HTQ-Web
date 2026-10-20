@@ -114,7 +114,7 @@ Spec delta (Phase T):
 
 Итог 20.10 (этап 3, доводка T3.6–T3.9 — план [2026-10-20-tender-stage3-tails-plan.md](docs/plans/2026-10-20-tender-stage3-tails-plan.md)): регрессия бэкенда — 2259 passed (`apps/tender`, `apps/files`, `apps/users`, `test_gate`, `htqweb/tests`, сторожа `core`), `makemigrations --check` чист; vitest tender/public/routing — зелёный (полный vitest — только известные падения вне tender: HR-диалоги, `uxContract` у `features/bpp/projects`, три нестабильных под нагрузкой файла БЗО, поодиночке зелёные), tsc 148, eslint чисто; e2e `40_tender_portal` (chromium, test-local) — 2 passed. `harness-review`: 2 major (токен в логах, сироты в S3) и 6 minor исправлены, повторное ревью — APPROVE. Хвосты этапов 0–2 по `allowed_actions` приглашения и окну сброса устройства закрыты (T3.7); DWG в `tender_spec` — отложен до этапа 5.
 
-Спека этапа 5 (20.10): [docs/plans/2026-10-20-tender-stage5-spec.md](docs/plans/2026-10-20-tender-stage5-spec.md) — порядок T5.4 → T5.1 → T5.2 → T5.3 [B] → T5.5 → T5.6 → T5.7, решения S5-01…S5-20, вопросы Алгазы до T5.2/T5.5.
+Спека этапа 5 (20.10): [docs/plans/2026-10-20-tender-stage5-spec.md](docs/plans/2026-10-20-tender-stage5-spec.md), пошаговый план — [docs/plans/2026-10-20-tender-stage5-plan.md](docs/plans/2026-10-20-tender-stage5-plan.md) (13 задач, демо-данные — `seed_tender_demo`) — порядок T5.4 → T5.1 → T5.2 → T5.3 [B] → T5.5 → T5.6 → T5.7, решения S5-01…S5-20, вопросы Алгазы до T5.2/T5.5.
 
 Хвосты этапов 0–2 (несрочные, в план этапа 3 или 5):
 - DWG в `tender_spec` — файловая подсистема и scope `file_object` формат не знают (`files/services/documents.py` + `media_files`).
