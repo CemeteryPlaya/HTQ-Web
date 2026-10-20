@@ -213,10 +213,10 @@ export interface InvoiceRow {
   due_date: string | null;
   planned_pay_date: string | null;
   overdue: boolean;
-  docs_required: { avr?: boolean; waybill?: boolean; vat_invoice?: boolean   /** Постоплата после приёмки, товар ещё не принят (счёт из тендера). */
+  /** Постоплата после приёмки, товар ещё не принят (счёт из тендера). */
   awaiting_receipt?: boolean;
   received_at?: string | null;
-};
+  docs_required: { avr?: boolean; waybill?: boolean; vat_invoice?: boolean };
   days_waiting_docs: number | null;
   recon_status: string;
   paid_bank_amount: Money;
