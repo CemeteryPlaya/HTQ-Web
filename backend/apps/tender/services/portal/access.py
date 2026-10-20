@@ -57,8 +57,7 @@ UA_MAX = 512
 _TOKEN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _SECRET = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
-#: Лимиты портала [умолч.]: на токен и на IP — в минуту, ``bind`` — в час.
-TOKEN_LIMIT, IP_LIMIT, BIND_LIMIT = 120, 300, 10
+#: Окна лимитов; сами лимиты — ``settings.TENDER_PORTAL_*_LIMIT``.
 MINUTE, HOUR = 60, 3600
 
 #: Методы без побочных эффектов — без проверки Origin и тела.
@@ -134,10 +133,6 @@ def company_slug(request) -> str | None:
     return company.get("slug") or current_company_or_none()
 
 
-def _setting(name: str, default: int) -> int:
-    return int(getattr(settings, name, default) or default)
-
-
 def _limit(bucket: str, key: str, limit: int, window: int) -> None:
     if not ratelimit.hit(bucket, key, limit=limit, window=window):
         raise rate_limited(bucket, key, window)
@@ -145,8 +140,7 @@ def _limit(bucket: str, key: str, limit: int, window: int) -> None:
 
 def throttle_bind(token: str) -> None:
     """``bind`` — 10 в час на токен: перебор устройств по одной ссылке."""
-    _limit("tender_portal_bind", token,
-           _setting("TENDER_PORTAL_BIND_LIMIT", BIND_LIMIT), HOUR)
+    _limit("tender_portal_bind", token, settings.TENDER_PORTAL_BIND_LIMIT, HOUR)
 
 
 # ── токен → приглашение ─────────────────────────────────────────────────
@@ -162,11 +156,10 @@ def resolve(request, token: str) -> tuple[Invitation, Tender]:
     а не в базу."""
     ip = client_ip(request)
     if ip:
-        _limit("tender_portal_ip", ip, _setting("TENDER_PORTAL_IP_LIMIT", IP_LIMIT), MINUTE)
+        _limit("tender_portal_ip", ip, settings.TENDER_PORTAL_IP_LIMIT, MINUTE)
     if not company_slug(request) or not _TOKEN.match(token or ""):
         raise dead_link()
-    _limit("tender_portal_token", token,
-           _setting("TENDER_PORTAL_TOKEN_LIMIT", TOKEN_LIMIT), MINUTE)
+    _limit("tender_portal_token", token, settings.TENDER_PORTAL_TOKEN_LIMIT, MINUTE)
     invitation = (Invitation.objects.select_related("tender", "tender__request")
                   .filter(token_hash=digest(token), revoked_at__isnull=True).first())
     if invitation is None or invitation.tender.status == TenderStatus.DRAFT:

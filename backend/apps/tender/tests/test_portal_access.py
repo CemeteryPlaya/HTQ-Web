@@ -386,6 +386,45 @@ def test_token_rate_limit_is_429(world, settings):
     assert resp.status_code == 429 and resp.json()["code"] == "E-RATE-01"
 
 
+@pytest.mark.django_db
+def test_ip_rate_limit_is_429(world, settings):
+    """Перебор токенов с одного адреса упирается в лимит по IP раньше базы."""
+    settings.TENDER_PORTAL_IP_LIMIT = 3
+    client = Client()
+    for n in range(3):
+        assert get(client, world.slug, f"tok-unknown-{n:032d}").status_code == 404
+    resp = get(client, world.slug, f"tok-unknown-{9:032d}")
+    assert resp.status_code == 429 and resp.json()["code"] == "E-RATE-01"
+    assert int(resp["Retry-After"]) > 0
+
+
+@pytest.mark.django_db
+def test_portal_limits_are_settings():
+    from django.conf import settings as django_settings
+
+    assert (django_settings.TENDER_PORTAL_TOKEN_LIMIT, django_settings.TENDER_PORTAL_IP_LIMIT,
+            django_settings.TENDER_PORTAL_BIND_LIMIT,
+            django_settings.TENDER_PORTAL_UPLOAD_LIMIT) == (120, 300, 10, 30)
+
+
+@pytest.mark.django_db
+def test_bind_refused_survives_a_journal_failure(world, monkeypatch, fallback_log_mode):
+    """Сбой записи ``bind_refused`` не превращает отказ 409 в 500."""
+    from apps.tender.services.portal import access as portal_access
+
+    assert post(Client(), world.slug, f"{world.token}/bind").status_code == 200
+    real = portal_access.log_event
+
+    def broken(invitation, kind, **kw):
+        if kind == "bind_refused":
+            raise DatabaseError("journal is down")
+        return real(invitation, kind, **kw)
+
+    monkeypatch.setattr(portal_access, "log_event", broken)
+    resp = post(Client(), world.slug, f"{world.token}/bind")
+    assert (resp.status_code, resp.json()["code"]) == (409, "E-TND-06")
+
+
 # ── закупщик: сброс устройства и журнал ────────────────────────────────────
 
 @pytest.mark.django_db

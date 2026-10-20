@@ -6,7 +6,8 @@
 новая привязка; секрет — из cookie этого устройства, если она уже есть (одна
 cookie обслуживает несколько приглашений), или новый ``token_urlsafe(32)``.
 Места нет — отказ ``E-TND-06`` и событие ``bind_refused`` (пишется ПОСЛЕ
-отката транзакции привязки, иначе откатилось бы и оно).
+отката транзакции привязки, иначе откатилось бы и оно; сбой этой записи
+ответ не меняет — отказ остаётся отказом, а не 500).
 
 Первая привязка открывает приглашение: ``first_opened_at``, статус
 «Отправлено» / «Ошибка доставки» → «Открыто». Тендер не на приёме —
@@ -17,11 +18,12 @@ from __future__ import annotations
 
 import secrets
 
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from apps.tender.models import DeviceBinding, Invitation, InvitationStatus, PortalEventKind
 from htqweb.errors import DomainError
+from htqweb.fallback import fallback
 
 from . import access
 
@@ -58,6 +60,11 @@ def bind(invitation: Invitation, request) -> tuple[DeviceBinding, str | None]:
             access.log_event(inv, PortalEventKind.BOUND, ip=ip, user_agent=agent,
                              meta={"binding": str(binding.pk), "reused_cookie": bool(current)})
             return binding, secret
-    access.log_event(invitation, PortalEventKind.BIND_REFUSED, ip=ip, user_agent=agent,
-                     meta={"active_devices": active, "max_devices": inv.max_devices})
+    try:
+        with transaction.atomic():
+            access.log_event(invitation, PortalEventKind.BIND_REFUSED, ip=ip, user_agent=agent,
+                             meta={"active_devices": active, "max_devices": inv.max_devices})
+    except DatabaseError as exc:
+        fallback("tender.portal.bind_refused_journal_failed", None,
+                 reason="журнал отказа привязки не записан", exc=exc)
     raise _refused()

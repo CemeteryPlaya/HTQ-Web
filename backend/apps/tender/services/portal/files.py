@@ -29,7 +29,6 @@ from . import offers
 from .actor import portal_actor
 
 Event = Callable[[str, dict], None]
-UPLOADS_PER_HOUR = 30
 
 
 def _out(row: dict) -> dict:

@@ -417,6 +417,12 @@ PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 # SameSite=Strict). ``True`` — имя ``tender_device`` без Secure: только стенд
 # без HTTPS (settings.dev, settings.test). На бою — всегда False.
 TENDER_PORTAL_INSECURE_COOKIE = False
+# Лимиты портала: запросов в минуту на токен ссылки и на IP, привязок
+# устройства в час на токен, загрузок файлов КП в час на приглашение.
+TENDER_PORTAL_TOKEN_LIMIT = int(env("TENDER_PORTAL_TOKEN_LIMIT", "120"))
+TENDER_PORTAL_IP_LIMIT = int(env("TENDER_PORTAL_IP_LIMIT", "300"))
+TENDER_PORTAL_BIND_LIMIT = int(env("TENDER_PORTAL_BIND_LIMIT", "10"))
+TENDER_PORTAL_UPLOAD_LIMIT = int(env("TENDER_PORTAL_UPLOAD_LIMIT", "30"))
 
 # ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
 # Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию

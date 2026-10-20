@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import transaction
 from django.http import HttpResponseRedirect, JsonResponse
 
@@ -148,7 +149,7 @@ def portal_offer_files_post(request, token):
     ctx = access.require_device(request, token, multipart=True)
     portal_files.scanner_required()
     bucket, key = "tender_portal_upload", str(ctx.invitation.pk)
-    if not ratelimit.hit(bucket, key, limit=portal_files.UPLOADS_PER_HOUR,
+    if not ratelimit.hit(bucket, key, limit=settings.TENDER_PORTAL_UPLOAD_LIMIT,
                          window=access.HOUR):
         raise access.rate_limited(bucket, key, access.HOUR)
     upload = request.FILES.get("file")

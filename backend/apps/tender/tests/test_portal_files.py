@@ -224,15 +224,14 @@ def test_http_files(company_context, memory_storage, clamd, settings):  # noqa: 
     cache.clear()
 
 
-def test_http_upload_rate_limit(company_context, memory_storage, clamd, settings,  # noqa: F811
-                                monkeypatch):
+def test_http_upload_rate_limit(company_context, memory_storage, clamd, settings):  # noqa: F811
     from django.core.cache import cache
 
     from apps.tender.tests.test_portal_offers import _http_world
 
     settings.PUBLIC_BASE_URL = "https://htq.group"
     cache.clear()
-    monkeypatch.setattr(portal_files, "UPLOADS_PER_HOUR", 1)
+    settings.TENDER_PORTAL_UPLOAD_LIMIT = 1
     world, client, portal = _http_world(company_context["slug"])
     assert _upload_http(portal, client, world).status_code == 201
     second = _upload_http(portal, client, world, name="kp2.pdf")
