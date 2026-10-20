@@ -14,6 +14,7 @@ from htqweb.errors import DomainError
 from htqweb.http import api_view, json_error
 
 from . import schemas
+from .services.comparison import export as comparison_export
 from .services.comparison import opening, table
 from .services.portal import access as portal_access
 from .services.tenders import invitations, tenders
@@ -126,6 +127,11 @@ def tender_open(request, tender_id, data):
 @api_view(methods=("GET",), module="tender", level="read")
 def tender_comparison(request, tender_id):
     return table.comparison(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_comparison_export(request, tender_id):
+    return comparison_export.export(Ctx.from_request(request), tender_id)
 
 
 @api_view(methods=("GET",), module="tender", level="read")

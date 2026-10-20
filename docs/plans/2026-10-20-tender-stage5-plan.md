@@ -127,7 +127,7 @@
 - Test: `backend/apps/tender/tests/test_comparison_export.py`, `backend/apps/bpp/tests/test_export_formulas.py`
 
 **Interfaces:**
-- Produces: `htqweb.xlsx_safe.safe_cell(value) -> object` — строка с первым символом из `= + - @ \t \r` → `"'" + value` и тип ячейки «текст»; прочее — как есть. Ручка `GET tenders/<id>/comparison/export` → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+- Produces: `htqweb.xlsx_safe.safe_cell(sheet, value) -> WriteOnlyCell` — строка с первым символом из `= + - @ 	 ` → ячейка-текст, значение без изменений; прочее — как есть. Ручка `GET tenders/<id>/comparison/export` → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
 
 - [ ] **Step 1: Тесты** — `test_safe_cell_neutralises_six_prefixes` (параметризация по `= + - @ \t \r` и строка без префикса); `test_export_has_two_sheets_and_no_formula` (листы «Сравнение», «Поставщики»; ни одна ячейка не `data_type == "f"`; комментарий поставщика `=HYPERLINK(...)` хранится текстом); `test_bpp_export_escapes_plus_and_at` (у реестра БЗО ячейка `+7…` и `@cmd` — текст).
 - [ ] **Step 2: Красные.**
