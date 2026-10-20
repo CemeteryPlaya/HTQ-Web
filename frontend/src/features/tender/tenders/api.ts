@@ -12,6 +12,7 @@ import { apiPath } from '@/api/endpoints';
 import { filenameFromDisposition } from '@/features/bpp/core/registryExport';
 
 import type { AwardInput, AwardView, Comparison } from './comparison';
+import type { Delivery, HandoverResult, Receipt, ReceiptInput } from './delivery';
 
 export type TenderStatus =
   | 'draft' | 'intake' | 'opened' | 'on_approval' | 'awarded' | 'handed_over' | 'delivery'
@@ -156,6 +157,8 @@ export const tenderKeys = {
   card: (id: string) => ['tender', 'tenders', 'card', id] as const,
   comparison: (id: string) => ['tender', 'tenders', 'comparison', id] as const,
   award: (id: string) => ['tender', 'tenders', 'award', id] as const,
+  delivery: (id: string) => ['tender', 'tenders', 'delivery', id] as const,
+  receipts: (id: string) => ['tender', 'tenders', 'receipts', id] as const,
   counterparties: (q: string) => ['tender', 'counterparties', q] as const,
   contacts: (counterpartyId: string) => ['tender', 'contacts', counterpartyId] as const,
 };
@@ -253,6 +256,16 @@ export const tendersApi = {
     api.put<AwardView>(path(`${id}/award`), body).then((r) => r.data),
   submitAward: (id: string, key: string, version: number) =>
     api.post<TenderCard>(path(`${id}/award/submit`), { version }, withKey(key)).then((r) => r.data),
+  handover: (id: string, key: string, version: number) =>
+    api.post<HandoverResult>(path(`${id}/handover`), { version }, withKey(key)).then((r) => r.data),
+  delivery: (id: string) => api.get<Delivery>(path(`${id}/delivery`)).then((r) => r.data),
+  receipts: (id: string) => api.get<Receipt[]>(path(`${id}/receipts`)).then((r) => r.data),
+  addReceipt: (id: string, key: string, body: ReceiptInput) =>
+    api.post<Receipt>(path(`${id}/receipts`), body, withKey(key)).then((r) => r.data),
+  setOriginals: (id: string, receiptId: string, body: { originals_at: string | null; originals_to: string }) =>
+    api.patch<Receipt>(path(`${id}/receipts/${receiptId}`), body).then((r) => r.data),
+  cancelReceipt: (id: string, receiptId: string, key: string, comment: string) =>
+    api.post<Receipt>(path(`${id}/receipts/${receiptId}/cancel`), { comment }, withKey(key)).then((r) => r.data),
   /** Смена проверяющего качества после публикации (до утверждения выбора). */
   setReviewer: (id: string, reviewerId: number | null, version: number) =>
     api.patch<TenderCard>(path(id), { quality_reviewer_user_id: reviewerId, version }).then((r) => r.data),

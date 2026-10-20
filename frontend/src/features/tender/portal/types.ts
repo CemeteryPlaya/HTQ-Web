@@ -53,8 +53,19 @@ export interface PortalTender {
   intake_open: boolean;
   /** Статус своего приглашения (`opened`, `submitted`, `declined`, …). */
   participation_status: string;
-  /** Итог для поставщика: `awaiting` — ожидается решение (этап 5 добавит прочие). */
-  result: string;
+  /** Итог для поставщика (TND-035): решение не принято, выбран, не выбран,
+   * тендер отменён или не состоялся. */
+  result: PortalResult | string;
+  /** Свои выбранные позиции — только у победителя после утверждения выбора. */
+  result_items?: PortalResultItem[];
+}
+
+export type PortalResult = 'awaiting' | 'awarded' | 'not_awarded' | 'cancelled' | 'failed';
+
+export interface PortalResultItem {
+  line_no: number;
+  name: string;
+  qty: string;
 }
 
 export interface OfferLine {

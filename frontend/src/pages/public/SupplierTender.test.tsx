@@ -304,3 +304,41 @@ describe('после срока', SLOW, () => {
     expect(screen.queryByLabelText('Цена за единицу: Швеллер 12П')).not.toBeInTheDocument();
   });
 });
+
+describe('итог тендера (TND-035)', SLOW, () => {
+  const closed = (tender: Partial<PortalTender>) => bound({
+    card: { intake_open: false },
+    tender: { intake_open: false, ...tender },
+    offer: { status: 'submitted', number: 1, editable: false },
+  });
+
+  it('выбран — «Выбрано по позициям» со своими позициями', async () => {
+    routes(closed({
+      result: 'awarded',
+      result_items: [{ line_no: 1, name: 'Швеллер 12П', qty: '10' }, { line_no: 3, name: 'Уголок 50×5', qty: '4' }],
+    }));
+    renderPage();
+    expect(await screen.findByText('Выбрано по позициям:')).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Выбранные позиции' });
+    expect(within(list).getByText('1. Швеллер 12П — 10')).toBeInTheDocument();
+    expect(within(list).getByText('3. Уголок 50×5 — 4')).toBeInTheDocument();
+    expect(screen.queryByText('Ожидается решение')).not.toBeInTheDocument();
+  });
+
+  it('не выбран — «Не выбрано», без позиций', async () => {
+    routes(closed({ result: 'not_awarded', result_items: [] }));
+    renderPage();
+    expect(await screen.findByText('Не выбрано')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Выбранные позиции' })).not.toBeInTheDocument();
+  });
+
+  it('отменён и не состоялся', async () => {
+    routes(closed({ result: 'cancelled' }));
+    const { unmount } = renderPage();
+    expect(await screen.findByText('Тендер отменён')).toBeInTheDocument();
+    unmount();
+    routes(closed({ result: 'failed' }));
+    renderPage();
+    expect(await screen.findByText('Тендер не состоялся')).toBeInTheDocument();
+  });
+});

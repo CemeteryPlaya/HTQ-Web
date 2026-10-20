@@ -5477,7 +5477,12 @@
       "changeReviewer": "Change",
       "tabMain": "Tender",
       "tabComparison": "Comparison",
-      "tabAward": "Selection"
+      "tabAward": "Selection",
+      "handover": "Hand over to BPP",
+      "handoverConfirm": "Hand the selection over to BPP?",
+      "handoverHint": "Draft invoices or contracts will be created in the budget, procurement and payments module for each supplier; unselected parts of the request will be closed.",
+      "handoverDone": "Handed over to BPP: {{numbers}}",
+      "tabDelivery": "Delivery"
     },
     "portal": {
       "commentCounter": "At least {{min}} characters, now {{count}}",
@@ -5593,7 +5598,12 @@
       "no": "No",
       "reqReadonly": "The details come from your organization's card with the customer. To change them, contact the buyer.",
       "declinedTitle": "You declined to participate in the tender",
-      "declinedText": "The customer has received your reason. Thank you for the reply."
+      "declinedText": "The customer has received your reason. Thank you for the reply.",
+      "resultAwarded": "Selected for items:",
+      "resultNotAwarded": "Not selected",
+      "resultCancelled": "Tender cancelled",
+      "resultFailed": "Tender did not take place",
+      "awardedItems": "Selected items"
     },
     "comparison": {
       "loadFailed": "Failed to load the comparison.",
@@ -5662,6 +5672,53 @@
       "save": "Save selection",
       "submit": "Submit for approval",
       "saveBeforeSubmit": "Save the selection before submitting"
+    },
+    "delivery": {
+      "loadFailed": "Failed to load the delivery.",
+      "empty": "No suppliers in the selection.",
+      "originalsSaved": "Originals hand-over saved",
+      "cancelReceipt": "Cancel receipt",
+      "cancelConfirm": "Cancel the receipt of {{date}}?",
+      "cancelHint": "The received quantity returns to the remainder and the BPP invoice mark is recalculated.",
+      "receiptSaved": "Receipt saved",
+      "stage": {
+        "awaiting_documents": "Awaiting BPP documents",
+        "awaiting_shipment_payment": "Awaiting payment before shipment",
+        "in_delivery": "In delivery",
+        "partially_received": "Partially received",
+        "received": "Received",
+        "awaiting_final_payment": "Awaiting final payment",
+        "closed": "Closed"
+      },
+      "paidOf": "paid {{paid}} of {{total}}",
+      "replacedBy": "replaced under {{offer}}:",
+      "receivedOf": "received {{received}} of {{qty}}",
+      "withGoods": "accepted together with the goods",
+      "receive": "Mark as received",
+      "receipts": "Receipts",
+      "worksAt": "Works accepted {{date}}",
+      "goodsAt": "Goods received {{date}}",
+      "cancelled": "cancelled",
+      "originalsButton": "Originals handed over",
+      "originalsDone": "Originals handed over {{date}}",
+      "originalsAt": "Originals handed over",
+      "originalsTo": "To whom",
+      "files": "Scans and photos",
+      "qtyPositive": "Quantity must be greater than zero",
+      "qtyTooMuch": "No more than {{left}} — the rest is already received",
+      "pickDate": "Enter the receipt date",
+      "notFuture": "The receipt date cannot be later than today",
+      "pickRows": "Enter what was received",
+      "fixRows": "Fix the quantities in the rows",
+      "receiptTitle": "Mark as received — {{name}}",
+      "receiptHint": "Scans of the waybill, act, VAT invoice and photos are attached to the receipt after saving.",
+      "kindGoods": "Goods received",
+      "kindWorks": "Works accepted",
+      "receivedAt": "Receipt date",
+      "left": "selected {{qty}}, received {{received}}, left {{left}}",
+      "qtyFor": "Received: {{name}}",
+      "comment": "Comment",
+      "saveReceipt": "Save receipt"
     }
   },
   "bpp": {

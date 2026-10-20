@@ -59,6 +59,22 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+type Translate = (key: string, fallback: string) => string;
+
+/** Заголовок итога для поставщика (TND-035); неизвестный код — как пришёл. */
+function resultTitle(result: string, t: Translate): string {
+  switch (result) {
+    case 'awarded': return t('tender.portal.resultAwarded', 'Выбрано по позициям:');
+    case 'not_awarded': return t('tender.portal.resultNotAwarded', 'Не выбрано');
+    case 'cancelled': return t('tender.portal.resultCancelled', 'Тендер отменён');
+    case 'failed': return t('tender.portal.resultFailed', 'Тендер не состоялся');
+    case 'awaiting':
+    case '':
+      return t('tender.portal.awaiting', 'Ожидается решение');
+    default: return result;
+  }
+}
+
 export function OfferEditor({ token, tender, offer, onFatal, onDeclined }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -261,16 +277,21 @@ export function OfferEditor({ token, tender, offer, onFatal, onDeclined }: Props
       )}
       {readOnly && (
         <div role="status" className="space-y-1 rounded-2xl border bg-muted/40 p-4">
-          <p className="text-lg font-semibold">
-            {tender.result === 'awaiting' || !tender.result
-              ? t('tender.portal.awaiting', 'Ожидается решение')
-              : tender.result}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {submitted
-              ? t('tender.portal.awaitingSubmitted', 'Ваше предложение № {{number}} принято. О решении сообщит закупщик.', { number: submitted })
-              : t('tender.portal.awaitingNone', 'Приём предложений завершён. О решении сообщит закупщик.')}
-          </p>
+          <p className="text-lg font-semibold">{resultTitle(tender.result, t)}</p>
+          {tender.result === 'awarded' && (tender.result_items ?? []).length > 0 && (
+            <ul className="list-disc space-y-0.5 pl-5 text-base" aria-label={t('tender.portal.awardedItems', 'Выбранные позиции')}>
+              {(tender.result_items ?? []).map((item) => (
+                <li key={item.line_no}>{item.line_no}. {item.name} — {item.qty}</li>
+              ))}
+            </ul>
+          )}
+          {(tender.result === 'awaiting' || !tender.result) && (
+            <p className="text-sm text-muted-foreground">
+              {submitted
+                ? t('tender.portal.awaitingSubmitted', 'Ваше предложение № {{number}} принято. О решении сообщит закупщик.', { number: submitted })
+                : t('tender.portal.awaitingNone', 'Приём предложений завершён. О решении сообщит закупщик.')}
+            </p>
+          )}
         </div>
       )}
       {!readOnly && submitted && (

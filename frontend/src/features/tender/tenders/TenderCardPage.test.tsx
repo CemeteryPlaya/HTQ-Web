@@ -16,7 +16,7 @@ import { createTestQueryClient } from '@/test/renderWithProviders';
 import type { TenderCard } from './api';
 import { TenderCardPage } from './TenderCardPage';
 import {
-  CONTACTS, COUNTERPARTIES, PROSPECTS, REQUEST_ID, TENDER_ID, invitation, tenderCard,
+  CONTACTS, COUNTERPARTIES, PROSPECTS, REQUEST_ID, TENDER_ID, awardView, comparisonData, invitation, tenderCard,
 } from './testData';
 
 const get = vi.hoisted(() => vi.fn());
@@ -452,5 +452,58 @@ describe('TenderCardPage — вскрытие и выбор (этап 5)', () =>
     await userEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
     await waitFor(() => expect(patch).toHaveBeenCalled());
     expect(patch.mock.calls[0][1]).toEqual({ quality_reviewer_user_id: 77, version: 2 });
+  });
+});
+
+describe('TenderCardPage — утверждение, передача, поставка (этап 5)', () => {
+  const OPENED = '2026-10-20T10:00:00+05:00';
+  /** Карточка + ручки вкладок этапа 5 (сравнение, выбор, поставка). */
+  const serveCard = (card: TenderCard) => {
+    serve(card);
+    const base = get.getMockImplementation()!;
+    get.mockImplementation((url: string, config?: object) => {
+      if (url.endsWith('/comparison')) return Promise.resolve({ data: comparisonData() });
+      if (url.endsWith('/award')) return Promise.resolve({ data: awardView({ allowed_actions: [] }) });
+      if (url.endsWith('/delivery')) return Promise.resolve({ data: { tender_id: TENDER_ID, status: card.status, suppliers: [] } });
+      if (url.endsWith('/receipts')) return Promise.resolve({ data: [] });
+      return base(url, config);
+    });
+  };
+
+  beforeEach(() => {
+    get.mockReset();
+    post.mockReset();
+  });
+
+  it('выбор утверждён — «Передать в БЗО» с версией, затем вкладка «Поставка»', async () => {
+    const awarded = tenderCard({ status: 'awarded', opened_at: OPENED, allowed_actions: ['handover'] });
+    serveCard(awarded);
+    post.mockImplementation((url: string) => {
+      if (url.endsWith('/handover')) {
+        serveCard({ ...awarded, status: 'handed_over', allowed_actions: ['receipt'] });
+        return Promise.resolve({ data: { tender_id: TENDER_ID, status: 'handed_over', documents: [
+          { invitation_id: 'inv-1', supplier: 'ТОО «Металл-Снаб»', part_id: 'p1', doc_type: 'invoice', doc_id: 'd1', number: 'СЧ-2026-000010' },
+        ] } });
+      }
+      return Promise.reject(new Error(url));
+    });
+    renderCard();
+    expect(screen.queryByRole('tab', { name: 'Поставка' })).toBeNull();
+    await userEvent.click(await screen.findByRole('button', { name: 'Передать в БЗО' }));
+    const confirm = await screen.findByRole('dialog');
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Передать в БЗО' }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0][0]).toContain(`tenders/${TENDER_ID}/handover`);
+    expect(post.mock.calls[0][1]).toEqual({ version: 2 });
+    expect(toast.success).toHaveBeenCalledWith('Передано в БЗО: СЧ-2026-000010');
+    expect(await screen.findByRole('tab', { name: 'Поставка' })).toBeInTheDocument();
+  });
+
+  it('на утверждении — ход согласования tender.award под вкладкой «Выбор»', async () => {
+    serveCard(tenderCard({ status: 'on_approval', opened_at: OPENED, allowed_actions: [] }));
+    renderCard();
+    await userEvent.click(await screen.findByRole('tab', { name: 'Выбор' }));
+    await waitFor(() => expect(get.mock.calls.some(([url, config]) => String(url).includes('signoff')
+      && JSON.stringify(config ?? {}).includes('tender.award'))).toBe(true));
   });
 });

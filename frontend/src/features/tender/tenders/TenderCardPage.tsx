@@ -11,7 +11,9 @@
  * - Отказ 409 `E-CON-01` — плашка «тендер уже изменили» с «Обновить».
  * - Этап 5: `open` — «Вскрыть»; после вскрытия — вкладки «Сравнение» и
  *   «Выбор» (`ComparisonTab`, `AwardTab`); `reviewer` — смена проверяющего
- *   качества после публикации, до утверждения выбора.
+ *   качества после публикации, до утверждения выбора; «Ход согласования»
+ *   выбора (`tender.award`) — под вкладкой «Выбор»; `handover` — «Передать
+ *   в БЗО», после передачи — вкладка «Поставка» (`DeliveryTab`).
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -32,6 +34,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { SubjectProcesses } from '@/components/signoff/SubjectProcesses';
 import { DocumentActionButton, type BppDocumentAction } from '@/features/bpp/core/DocumentActionButton';
 import { formatDateTime } from '@/features/bpp/format';
 import { refdataApi, refdataKeys } from '@/features/bpp/refdata/api';
@@ -50,6 +53,7 @@ import {
 import { AddParticipantDialog } from './AddParticipantDialog';
 import { AwardTab } from './AwardTab';
 import { ComparisonTab } from './ComparisonTab';
+import { DeliveryTab } from './DeliveryTab';
 import { ExtendDialog } from './ExtendDialog';
 import { LinksDialog, type ShownLink } from './LinksDialog';
 import { PaymentSchemeField } from './PaymentSchemeField';
@@ -59,6 +63,12 @@ import {
 } from './schemes';
 
 const REASON_MIN = 10;
+/** Предмет signoff утверждения выбора поставщиков. */
+const AWARD_SUBJECT = 'tender.award';
+/** Статусы, в которых выбор уже передан в БЗО — есть поставка. */
+const DELIVERY_STATUSES = ['handed_over', 'delivery', 'closed'];
+/** Статусы после отправки выбора — есть ход согласования. */
+const APPROVAL_STATUSES = ['on_approval', 'rework', 'awarded', ...DELIVERY_STATUSES];
 /** Приглашения в этих статусах действий не имеют. */
 
 interface DraftForm {
@@ -272,6 +282,22 @@ export function TenderCardPage() {
     run: guarded(async (key) => {
       refresh(await tendersApi.open(card.id, key, card.version));
       setTab('comparison');
+    }),
+  };
+  const handover: BppDocumentAction = {
+    label: t('tender.tenders.handover', 'Передать в БЗО'),
+    confirm: {
+      title: t('tender.tenders.handoverConfirm', 'Передать выбор в БЗО?'),
+      description: t('tender.tenders.handoverHint',
+        'По каждому поставщику будут созданы черновики счёта или договора в модуле закупок и оплат; невыбранные части заявки закроются.'),
+    },
+    run: guarded(async (key) => {
+      const result = await tendersApi.handover(card.id, key, card.version);
+      refresh();
+      toast.success(t('tender.tenders.handoverDone', 'Передано в БЗО: {{numbers}}', {
+        numbers: result.documents.map((row) => row.number).join(', ') || '—',
+      }));
+      setTab('delivery');
     }),
   };
   const saveReviewer = async () => {
@@ -585,6 +611,12 @@ export function TenderCardPage() {
             onPendingChange={onPendingChange} onDone={onDone}
           />
         )}
+        {allowed.includes('handover') && (
+          <DocumentActionButton
+            actionKey="handover" action={handover} disabled={anyBusy && !busy.handover}
+            onPendingChange={onPendingChange} onDone={onDone}
+          />
+        )}
         {allowed.includes('extend') && (
           <Button type="button" variant="outline" disabled={anyBusy} onClick={() => setExtending(true)}>
             <CalendarClock className="mr-1.5 h-4 w-4" />
@@ -610,14 +642,27 @@ export function TenderCardPage() {
             <TabsTrigger value="main">{t('tender.tenders.tabMain', 'Тендер')}</TabsTrigger>
             <TabsTrigger value="comparison">{t('tender.tenders.tabComparison', 'Сравнение')}</TabsTrigger>
             <TabsTrigger value="award">{t('tender.tenders.tabAward', 'Выбор')}</TabsTrigger>
+            {DELIVERY_STATUSES.includes(card.status) && (
+              <TabsTrigger value="delivery">{t('tender.tenders.tabDelivery', 'Поставка')}</TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="main" className="space-y-6">{mainSection}</TabsContent>
           <TabsContent value="comparison">
             <ComparisonTab tenderId={card.id} tenderNumber={card.number} />
           </TabsContent>
           <TabsContent value="award">
-            <AwardTab tenderId={card.id} onChanged={refresh} onConflict={() => setConflict(true)} />
+            <div className="space-y-6">
+              <AwardTab tenderId={card.id} onChanged={refresh} onConflict={() => setConflict(true)} />
+              {APPROVAL_STATUSES.includes(card.status) && (
+                <SubjectProcesses subjectType={AWARD_SUBJECT} subjectId={card.id} />
+              )}
+            </div>
           </TabsContent>
+          {DELIVERY_STATUSES.includes(card.status) && (
+            <TabsContent value="delivery">
+              <DeliveryTab tenderId={card.id} canReceive={allowed.includes('receipt')} onChanged={refresh} />
+            </TabsContent>
+          )}
         </Tabs>
       ) : mainSection}
 

@@ -4,6 +4,7 @@
  */
 import type { Counterparty, Invitation, SupplierContact, TenderCard } from './api';
 import type { AwardView, Comparison, ComparisonSupplier } from './comparison';
+import type { DeliverySupplier, Receipt } from './delivery';
 
 export const TENDER_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 export const REQUEST_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
@@ -110,5 +111,27 @@ export const comparisonData = (over: Partial<Comparison> = {}): Comparison => ({
 export const awardView = (over: Partial<AwardView> = {}): AwardView => ({
   tender_id: TENDER_ID, version: 5, status: 'opened', comment: '', status_comment: '',
   lines: [], extras: [], suppliers: [], parts: [], allowed_actions: ['cancel', 'award'],
+  ...over,
+});
+
+// ── этап 5: поставка ────────────────────────────────────────────────────
+
+export const deliverySupplier = (over: Partial<DeliverySupplier> = {}): DeliverySupplier => ({
+  invitation_id: 'inv-a', supplier: 'ТОО «Альфа»', currency_code: 'KZT', stage: 'in_delivery',
+  total: '1260.80', paid: '1260.80', shipment_share: '1',
+  documents: [{ doc_type: 'invoice', doc_id: 'doc-1', number: 'СЧ-2026-000010', status: 'paid',
+    amount: '1260.80', paid_amount: '1260.80', received_at: null, replaced_by: null }],
+  awards: [
+    { award_id: 'aw-1', kind: 'line', name: 'Арматура А500', qty: '10', received: '4', needs_receipt: true },
+    { award_id: 'aw-2', kind: 'delivery', name: 'Доставка', qty: '1', received: '0', needs_receipt: false },
+    { award_id: 'aw-3', kind: 'works', name: 'СМР', qty: '1', received: '0', needs_receipt: true },
+  ],
+  ...over,
+});
+
+export const receipt = (over: Partial<Receipt> = {}): Receipt => ({
+  id: 'rc-1', invitation_id: 'inv-a', received_at: '2026-10-19', kind: 'goods', comment: '',
+  originals_at: null, originals_to: '', version: 1, cancelled_at: null,
+  lines: [{ award_id: 'aw-1', qty: '4' }],
   ...over,
 });
