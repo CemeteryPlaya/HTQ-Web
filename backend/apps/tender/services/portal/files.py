@@ -67,6 +67,7 @@ def upload(ctx, *, data: bytes, filename: str, mime: str, ip: str | None,
     запись об отказе (``FileEvent`` ``file_rejected`` с IP) должна остаться в
     журнале, а не откатиться вместе с ответом 422."""
     scanner_required()
+    offers.prepare_draft(ctx, check=False)
     refused = None
     with transaction.atomic():
         tender, inv = offers._lock(ctx)
@@ -87,17 +88,22 @@ def upload(ctx, *, data: bytes, filename: str, mime: str, ip: str | None,
     return _out(row)
 
 
-@transaction.atomic
 def remove(ctx, document_id, *, ip: str | None, user_agent: str | None,
            event: Callable[[str, dict], None]) -> None:
     """Удалить файл черновика (своего приглашения); чужой или несуществующий —
     404. Документ отправленной версии удаляется из черновика-копии: у самой
-    версии он остаётся."""
+    версии он остаётся. Копию заводит ``prepare_draft`` своей транзакцией —
+    отказ 404 не оставляет в хранилище скопированных байтов."""
+    offers.prepare_draft(ctx, check=False)
+    with transaction.atomic():
+        _remove(ctx, document_id, ip=ip, user_agent=user_agent, event=event)
+
+
+def _remove(ctx, document_id, *, ip: str | None, user_agent: str | None,
+            event: Callable[[str, dict], None]) -> None:
     tender, inv = offers._lock(ctx)
-    had_draft = offers._draft(inv) is not None
     draft = offers.get_draft(inv, tender)
-    if not had_draft:
-        document_id = getattr(draft, "doc_map", {}).get(str(document_id), document_id)
+    document_id = offers.draft_document_id(draft, inv, document_id)
     try:
         files.remove_document(offers.OFFER_OWNER, draft.pk, document_id,
                               actor_id=portal_actor(), ip=ip, user_agent=user_agent)

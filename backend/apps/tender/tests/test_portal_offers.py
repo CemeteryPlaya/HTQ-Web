@@ -432,6 +432,24 @@ def test_http_offer_needs_the_bound_device_and_origin(company_context, portal_en
     assert text.status_code == 415
 
 
+def test_reset_or_reissue_during_the_request_refuses_the_write(world):
+    """Устройство и ссылку проверяют ещё раз под блокировкой приглашения:
+    сброс или перевыпуск, случившийся между проверкой ``require_device`` и
+    записью, запись останавливает."""
+    from apps.tender.models import DeviceBinding
+
+    with use_company(world.slug):
+        binding = DeviceBinding.objects.create(invitation=world.inv, secret_hash="c" * 64)
+        live = SimpleNamespace(invitation=world.inv, tender=world.tender, binding=binding)
+        DeviceBinding.objects.filter(pk=binding.pk).update(revoked_at=timezone.now())
+        reset = _error(lambda: offers.save_draft(live, {"extra_terms": "после сброса"}))
+        Invitation.objects.filter(pk=world.inv.pk).update(token_hash="f" * 64)
+        stale = SimpleNamespace(invitation=world.inv, tender=world.tender, binding=None)
+        reissued = _error(lambda: offers.save_draft(stale, {"extra_terms": "старая ссылка"}))
+    assert (reset.status, reset.code) == (403, "E-TND-06")
+    assert (reissued.status, reissued.code) == (404, "E-NOT-FOUND")
+
+
 #: Ручки портала с телом запроса (T3.6: тело разбирается ПОСЛЕ проверки устройства).
 BODY_ROUTES = (("put", "offer"), ("post", "offer/submit"), ("post", "offer/withdraw"),
                ("post", "decline"))
@@ -462,6 +480,19 @@ def test_broken_json_from_bound_device_is_422_in_envelope(company_context, porta
         body = resp.json()
         assert (resp.status_code, body.get("code")) == (422, "E-VAL-01"), (path, resp.content)
         assert isinstance(body["fields"], list) and body["fields"], path
+
+
+def test_portal_writes_need_the_version(company_context, portal_env):
+    """Без ``version`` запись шла бы мимо оптимистичной блокировки — 422."""
+    world, client, portal = _http_world(company_context["slug"])
+    assert portal.get(client, world.slug, f"{world.token}/offer").status_code == 200
+    for method, path, body in (("put", "offer", {"extra_terms": "x"}),
+                               ("post", "offer/submit", {"pd_consent": True}),
+                               ("post", "offer/withdraw", {})):
+        resp = _raw(client, world, portal, method, path, json.dumps(body))
+        payload = resp.json()
+        assert (resp.status_code, payload["code"]) == (422, "E-VAL-01"), (path, resp.content)
+        assert [f["field"] for f in payload["fields"]] == ["version"], path
 
 
 def test_double_submit_keeps_one_version(company_context, portal_env):

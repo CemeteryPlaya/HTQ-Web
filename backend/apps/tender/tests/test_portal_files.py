@@ -22,6 +22,7 @@ from apps.tender.services.portal import offers
 from apps.tender.tests.test_portal_offers import (  # noqa: F401  (фикстура world)
     Events,
     _filled,
+    _items,
     _request,
     _save,
     _submit,
@@ -152,6 +153,35 @@ def test_files_stay_with_the_submitted_version(world, memory_storage, clamd):  #
                                                   owner_id=str(sent.pk),
                                                   deleted_at__isnull=True)
         assert [str(f.document_id) for f in version_files] == [kept["id"]]
+
+
+def test_failed_edit_after_submit_leaves_no_orphans(world, memory_storage, clamd):  # noqa: F811
+    """Правка после отправки, отвергнутая проверкой (422): копия черновика с
+    файлами КП уже записана своей транзакцией — ни байтов-сирот в хранилище,
+    ни новой копии и нового сканирования на каждой неудачной попытке."""
+    _save(world, _filled(world))
+    _upload(world)
+    _submit(world, pd_consent=True)
+    first, _second = _items(world)
+    bad = {"lines": [{"item_id": str(first.pk), "participates": True, "price": "95",
+                      "qty": "999"}]}
+    for _ in range(2):
+        assert _error(lambda: _save(world, bad)).status == 422
+    with use_company(world.slug):
+        live = FileObject.objects.filter(owner_type="tender.offer",
+                                         deleted_at__isnull=True).count()
+    assert len(memory_storage.objects) == live == 2       # версия + одна копия
+
+
+def test_version_document_id_removes_the_draft_copy(world, memory_storage, clamd):  # noqa: F811
+    """Список файлов на экране мог остаться от отправленной версии, а черновик
+    уже заведён: удаление по ключу документа версии снимает его копию."""
+    _save(world, _filled(world))
+    kept = _upload(world)
+    _submit(world, pd_consent=True)
+    _save(world, {"extra_terms": "Уточнили срок поставки"})      # черновик-копия
+    _remove(world, kept["id"])
+    assert _list(world) == []
 
 
 def test_decline_removes_the_draft_files(world, memory_storage, clamd):  # noqa: F811

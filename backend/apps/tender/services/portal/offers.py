@@ -40,6 +40,7 @@ from apps.bpp import interface as bpp
 from apps.files import interface as files
 from apps.refdata import interface as refdata
 from apps.tender.models import (
+    DeviceBinding,
     ExtraKind,
     Invitation,
     InvitationStatus,
@@ -58,6 +59,7 @@ from apps.tender.services.core.errors import check_version
 from apps.tender.services.tenders import schemes
 from htqweb.errors import DomainError
 
+from . import access
 from .actor import portal_actor
 
 Event = Callable[[str, dict], None]
@@ -110,8 +112,15 @@ def _lock(ctx) -> tuple[Tender, Invitation]:
     отказ от участия — E-STS-01."""
     tender = Tender.objects.select_for_update().select_related("request").get(pk=ctx.tender.pk)
     inv = Invitation.objects.select_for_update().get(pk=ctx.invitation.pk)
-    if inv.revoked_at is not None:
+    # Ссылку и устройство проверяют ещё раз ПОД блокировкой: отзыв, перевыпуск
+    # и сброс устройства закупщик делает под той же блокировкой приглашения,
+    # и запись, начатая до них со старой ссылки или устройства, не проходит.
+    if inv.revoked_at is not None or inv.token_hash != ctx.invitation.token_hash:
         raise DomainError("E-NOT-FOUND", "Ссылка недействительна.", status=404)
+    binding = getattr(ctx, "binding", None)
+    if binding is not None and not DeviceBinding.objects.filter(
+            pk=binding.pk, revoked_at__isnull=True).exists():
+        raise access.device_refused()
     if not intake_open(tender):
         raise closed()
     if inv.status == InvitationStatus.DECLINED:
@@ -210,18 +219,57 @@ def _copy(src: Offer, inv: Invitation, tender: Tender) -> Offer:
             {"order": s.order, "trigger": s.trigger, "pct": s.pct, "days": s.days}
             for s in scheme.stages.order_by("order")], scheme.postpay_days)
     # Файлы КП — копиями: у отправленной версии остаются её файлы, черновик
-    # получает свои (``doc_map`` — «документ версии → документ черновика»,
-    # по нему удаление адресует копию).
-    offer.doc_map = {}
+    # получает свои (ключ копии по ключу документа версии — ``draft_document_id``).
     sources = files.current_files(OFFER_OWNER, src.pk, OFFER_FILE_TYPE)
     if sources:
         actor = portal_actor()
         for row in sources:
-            copied = files.adopt_media_file(OFFER_OWNER, offer.pk, file_type=OFFER_FILE_TYPE,
-                                            media_file_id=row["media_file_id"],
-                                            uploaded_by_id=actor)
-            offer.doc_map[str(row["document_id"])] = copied["document_id"]
+            files.adopt_media_file(OFFER_OWNER, offer.pk, file_type=OFFER_FILE_TYPE,
+                                   media_file_id=row["media_file_id"], uploaded_by_id=actor)
     return offer
+
+
+def prepare_draft(ctx, version=None, *, check: bool = True) -> tuple[str, int] | None:
+    """Завести черновик СВОЕЙ транзакцией — до правки, загрузки или удаления.
+
+    Копия отправленной версии копирует файлы КП, а копия байтов
+    (``adopt_media_file`` → ``media.copy_file``) пишет в хранилище сразу: если
+    бы её вёл откатившийся ``save_draft`` (422) или ``remove`` (404), байты
+    остались бы в S3 сиротами, а каждая следующая попытка копировала и
+    сканировала бы их заново. Закоммиченный черновик, равный последней
+    версии, — обычное состояние: его и так завёл бы ``GET offer``.
+
+    ``check`` — сверить ``version`` клиента с текущим предложением до копии.
+    Ответ — ``(ключ, версия)`` только что заведённого черновика, иначе ``None``."""
+    with transaction.atomic():
+        tender, inv = _lock(ctx)
+        if _draft(inv) is not None:
+            return None
+        current = _current(inv)
+        if check and current is not None:
+            check_version(current, version)
+        draft = get_draft(inv, tender)
+        return str(draft.pk), draft.version
+
+
+def draft_document_id(draft: Offer, inv: Invitation, document_id) -> str:
+    """Документ черновика по ключу, который видел поставщик. Ключ самого
+    черновика — как есть. Ключ документа отправленной версии (список файлов на
+    экране мог остаться от неё, а черновик-копия уже заведён) — ключ его копии
+    в черновике: те же имя и SHA-256. Чужой ключ возвращается как есть — его
+    отвергнет подсистема файлов (404)."""
+    key = str(document_id)
+    own = files.current_files(OFFER_OWNER, draft.pk, OFFER_FILE_TYPE)
+    if any(str(row["document_id"]) == key for row in own):
+        return key
+    for version in inv.offers.filter(number__isnull=False).exclude(pk=draft.pk):
+        for row in files.current_files(OFFER_OWNER, version.pk, OFFER_FILE_TYPE):
+            if str(row["document_id"]) != key:
+                continue
+            twin = next((mine for mine in own if (mine["sha256"], mine["name"])
+                         == (row["sha256"], row["name"])), None)
+            return str(twin["document_id"]) if twin else key
+    return key
 
 
 def get_draft(invitation: Invitation, tender: Tender | None = None) -> Offer:
@@ -495,14 +543,23 @@ def _touch(offer: Offer) -> None:
     offer.save()
 
 
-@transaction.atomic
 def save_draft(ctx, data: dict, *, event: Event = _no_event) -> Offer:
-    """Сохранить черновик (``PUT offer``): только переданные блоки."""
+    """Сохранить черновик (``PUT offer``): только переданные блоки.
+    Черновик-копию заводит ``prepare_draft`` (своя транзакция) и сверяет версию
+    клиента с отправленной версией; здесь версия сверяется с копией — её
+    никто не должен был поменять между двумя транзакциями."""
+    fresh = prepare_draft(ctx, data.get("version"))
+    with transaction.atomic():
+        return _save_draft(ctx, data, fresh, event)
+
+
+def _save_draft(ctx, data: dict, fresh: tuple[str, int] | None, event: Event) -> Offer:
     tender, inv = _lock(ctx)
-    current = _current(inv)
-    if current is not None:
-        check_version(current, data.get("version"))
     offer = get_draft(inv, tender)
+    if fresh is not None and str(offer.pk) == fresh[0]:
+        check_version(offer, fresh[1])
+    else:
+        check_version(offer, data.get("version"))
     _apply_header(offer, data)
     if data.get("lines") is not None:
         _apply_lines(offer, tender, data["lines"])

@@ -206,9 +206,11 @@ class PortalSchemeIn(BaseModel):
 
 
 class PortalOfferIn(BaseModel):
-    """``PUT supplier/<token>/offer``: меняются только переданные блоки."""
+    """``PUT supplier/<token>/offer``: меняются только переданные блоки.
+    ``version`` обязателен — без него правка шла бы мимо оптимистичной
+    блокировки (две вкладки затирали бы друг друга молча)."""
 
-    version: int | None = None
+    version: int
     currency_code: str | None = None
     with_vat: bool | None = None
     vat_rate: Decimal | None = None
@@ -221,12 +223,12 @@ class PortalOfferIn(BaseModel):
 
 
 class PortalSubmitIn(BaseModel):
-    version: int | None = None
+    version: int
     pd_consent: bool = False
 
 
 class PortalVersionIn(BaseModel):
-    version: int | None = None
+    version: int
 
 
 class PortalDeclineIn(BaseModel):
