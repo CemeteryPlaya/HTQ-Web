@@ -157,6 +157,12 @@ export function offerInput(form: OfferForm, version: number, options: { requisit
   return body;
 }
 
+/** Сумма указана (0 — тоже сумма: «доставка бесплатно»), как требует сервер. */
+const given = (text: string) => {
+  const value = parseMoneyInput(text);
+  return value !== null && !lessThan(value, '0');
+};
+
 const positive = (text: string) => {
   const value = parseMoneyInput(text);
   return value !== null && lessThan('0', value);
@@ -215,10 +221,10 @@ export function offerErrors(
       errors.vat_rate = 'Ставка НДС — число от 0 до 100';
     }
   }
-  if (form.delivery && !form.delivery.included_in_price && !positive(form.delivery.amount)) {
+  if (form.delivery && !form.delivery.included_in_price && !given(form.delivery.amount)) {
     errors.delivery = 'Укажите стоимость доставки или отметьте «включена в цену»';
   }
-  if (form.works && !form.works.included_in_price && !positive(form.works.amount)) {
+  if (form.works && !form.works.included_in_price && !given(form.works.amount)) {
     errors.works = 'Укажите стоимость СМР или отметьте «включена в цену»';
   }
   Object.assign(errors, schemeErrors(form.scheme));

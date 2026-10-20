@@ -226,6 +226,35 @@ describe('форма предложения', SLOW, () => {
     expect(await screen.findByText('Вы отказались от участия в тендере')).toBeInTheDocument();
   });
 
+  it('после сохранения список файлов КП перечитывается: у черновика-копии свои ключи файлов', async () => {
+    routes({ ...bound(), 'PUT /offer': fakeResponse(200, portalOffer({ version: 4 })) });
+    renderPage();
+    const filesGets = () => fetchMock.mock.calls
+      .filter(([url, init]) => url === `${BASE}/offer/files` && (init.method ?? 'GET') === 'GET').length;
+
+    await userEvent.type(await screen.findByLabelText('Цена за единицу: Швеллер 12П'), '365000');
+    await waitFor(() => expect(filesGets()).toBeGreaterThan(0));
+    const before = filesGets();
+    await userEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+    await waitFor(() => expect(filesGets()).toBeGreaterThan(before));
+  });
+
+  it('отозванное предложение без правок — «Отправить» сначала сохраняет черновик, затем submit с его version', async () => {
+    const offer = portalOffer({ status: 'withdrawn', number: 1, pd_consent_at: '2026-10-07T10:00:00Z' });
+    offer.lines = offer.lines.map((line) => ({ ...line, price: '1000.00', delivery_date: '2099-11-24' }));
+    routes({
+      ...bound(),
+      'GET /offer': fakeResponse(200, offer),
+      'PUT /offer': fakeResponse(200, { ...offer, id: 'of-2', status: 'draft', number: null, version: 1 }),
+      'POST /offer/submit': fakeResponse(200, { ...offer, id: 'of-2', status: 'submitted', number: 2, version: 2 }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Отправить предложение' }));
+    await waitFor(() => expect(bodyOf('POST', '/offer/submit')).toEqual({ version: 1 }));
+    expect(bodyOf('PUT', '/offer')).toMatchObject({ version: 3 });
+  });
+
   it('отправленное предложение — «Отозвать» с version', async () => {
     routes({
       ...bound({ offer: { status: 'submitted', number: 2, history: [{ number: 1, status: 'replaced', submitted_at: '2026-10-05T10:00:00Z' }, { number: 2, status: 'submitted', submitted_at: '2026-10-06T10:00:00Z' }] } }),

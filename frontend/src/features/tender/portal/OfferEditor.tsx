@@ -105,6 +105,9 @@ export function OfferEditor({ token, tender, offer, onFatal, onDeclined }: Props
 
   const apply = (saved: PortalOffer) => {
     queryClient.setQueryData(portalKeys.offer(token), saved);
+    // Первое сохранение после отправки заводит черновик-копию — у её файлов
+    // свои ключи, и список на экране (ключи версии) устарел.
+    void queryClient.invalidateQueries({ queryKey: portalKeys.files(token) });
     setBaseline(JSON.stringify(formOf(tender, saved)));
   };
 
@@ -166,7 +169,9 @@ export function OfferEditor({ token, tender, offer, onFatal, onDeclined }: Props
     if (Object.keys(errors).length > 0) return;
     void run('submit', async () => {
       let version = offerVersion;
-      if (dirty) {
+      // Отправляют только черновик: на экране отправленная или отозванная
+      // версия — сперва PUT заводит из неё черновик (без него submit — 409).
+      if (dirty || offer.status !== 'draft') {
         const saved = await portalApi.saveOffer(token, offerInput(form, offerVersion, { requisitesEditable }));
         apply(saved);
         version = saved.version ?? offerVersion;

@@ -70,6 +70,15 @@ describe('formOf / offerInput', () => {
     expect(form.lines).toHaveLength(2);
   });
 
+  it('доставка за 0 — допустима, как на сервере; пустая сумма без «включена в цену» — ошибка', () => {
+    const form = formOf(portalTender(), portalOffer());
+    form.lines = form.lines.map((line) => ({ ...line, price: '100', delivery_date: '2099-11-24' }));
+    form.delivery = { amount: '0', included_in_price: false, note: '' };
+    expect(offerErrors(form, portalTender(), '2026-10-20')).not.toHaveProperty('delivery');
+    form.delivery = { amount: '', included_in_price: false, note: '' };
+    expect(offerErrors(form, portalTender(), '2026-10-20')).toHaveProperty('delivery');
+  });
+
   it('без НДС ставка не уходит', () => {
     const form = formOf(portalTender(), portalOffer());
     form.with_vat = false;
