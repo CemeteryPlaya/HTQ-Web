@@ -148,8 +148,8 @@
 **Interfaces:**
 - Consumes: `table.comparison` (Task 3).
 - Produces:
-  - Модель `Award(TenderModel)`: `tender` FK CASCADE, `offer` FK PROTECT, `line` FK `OfferLine` null, `extra` FK `OfferExtra` null (`CheckConstraint` XOR), `part_id` UUID, `qty` Decimal(15,3), `amount` Decimal(18,2), `amount_kzt` Decimal(18,2), `plan_amount_kzt` Decimal(18,2), `is_cheapest` bool; `UniqueConstraint(tender, line)`, `UniqueConstraint(tender, extra)`.
-  - `selection.save(ctx, tender_id, data: dict) -> dict` (`data` — `schemas.AwardIn {version: int, comment: str, lines: [{line_id, qty}], extras: [str]}`), `selection.view(ctx, tender_id) -> dict` — строки, итоги по поставщикам и частям, `budget_check`, `allowed_actions`.
+  - Модель `Award(TenderModel)`: `tender` FK CASCADE, `offer` FK PROTECT, `line` FK `OfferLine` null, `extra` FK `OfferExtra` null (`CheckConstraint` XOR), `part_id` UUID, `qty` Decimal(15,3), `amount` Decimal(18,2), `amount_kzt` Decimal(18,2), `plan_amount_kzt` Decimal(18,2), `is_cheapest` bool, `comment` text; `UniqueConstraint(tender, line)`, `UniqueConstraint(tender, extra)`.
+  - `selection.save(ctx, tender_id, data: dict) -> dict` (`data` — `schemas.AwardIn {version: int, comment: str, lines: [{line_id, qty, comment}], extras: [{extra_id, comment}]}`), `selection.view(ctx, tender_id) -> dict` — строки, итоги по поставщикам и частям, `budget_check`, `allowed_actions`.
   - Ручки `GET/PUT tenders/<id>/award`.
 
 - [ ] **Step 1: Тесты:**
@@ -157,7 +157,7 @@
   - `test_qty_not_above_offered` — 422;
   - `test_extra_only_from_item_winner` — доставка поставщика, не выигравшего ни одной позиции части → 422;
   - `test_included_delivery_selected_automatically` — выбор позиций A → строка доставки A «в цене» с `amount_kzt == 0` в ответе без явного `extras`;
-  - `test_not_cheapest_needs_comment` — выбор C по позиции 1 без комментария → `(422, "E-TND-12")`, `details.rows` перечисляет позицию 1; с комментарием ≥ 10 → 200;
+  - `test_not_cheapest_needs_both_comments` (S5-07) — выбор C по позиции 1: без комментариев → `(422, "E-TND-12")`, `details.rows` — позиция 1, `fields` — `comment` и `lines[0].comment`; только общий → 422 (`lines[0].comment`); только строчный → 422 (`comment`); оба ≥ 10 → 200; у самой дешёвой строки комментарий не требуется;
   - `test_award_only_in_opened_or_rework` — в `intake`, `on_approval`, `awarded` → 409;
   - `test_save_replaces_previous_selection` — повторный `PUT` заменяет набор, `version` растёт;
   - `test_reviewer_change_before_process` — `PATCH tenders/<id>` `quality_reviewer_user_id` в `opened` → 200, в `on_approval` → 409.
@@ -212,7 +212,7 @@
 - [ ] **Step 1: Тесты** (`test_tender_documents.py`, ЗЗ `source="tender"` в статусе «Утверждена» — фикстура B-1):
   - `test_invoice_for_supplier_below_threshold` — `kind="invoice"`, `prepay` → черновик счёта, `is_advance=True`, автор — закупщик, `source_tender` = номер ТН;
   - `test_advance_is_one_invoice_with_partial_marks` — `advance` → один счёт `is_advance=True`; две частичные отметки БУХ допустимы;
-  - `test_postpay_invoice_waits_for_receipt` — `postpay`, `postpay_days=15` → `pay_after_receipt=True`; `set_acceptance(received_at=10.11)` → `due_date == 25.11`, карточка отдаёт `received_at`;
+  - `test_postpay_invoice_waits_for_receipt` — `postpay`, `postpay_days=14` → `pay_after_receipt=True`; `set_acceptance(received_at=пятница 06.11.2026)` → `due_date == refdata.add_bank_days(06.11, 14)` (банковские дни, S5-12), карточка отдаёт `received_at`;
   - `test_agreement_above_threshold` — `kind="agreement"` → договор-черновик по ЗЗ;
   - `test_repeat_returns_same_documents` (Review Focus 3) — второй вызов с теми же `key` → те же `doc_id`, документов не прибавилось;
   - `test_lines_must_belong_to_request` / `test_qty_above_remaining` — `DomainError` E-STS / BR-042;
@@ -237,8 +237,8 @@
 - Produces: `handover.handover(ctx, tender_id, *, expected_version: int) -> dict` — `{documents: [{invitation_id, part_id, doc_type, doc_id, number}], closed_parts: [part_id]}`; модель `Handover` (уникальность `tender, invitation, part_id`); ручка `POST tenders/<id>/handover` `{version}`.
 
 - [ ] **Step 1: Тесты:**
-  - `test_threshold_per_supplier` — поставщик с Σ KZT > `contract_threshold(today)` → договоры по каждой его части; ≤ — счета; граница ровно = порогу → счёт;
-  - `test_supplier_scheme_goes_to_documents` — у поставщика `postpay 15` → в `HandoverDocIn.payment == "postpay"`, `postpay_days == 15`; без своей схемы — схема тендера;
+  - `test_threshold_per_document` (S5-10) — у одного поставщика часть «товар» > `contract_threshold(today)` → договор, его же доставка ≤ порога → счёт; граница ровно = порогу → счёт;
+  - `test_supplier_scheme_goes_to_documents` — у поставщика `postpay 15` → в `HandoverDocIn.payment == "postpay"`, `postpay_days == 15`; без своей схемы — схема тендера; схема 3 без дней → 14 (S5-12);
   - `test_prospect_becomes_counterparty` — `prospect.counterparty_id` записан, повтор не создаёт второй карточки;
   - `test_prospect_without_reg_number_is_422` — `E-TND-14`, документов не создано (транзакция);
   - `test_handover_twice_is_idempotent` (Review Focus 3);
