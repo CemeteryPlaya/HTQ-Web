@@ -17,6 +17,12 @@ T5.3; мастер-план tender §3.4, T-15, T-16, T-18, T-20).
   «после приёмки» — срок оплаты = приёмка + N банковских дней.
 - ``attach_closing_docs`` — закрывающие из тендера по правилу D-13: только в
   «Ждёт закрывающих» и только запрошенного типа; повтор не дублирует.
+
+Документ «из тендера» — со своим ключом передачи, счёт по договору из тендера
+(договор передан тендером, счёт по нему оформлен в БЗО, ТЗ §9.4) или документ,
+заменивший документ из тендера выбранной альтернативой (B5.1, T-18): поставку
+по нему ведёт тендер, поэтому приёмку, закрывающие и смену статуса (слушатель —
+с ключом исходного документа) он получает так же (``tender_key_of``).
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from django.db.models import Sum
 
 from apps.bpp.models import (
     Agreement,
+    AlternativeOffer,
     Invoice,
     InvoiceStatus,
     PaymentMark,
@@ -59,6 +66,38 @@ from .tender import _actor, _uuid
 KP_TYPE = "alternative_offer"           # файл КП у документа (тот же код, что у B5.1)
 POSTPAY_DEFAULT_DAYS = 14               # отсрочка схемы 3 по умолчанию (S5-12)
 DOC_FILE_TYPES = {"avr": "act", "waybill": "waybill", "vat_invoice": "vat_invoice"}
+
+#: Глубина цепочки «счёт → договор → заменённый альтернативой» — с запасом:
+#: замена замены и счёт по договору-замене — уже три звена.
+_KEY_DEPTH = 6
+
+
+def tender_key_of(doc_type: str, doc, *, depth: int = 0) -> str:
+    """Ключ передачи документа из тендера: свой; у счёта по договору — ключ
+    договора; у документа, заменившего другой выбранной альтернативой, — ключ
+    исходного. Не из тендера — пустая строка."""
+    if doc is None or depth > _KEY_DEPTH:
+        return ""
+    if doc.tender_key:
+        return doc.tender_key
+    if doc_type == "invoice" and doc.agreement_id:
+        key = tender_key_of("agreement", doc.agreement, depth=depth + 1)
+        if key:
+            return key
+    offer = (AlternativeOffer.objects.filter(result_type=doc_type, result_id=doc.pk)
+             .only("source_type", "source_id").first())
+    if offer is None:
+        return ""
+    model = Invoice if offer.source_type == "invoice" else Agreement
+    return tender_key_of(offer.source_type, model.objects.filter(pk=offer.source_id).first(),
+                         depth=depth + 1)
+
+
+def _tender_invoices(keys, *, lock: bool) -> list[Invoice]:
+    rows = Invoice.objects.select_related("agreement").filter(pk__in=keys)
+    if lock:
+        rows = rows.select_for_update(of=("self",))
+    return [inv for inv in rows if tender_key_of("invoice", inv)]
 
 
 def _existing(key: str):
@@ -134,6 +173,8 @@ def _create_one(actor: TenderActor, data: HandoverDocIn, tender_number: str):
         doc.pay_after_receipt = data.payment == "postpay"
         doc.postpay_days = ((data.postpay_days or POSTPAY_DEFAULT_DAYS)
                             if data.payment == "postpay" else None)
+        if doc.pay_after_receipt:
+            doc.due_date = None             # срок — от приёмки (``set_acceptance``)
         invoice_service.recalc(doc)
     else:
         doc = agreement_service.new_agreement(
@@ -229,15 +270,21 @@ def documents_status(request_ids: list[str]) -> list[DocumentStatusOut]:
 
 def status_of_id(doc_type: str, doc_id) -> DocumentStatusOut | None:
     """Документ из тендера для слушателя смены статуса; прочие — ``None``."""
-    model = Invoice if doc_type == "invoice" else Agreement
-    doc = model.objects.filter(pk=doc_id).exclude(tender_key="").first()
-    if doc is None:
-        return None
     if doc_type == "invoice":
+        doc = Invoice.objects.select_related("agreement").filter(pk=doc_id).first()
+        key = tender_key_of("invoice", doc)
+        if not key:
+            return None
         line = doc.lines.select_related("request_item").first()
-        return _invoice_out(str(line.request_item.request_id) if line else "", doc)
+        out = _invoice_out(str(line.request_item.request_id) if line else "", doc)
+        return out.model_copy(update={"tender_key": key})
+    doc = Agreement.objects.filter(pk=doc_id).first()
+    key = tender_key_of("agreement", doc)
+    if not key:
+        return None
     item = doc.items.select_related("request_item").first()
-    return _agreement_out(str(item.request_item.request_id) if item else "", doc)
+    out = _agreement_out(str(item.request_item.request_id) if item else "", doc)
+    return out.model_copy(update={"tender_key": key})
 
 
 # ── приёмка и закрывающие ───────────────────────────────────────────────
@@ -248,13 +295,15 @@ def set_acceptance(invoice_ids: list[str], *, received_at: date | None,
     """Отметка приёмки из тендера на счетах. ``received_at=None`` — приёмку
     отменили (срок оплаты «после приёмки» остаётся последним поставленным)."""
     keys = [key for key in (_uuid(i) for i in invoice_ids) if key]
-    for inv in Invoice.objects.select_for_update().filter(pk__in=keys).exclude(tender_key=""):
+    for inv in _tender_invoices(keys, lock=True):
         inv.received_at, inv.originals_at = received_at, originals_at
         inv.originals_to = (originals_to or "").strip()[:255]
         if received_at is not None and inv.pay_after_receipt:
             inv.due_date = refdata.add_bank_days(received_at,
                                                  inv.postpay_days or POSTPAY_DEFAULT_DAYS)
-            inv.planned_pay_date = inv.due_date
+            # Плановую дату, которую ФД поставил сам, приёмка не перебивает.
+            if inv.planned_pay_date is None:
+                inv.planned_pay_date = inv.due_date
         inv.version += 1
         inv.updated_by = actor.user_id
         inv.save()
@@ -271,8 +320,8 @@ def attach_closing_docs(invoice_id: str, scans: list[ClosingFileIn], *,
     """Сканы приёмки из тендера на счёт — правило D-13 держит БЗО: счёт «Ждёт
     закрывающих» и тип запрошен БУХ. Тот же файл второй раз не прикладывается."""
     key = _uuid(invoice_id)
-    inv = Invoice.objects.select_for_update().filter(pk=key).exclude(tender_key="").first() \
-        if key else None
+    found = _tender_invoices([key], lock=True) if key else []
+    inv = found[0] if found else None
     if inv is None:
         raise DomainError("E-NOT-FOUND", "Счёт не найден.", status=404)
     if inv.status != InvoiceStatus.AWAITING_DOCS:

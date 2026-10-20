@@ -62,6 +62,17 @@ TABS = {
 }
 
 
+#: Счёт ещё ждёт оплаты — «ждёт приёмки» имеет смысл только у него.
+_PAYABLE = (InvoiceStatus.DRAFT, InvoiceStatus.UNDER_REVIEW, InvoiceStatus.RETURNED,
+            InvoiceStatus.TO_PAY, InvoiceStatus.PARTIALLY_PAID)
+
+
+def awaiting_receipt(inv) -> bool:
+    """Постоплата после приёмки (счёт из тендера), а товар ещё не принят: срока
+    оплаты нет, и счёт не «просрочен», пока приёмки нет."""
+    return bool(inv.pay_after_receipt and inv.received_at is None and inv.status in _PAYABLE)
+
+
 def _names(ids) -> dict[int, str]:
     ids = [uid for uid in set(ids) if uid]
     return {row["id"]: row["full_name"] for row in users.get_users_brief(ids)} if ids else {}
@@ -153,7 +164,7 @@ def card(actor: Actor, inv: Invoice, *, vat_warning: str | None = None) -> dict:
         "source_tender": inv.source_tender, "pay_after_receipt": inv.pay_after_receipt,
         "postpay_days": inv.postpay_days, "received_at": inv.received_at,
         "originals_at": inv.originals_at, "originals_to": inv.originals_to,
-        "awaiting_receipt": inv.pay_after_receipt and inv.received_at is None,
+        "awaiting_receipt": awaiting_receipt(inv),
         "status_comment": inv.status_comment,
         "rework_comment": inv.rework_comment if inv.status == InvoiceStatus.RETURNED else "",
         "author_comment": inv.author_comment,
@@ -301,9 +312,9 @@ def _rows(chunk: list[Invoice]) -> list[dict]:
             "amount": inv.amount, "currency_code": inv.currency_code,
             "amount_kzt": inv.amount_kzt, "due_date": inv.due_date,
             "planned_pay_date": inv.planned_pay_date,
-            "awaiting_receipt": inv.pay_after_receipt and inv.received_at is None,
+            "awaiting_receipt": awaiting_receipt(inv),
             "received_at": inv.received_at,
-            "overdue": bool(due and due < today and inv.status in (
+            "overdue": bool(due and due < today and not awaiting_receipt(inv) and inv.status in (
                 InvoiceStatus.UNDER_REVIEW, InvoiceStatus.TO_PAY, InvoiceStatus.PARTIALLY_PAID)),
             "docs_required": inv.docs_required or {},
             "days_waiting_docs": ((today - timezone.localtime(inv.docs_requested_at).date()).days

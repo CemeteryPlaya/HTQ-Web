@@ -24,6 +24,7 @@ from apps.bpp.models import (
     PaymentMark,
     PurchaseRequest,
 )
+from apps.bpp.services.invoices import read
 from apps.bpp.services.requests import listeners
 from apps.bpp.tests import stage2 as s
 from apps.bpp.tests.test_files import PDF, memory_storage  # noqa: F401  (фикстура)
@@ -95,6 +96,9 @@ def test_postpay_waits_for_receipt_and_due_date_in_bank_days(zz):
     [ref] = _handover(zz, _doc(zz, payment="postpay", days=14))
     inv = Invoice.objects.get(pk=ref.doc_id)
     assert (inv.pay_after_receipt, inv.postpay_days, inv.is_advance) == (True, 14, False)
+    # До приёмки срока нет — счёт не «просрочен» в очереди бухгалтера.
+    assert inv.due_date is None
+    assert read.awaiting_receipt(inv)
     received = date(2026, 11, 6)                             # пятница
     bpp.set_acceptance([str(inv.pk)], received_at=received, originals_at=date(2026, 11, 9),
                        originals_to="Бухгалтерия, Иванова А.", actor=bpp.TenderActor(user_id=s.SN))
@@ -207,3 +211,82 @@ def test_listener_hears_status_changes_of_tender_documents(zz, monkeypatch):
     s.grant(zz["slug"], 907, "bpp-buh")
     payments.request_docs(Actor.for_user(907, company=zz["slug"]), ref.doc_id)
     assert [(h.doc_id, h.status) for h in heard] == [(ref.doc_id, "awaiting_docs")]
+
+
+def test_invoice_by_tender_agreement_is_a_tender_invoice(zz, memory_storage,  # noqa: F811
+                                                          monkeypatch):
+    """Счёт по договору из тендера оформляют в БЗО (ТЗ §9.4), своего ключа
+    передачи у него нет — но поставку ведёт тендер: слушатель получает его с
+    ключом договора, приёмка и закрывающие из тендера на него ложатся."""
+    from apps.bpp.services.core import doc_listeners
+    from apps.bpp.services.invoices import invoices as invoice_service
+
+    [ref] = _handover(zz, _doc(zz, kind="agreement", key="inv-9:x"))
+    Agreement.objects.filter(pk=ref.doc_id).update(status="active")
+    sn = s.actor(zz["slug"], s.SN, "bpp-sn")
+    inv = invoice_service.create_from_agreement(sn, ref.doc_id)
+    assert inv.tender_key == ""
+    heard: list = []
+    monkeypatch.setattr(doc_listeners, "_LISTENERS", [heard.append])
+    doc_listeners.status_changed("invoice", inv.pk)
+    [out] = heard
+    assert out is not None and out.tender_key == "inv-9:x" and out.agreement_id == ref.doc_id
+
+    actor = bpp.TenderActor(user_id=s.SN)
+    bpp.set_acceptance([str(inv.pk)], received_at=date(2026, 10, 20), originals_at=None,
+                       originals_to="", actor=actor)
+    inv.refresh_from_db()
+    assert inv.received_at == date(2026, 10, 20)
+
+    s.user(s.SN)
+    files.attach_bytes("bpp.invoice", inv.pk, file_type="invoice", data=PDF,
+                       filename="scan.pdf", mime="application/pdf", actor_id=s.SN)
+    media = files.current_files("bpp.invoice", inv.pk, "invoice")[0]["media_file_id"]
+    Invoice.objects.filter(pk=inv.pk).update(status=InvoiceStatus.AWAITING_DOCS,
+                                             docs_required={"waybill": True})
+    scan = bpp.ClosingFileIn(media_file_id=media, file_type="waybill", name="Накладная.pdf")
+    assert len(bpp.attach_closing_docs(str(inv.pk), [scan], actor=actor)) == 1
+
+
+def test_acceptance_keeps_planned_date_set_by_fd(zz):
+    """Плановую дату, которую ФД поставил при «Оплатить», приёмка не перебивает;
+    срок оплаты «после приёмки» — ставит."""
+    [ref] = _handover(zz, _doc(zz, payment="postpay", days=14))
+    Invoice.objects.filter(pk=ref.doc_id).update(planned_pay_date=date(2026, 12, 1))
+    received = date(2026, 11, 6)
+    bpp.set_acceptance([ref.doc_id], received_at=received, originals_at=None, originals_to="",
+                       actor=bpp.TenderActor(user_id=s.SN))
+    inv = Invoice.objects.get(pk=ref.doc_id)
+    assert inv.planned_pay_date == date(2026, 12, 1)
+    assert inv.due_date == refdata.add_bank_days(received, 14)
+    assert not read.awaiting_receipt(inv)
+
+
+def test_document_replacing_a_tender_document_stays_in_the_tender(zz, monkeypatch):
+    """Счёт, заменивший документ из тендера выбранной альтернативой (B5.1, T-18),
+    своего ключа передачи не имеет — но поставку по нему ведёт тендер:
+    слушатель получает его с ключом исходного, приёмка на него ложится."""
+    from apps.bpp.models import AlternativeOffer
+    from apps.bpp.services.core import doc_listeners
+
+    source, new = _handover(zz, _doc(zz, key="inv-9:src"), _doc(zz, key="inv-9:new"))
+    Invoice.objects.filter(pk=new.doc_id).update(tender_key="")
+    Invoice.objects.filter(pk=source.doc_id).update(status=InvoiceStatus.REPLACED)
+    AlternativeOffer.objects.create(
+        number="АП-2026-000901", source_type="invoice", source_id=source.doc_id,
+        author_id=s.SN, author_role="sn", result_type="invoice", result_id=new.doc_id)
+
+    heard: list = []
+    monkeypatch.setattr(doc_listeners, "_LISTENERS", [heard.append])
+    doc_listeners.status_changed("invoice", new.doc_id)
+    assert [out.tender_key for out in heard] == ["inv-9:src"]
+
+    bpp.set_acceptance([new.doc_id], received_at=date(2026, 10, 20), originals_at=None,
+                       originals_to="", actor=bpp.TenderActor(user_id=s.SN))
+    assert Invoice.objects.get(pk=new.doc_id).received_at == date(2026, 10, 20)
+
+    # Документ не из тендера и не замена — по-прежнему чужой.
+    Invoice.objects.filter(pk=source.doc_id).update(tender_key="")
+    heard.clear()
+    doc_listeners.status_changed("invoice", new.doc_id)
+    assert heard == []
