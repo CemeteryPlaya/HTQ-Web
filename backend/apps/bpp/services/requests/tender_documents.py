@@ -299,10 +299,12 @@ def set_acceptance(invoice_ids: list[str], *, received_at: date | None,
         inv.received_at, inv.originals_at = received_at, originals_at
         inv.originals_to = (originals_to or "").strip()[:255]
         if received_at is not None and inv.pay_after_receipt:
+            previous_due = inv.due_date
             inv.due_date = refdata.add_bank_days(received_at,
                                                  inv.postpay_days or POSTPAY_DEFAULT_DAYS)
-            # Плановую дату, которую ФД поставил сам, приёмка не перебивает.
-            if inv.planned_pay_date is None:
+            # Плановую дату, которую ФД поставил сам, приёмка не перебивает;
+            # поставленную прошлой приёмкой (равна прежнему сроку) — сдвигает.
+            if inv.planned_pay_date in (None, previous_due):
                 inv.planned_pay_date = inv.due_date
         inv.version += 1
         inv.updated_by = actor.user_id

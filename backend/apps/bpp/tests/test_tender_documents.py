@@ -290,3 +290,18 @@ def test_document_replacing_a_tender_document_stays_in_the_tender(zz, monkeypatc
     heard.clear()
     doc_listeners.status_changed("invoice", new.doc_id)
     assert heard == []
+
+
+def test_later_acceptance_moves_its_own_planned_date(zz):
+    """Плановую дату, поставленную прошлой приёмкой, новая приёмка сдвигает —
+    иначе очередь БУХ и реестр показывали бы срок от первой частичной поставки."""
+    [ref] = _handover(zz, _doc(zz, payment="postpay", days=14))
+    actor = bpp.TenderActor(user_id=s.SN)
+    first, last = date(2026, 11, 2), date(2026, 11, 10)
+    bpp.set_acceptance([ref.doc_id], received_at=first, originals_at=None, originals_to="",
+                       actor=actor)
+    bpp.set_acceptance([ref.doc_id], received_at=last, originals_at=None, originals_to="",
+                       actor=actor)
+    inv = Invoice.objects.get(pk=ref.doc_id)
+    assert inv.due_date == inv.planned_pay_date == refdata.add_bank_days(last, 14)
+
