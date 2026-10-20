@@ -140,13 +140,20 @@ def allowed_actions(ctx: Ctx, tender: Tender) -> list[str]:
     if tender.author_id != ctx.user_id or not ctx.can(NODE, "edit"):
         return []
     if tender.status == TenderStatus.DRAFT:
-        return ["edit", "publish", "cancel", "invite"]
-    if tender.status == TenderStatus.INTAKE:
-        return ["extend", "cancel", *(["invite"] if intake_open(tender) else []),
-                *(["open"] if may_open(tender) else [])]
-    if tender.status in CANCELLABLE:
-        return ["cancel"]
-    return []
+        actions = ["edit", "publish", "cancel", "invite"]
+    elif tender.status == TenderStatus.INTAKE:
+        actions = ["extend", "cancel", *(["invite"] if intake_open(tender) else []),
+                   *(["open"] if may_open(tender) else [])]
+    elif tender.status in (TenderStatus.OPENED, TenderStatus.REWORK):
+        # Выбор поставщиков (этап 5): сохранить и — если выбор есть — отправить.
+        actions = ["cancel", "award", *(["award_submit"] if tender.awards.exists() else [])]
+    elif tender.status in CANCELLABLE:
+        actions = ["cancel"]
+    else:
+        actions = []
+    if tender.status in REVIEWER_EDITABLE:
+        actions.append("reviewer")      # сменить проверяющего качества (до утверждения)
+    return actions
 
 
 def invitation_actions(ctx: Ctx, tender: Tender, row: Invitation) -> list[str]:

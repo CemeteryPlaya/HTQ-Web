@@ -15,6 +15,7 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .services.comparison import export as comparison_export
+from .services.award import selection
 from .services.comparison import opening, table
 from .services.portal import access as portal_access
 from .services.tenders import invitations, tenders
@@ -127,6 +128,24 @@ def tender_open(request, tender_id, data):
 @api_view(methods=("GET",), module="tender", level="read")
 def tender_comparison(request, tender_id):
     return table.comparison(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def tender_award_get(request, tender_id):
+    return selection.view(Ctx.from_request(request), tender_id)
+
+
+@api_view(methods=("PUT",), module="tender", level="write", body=schemas.AwardIn)
+def tender_award_put(request, tender_id, data):
+    return selection.save(Ctx.from_request(request), tender_id, data.model_dump())
+
+
+def tender_award(request, tender_id):
+    if request.method == "GET":
+        return tender_award_get(request, tender_id)
+    if request.method == "PUT":
+        return tender_award_put(request, tender_id)
+    return json_error("Method Not Allowed", 405)
 
 
 @api_view(methods=("GET",), module="tender", level="read")

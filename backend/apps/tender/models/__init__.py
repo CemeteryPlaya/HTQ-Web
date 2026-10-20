@@ -5,6 +5,7 @@
 голые UUIDField без FK: между аппками связь только через interface.
 """
 
+from .award import Award
 from .core import AuditLog, NumberSequence, TenderModel, VersionedModel
 from .offer import ExtraKind, Offer, OfferExtra, OfferLine, OfferStatus
 from .portal import PortalEvent, PortalEventKind
@@ -35,7 +36,7 @@ from .tender import (
 )
 
 __all__ = [
-    "PortalEvent", "PortalEventKind",
+    "Award", "PortalEvent", "PortalEventKind",
     "ExtraKind", "Offer", "OfferExtra", "OfferLine", "OfferStatus",
     "ACTIVE_TENDER_STATUSES", "DeviceBinding", "Invitation", "InvitationStatus",
     "PaymentKind", "PaymentScheme", "PaymentStage", "PaymentTrigger", "SupplierContact",

@@ -227,6 +227,25 @@ class PortalSubmitIn(BaseModel):
     pd_consent: bool = False
 
 
+class AwardLineIn(BaseModel):
+    line_id: str
+    qty: Decimal | None = None
+    comment: str = ""
+
+
+class AwardExtraIn(BaseModel):
+    extra_id: str
+    comment: str = ""
+
+
+class AwardIn(BaseModel):
+    """``PUT tenders/<id>/award`` — выбор целиком: прежний заменяется."""
+    version: int
+    comment: str = ""
+    lines: list[AwardLineIn] = []
+    extras: list[AwardExtraIn] = []
+
+
 class PortalVersionIn(BaseModel):
     version: int
 

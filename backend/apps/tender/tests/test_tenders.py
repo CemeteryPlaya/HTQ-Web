@@ -117,7 +117,7 @@ def test_buyer_declares_a_tender_on_an_approved_request(world):
     assert card["request_number"] == world.req.number
     assert card["payment_scheme"] is None
     assert card["counters"] == {"sent": 0, "opened": 0, "submitted": 0}
-    assert set(card["allowed_actions"]) == {"edit", "publish", "cancel", "invite"}
+    assert set(card["allowed_actions"]) == {"edit", "publish", "cancel", "invite", "reviewer"}
     assert _req_status(world) == "approved"        # «В тендере» — с публикации
     with use_company(world.slug):
         assert AuditLog.objects.filter(object_type="tender.tender", object_id=card["id"],
@@ -214,7 +214,7 @@ def test_publish_moves_the_request_in_tender(world):
     assert resp.status_code == 200, resp.content
     published = h.call("get", f"tenders/{card['id']}", world.slug, h.SN).json()
     assert published["status"] == "intake"
-    assert set(published["allowed_actions"]) == {"extend", "cancel", "invite"}
+    assert set(published["allowed_actions"]) == {"extend", "cancel", "invite", "reviewer"}
     assert published["counters"] == {"sent": 1, "opened": 0, "submitted": 0}
     assert _req_status(world) == "in_tender"
     again = h.call("post", f"tenders/{card['id']}/publish", world.slug, h.SN,
