@@ -346,6 +346,19 @@ def test_post_needs_the_company_origin_and_json(world):
 
 
 @pytest.mark.django_db
+def test_token_never_reaches_the_request_log(world, caplog):
+    """Django пишет путь каждого 4xx в ``django.request`` — токен ссылки там
+    маскирован (htqweb/logmask.py), как и в журнале шлюза."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="django.request")
+    assert get(Client(), world.slug, f"{world.token}/tender").status_code == 403
+    assert get(Client(), world.slug, f"tok-{'0' * 40}").status_code == 404
+    assert "supplier/***" in caplog.text
+    assert world.token not in caplog.text
+
+
+@pytest.mark.django_db
 def test_multipart_only_for_upload(world):
     """``multipart/form-data`` — только у загрузки файла КП; на прочих POST — 415."""
     client = Client()

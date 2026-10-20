@@ -34,6 +34,15 @@ export interface UserAction {
   meta?: Record<string, unknown>;
 }
 
+/**
+ * Секрет в пути — токен ссылки портала поставщика (`/supplier/<token>`): адрес
+ * страницы уходит в логи бэкенда, поэтому сегмент токена заменяется на `***`
+ * (то же правило, что `htqweb/logmask.py` на сервере).
+ */
+export function maskSecretUrl(url: string): string {
+  return url.replace(/(\/supplier\/)[^/?#\s]+/g, '$1***');
+}
+
 function safeAuthHeader(): Record<string, string> {
   try {
     // Token key matches ACCESS_TOKEN_KEY in lib/auth/profileStorage.ts
@@ -52,7 +61,8 @@ async function post(endpoint: string, payload: Record<string, unknown>): Promise
         'Content-Type': 'application/json',
         ...safeAuthHeader(),
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(typeof payload.url === 'string'
+        ? { ...payload, url: maskSecretUrl(payload.url) } : payload),
       credentials: 'include',
       keepalive: true,
     });

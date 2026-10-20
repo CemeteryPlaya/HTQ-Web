@@ -334,8 +334,14 @@ LOGGING = {
     "formatters": {
         "app": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
     },
+    # Токен ссылки портала поставщика — часть пути, а django.request пишет путь
+    # каждого 4xx: фильтр меняет его на ``***`` (htqweb/logmask.py).
+    "filters": {
+        "mask_secret_paths": {"()": "htqweb.logmask.MaskSecretPaths"},
+    },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "app"},
+        "console": {"class": "logging.StreamHandler", "formatter": "app",
+                    "filters": ["mask_secret_paths"]},
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", "INFO")},
     # Логгеры БЕЗ собственных handlers + propagate=True (дефолт): записи идут в
@@ -343,7 +349,8 @@ LOGGING = {
     # root) их видит. Здесь — только уровни.
     "loggers": {
         "django": {"level": "INFO"},
-        "django.request": {"level": "WARNING"},
+        "django.request": {"level": "WARNING", "filters": ["mask_secret_paths"]},
+        "django.server": {"filters": ["mask_secret_paths"]},
         "django.db.backends": {"level": "WARNING"},
         "apps": {"level": env("APP_LOG_LEVEL", "INFO")},
         "htqweb": {"level": env("APP_LOG_LEVEL", "INFO")},
