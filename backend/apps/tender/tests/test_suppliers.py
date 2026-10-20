@@ -22,7 +22,8 @@ from htqweb.tenancy.db import use_company
 pytestmark = pytest.mark.django_db
 
 INVITATION_KEYS = {"id", "counterparty_id", "prospect_id", "name", "email", "status",
-                   "sent_at", "first_opened_at", "revoked_at", "max_devices"}
+                   "sent_at", "first_opened_at", "revoked_at", "max_devices",
+                   "allowed_actions"}
 
 
 @pytest.fixture
@@ -305,6 +306,66 @@ def test_revoke_and_reset_device(world):
     assert again.status_code == 409
     # Отозванный приглашается заново — новой строкой.
     assert _invite(world, {"counterparty_id": str(world.alfa.id)}).status_code == 201
+
+
+# ── действия приглашения (T3.7): кнопки и проверка сервера — одна функция ──
+
+def _actions(world, user_id=h.SN) -> dict[str, list[str]]:
+    return {row["id"]: row["allowed_actions"] for row in _card(world, user_id)["invitations"]}
+
+
+def _base(world, inv) -> str:
+    return f"tenders/{world.tender['id']}/invitations/{inv['id']}"
+
+
+def test_draft_invitation_can_only_be_revoked(world):
+    inv = _invite(world, {"counterparty_id": str(world.alfa.id)}).json()
+    assert inv["allowed_actions"] == ["revoke"]
+    assert _actions(world)[inv["id"]] == ["revoke"]
+
+
+def test_intake_open_gives_all_three(world):
+    inv = _invite(world, {"counterparty_id": str(world.alfa.id)}).json()
+    _publish(world)
+    assert _actions(world)[inv["id"]] == ["revoke", "reissue", "reset_device"]
+
+
+def test_not_author_sees_no_invitation_actions(world):
+    inv = _invite(world, {"counterparty_id": str(world.alfa.id)}).json()
+    _publish(world)
+    assert _actions(world, h.FD)[inv["id"]] == []
+
+
+def test_after_deadline_only_revoke_is_left(world):
+    """Срок прошёл, статус ещё «Приём»: перевыпуск и сброс бесполезны и
+    закрыты, отзыв — как был."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.tender.models import Tender
+
+    inv = _invite(world, {"counterparty_id": str(world.alfa.id)}).json()
+    _publish(world)
+    with use_company(world.slug):
+        Tender.objects.filter(pk=world.tender["id"]).update(
+            deadline_at=timezone.now() - timedelta(minutes=1))
+    assert _actions(world)[inv["id"]] == ["revoke"]
+    for action in ("reissue", "reset-device"):
+        resp = h.call("post", f"{_base(world, inv)}/{action}", world.slug, h.SN, {})
+        assert (resp.status_code, resp.json()["code"]) == (409, "E-STS-01"), action
+    assert h.call("post", f"{_base(world, inv)}/revoke", world.slug, h.SN, {}).status_code == 200
+
+
+def test_declined_invitation_has_no_actions(world):
+    inv = _invite(world, {"counterparty_id": str(world.alfa.id)}).json()
+    _publish(world)
+    with use_company(world.slug):
+        Invitation.objects.filter(pk=inv["id"]).update(status="declined")
+    assert _actions(world)[inv["id"]] == []
+    for action in ("revoke", "reissue", "reset-device"):
+        resp = h.call("post", f"{_base(world, inv)}/{action}", world.slug, h.SN, {})
+        assert resp.status_code == 409, (action, resp.content)
 
 
 def test_invitation_list_and_foreign_invitation(world):

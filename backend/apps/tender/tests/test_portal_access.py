@@ -197,6 +197,23 @@ def test_one_cookie_serves_two_invitations(company_context):
     assert get(client, second.slug, f"{second.token}/tender").status_code == 200
 
 
+@pytest.mark.django_db
+def test_reset_of_one_invitation_keeps_the_other(company_context):
+    """Одна cookie на двух приглашениях: сброс устройства у A не снимает
+    привязку этой же cookie к B."""
+    slug = company_context["slug"]
+    h.staff(slug)
+    first, second = build(slug), build(slug)
+    client = Client()
+    assert post(client, slug, f"{first.token}/bind").status_code == 200
+    assert post(client, slug, f"{second.token}/bind").status_code == 200
+    reset = h.call("post", f"tenders/{first.tender.id}/invitations/{first.inv.id}/reset-device",
+                   slug, h.SN, {})
+    assert reset.status_code == 200, reset.content
+    assert get(client, slug, f"{first.token}/tender").status_code == 403
+    assert get(client, slug, f"{second.token}/tender").status_code == 200
+
+
 @pytest.mark.django_db(transaction=True)
 def test_parallel_binds_make_one_binding(company_schema):
     world = build(company_schema["slug"])

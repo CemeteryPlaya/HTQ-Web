@@ -36,7 +36,7 @@ from . import tenders, tokens
 from .ctx import Ctx, bad
 
 #: До публикации приглашают в черновике, после — пока идёт приём.
-INVITABLE = (TenderStatus.DRAFT, TenderStatus.INTAKE)
+INVITABLE = tenders.INVITABLE
 
 
 def _refuse(field_name: str, text: str) -> DomainError:
@@ -52,7 +52,7 @@ def _key(value) -> uuid.UUID | None:
 
 def list_for(ctx: Ctx, tender_id) -> list[dict]:
     tender = tenders.get_visible(ctx, tender_id)
-    return [tenders.invitation_out(row) for row in tender.invitations.order_by("created_at")]
+    return [_out(ctx, tender, row) for row in tender.invitations.order_by("created_at")]
 
 
 def _party_from_counterparty(data: dict) -> dict:
@@ -120,7 +120,7 @@ def add(ctx: Ctx, tender_id, data: dict) -> dict:
     audit.record(tender, "invited", actor_id=ctx.user_id,
                  changes={"invitation": str(invitation.pk), "email": invitation.email,
                           "name": invitation.name})
-    body = tenders.invitation_out(invitation)
+    body = _out(ctx, tender, invitation)
     if out is not None:
         body["link"] = out
     return body
@@ -148,13 +148,27 @@ def _invitation_state_error(invitation: Invitation, action: str) -> DomainError:
                     f"„{invitation.get_status_display()}“.", status=409)
 
 
+def _require_action(ctx: Ctx, tender: Tender, invitation: Invitation, action: str, *,
+                    tender_text: str, invitation_text: str) -> None:
+    """Действие — только из ``tenders.invitation_actions``: тот же список
+    отдаёт карточка. Отказ называет причину — закрытое приглашение или
+    статус и срок тендера."""
+    if action in tenders.invitation_actions(ctx, tender, invitation):
+        return
+    if invitation.revoked_at is not None or invitation.status in tenders.CLOSED_INVITATIONS:
+        raise _invitation_state_error(invitation, invitation_text)
+    raise tenders.state_error(tender_text, tender)
+
+
+def _out(ctx: Ctx, tender: Tender, invitation: Invitation) -> dict:
+    return tenders.invitation_out(invitation, tenders.invitation_actions(ctx, tender, invitation))
+
+
 @transaction.atomic
 def revoke(ctx: Ctx, tender_id, invitation_id) -> dict:
     tender, invitation = _own_invitation(ctx, tender_id, invitation_id, "Отзывать в")
-    if tender.status not in INVITABLE:
-        raise tenders.state_error("отзывать приглашения в", tender)
-    if invitation.revoked_at is not None:
-        raise _invitation_state_error(invitation, "отозвать")
+    _require_action(ctx, tender, invitation, "revoke",
+                    tender_text="отзывать приглашения в", invitation_text="отозвать")
     now = timezone.now()
     invitation.status = InvitationStatus.REVOKED
     invitation.revoked_at = now
@@ -163,7 +177,7 @@ def revoke(ctx: Ctx, tender_id, invitation_id) -> dict:
     _revoke_devices(invitation, now=now, actor_id=ctx.user_id)
     audit.record(tender, "invitation_revoked", actor_id=ctx.user_id,
                  changes={"invitation": str(invitation.pk), "email": invitation.email})
-    return tenders.invitation_out(invitation)
+    return _out(ctx, tender, invitation)
 
 
 @transaction.atomic
@@ -172,10 +186,8 @@ def reissue(ctx: Ctx, tender_id, invitation_id) -> dict:
     находит приглашение. Привязанные устройства отвязываются — иначе
     чужое устройство с утёкшей ссылки занимало бы единственное место."""
     tender, invitation = _own_invitation(ctx, tender_id, invitation_id, "Перевыпускать в")
-    if tender.status != TenderStatus.INTAKE:
-        raise tenders.state_error("перевыпустить ссылку в", tender)
-    if invitation.revoked_at is not None:
-        raise _invitation_state_error(invitation, "перевыпустить")
+    _require_action(ctx, tender, invitation, "reissue",
+                    tender_text="перевыпустить ссылку в", invitation_text="перевыпустить")
     now = timezone.now()
     token, digest = tokens.issue()
     invitation.token_hash = digest
@@ -198,17 +210,15 @@ def reissue(ctx: Ctx, tender_id, invitation_id) -> dict:
 @transaction.atomic
 def reset_device(ctx: Ctx, tender_id, invitation_id) -> dict:
     tender, invitation = _own_invitation(ctx, tender_id, invitation_id, "Сбрасывать в")
-    if tender.status not in tenders.CANCELLABLE:
-        raise tenders.state_error("сбросить устройство в", tender)
-    if invitation.revoked_at is not None:
-        raise _invitation_state_error(invitation, "сбросить устройство у")
+    _require_action(ctx, tender, invitation, "reset_device",
+                    tender_text="сбросить устройство в", invitation_text="сбросить устройство у")
     devices = _revoke_devices(invitation, now=timezone.now(), actor_id=ctx.user_id)
     # В журнал портала — и сброс без привязок: закупщик нажал, поставщик увидит.
     portal.log_event(invitation, "device_reset",
                      meta={"by_user_id": ctx.user_id, "reason": "reset", "devices": devices})
     audit.record(tender, "device_reset", actor_id=ctx.user_id,
                  changes={"invitation": str(invitation.pk), "devices_reset": devices})
-    return tenders.invitation_out(invitation)
+    return _out(ctx, tender, invitation)
 
 
 def events(ctx: Ctx, tender_id, invitation_id) -> list[dict]:

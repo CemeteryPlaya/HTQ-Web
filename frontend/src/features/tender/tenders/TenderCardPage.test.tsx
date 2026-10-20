@@ -224,7 +224,10 @@ describe('TenderCardPage — публикация и ссылки', () => {
   it('перевыпуск — новая ссылка в диалоге; отзыв и сброс устройства — свои ручки', async () => {
     serve(tenderCard({
       status: 'intake', allowed_actions: ['extend', 'cancel', 'invite'],
-      invitations: [invitation({ status: 'opened', sent_at: '2099-11-01T10:00:00Z', first_opened_at: '2099-11-02T09:00:00Z' })],
+      invitations: [invitation({
+        status: 'opened', sent_at: '2099-11-01T10:00:00Z', first_opened_at: '2099-11-02T09:00:00Z',
+        allowed_actions: ['revoke', 'reissue', 'reset_device'],
+      })],
     }));
     post.mockImplementation((url: string) => Promise.resolve({
       data: url.endsWith('/reissue') ? { link: LINK_2 } : invitation({ status: 'revoked' }),
@@ -250,6 +253,18 @@ describe('TenderCardPage — публикация и ссылки', () => {
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Отозвать' }));
     await waitFor(() => expect(post.mock.calls.map((call) => call[0]))
       .toContainEqual(expect.stringContaining('invitations/inv-1/revoke')));
+  });
+
+  it('кнопки приглашения — по allowed_actions приглашения (после срока — только «Отозвать»)', async () => {
+    serve(tenderCard({
+      status: 'intake', allowed_actions: ['extend', 'cancel'],
+      invitations: [invitation({ status: 'opened', sent_at: '2099-11-01T10:00:00Z', allowed_actions: ['revoke'] })],
+    }));
+    renderCard();
+    const row = (await screen.findByText('sales@metall.kz')).closest('tr') as HTMLElement;
+    expect(within(row).getByRole('button', { name: 'Отозвать' })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Перевыпустить ссылку' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Сбросить устройство' })).not.toBeInTheDocument();
   });
 
   it('отозванное приглашение — без действий', async () => {

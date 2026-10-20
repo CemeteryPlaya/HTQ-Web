@@ -40,7 +40,8 @@ import { isoToLocalInput, localInputToIso } from '../core/datetime';
 import { TenderStatusBadge } from '../core/TenderStatusBadge';
 import { tenderRequestHref } from '../requests/api';
 import {
-  TENDERS_BASE, tenderKeys, tendersApi, type Invitation, type TenderCard, type TenderPatch,
+  TENDERS_BASE, tenderKeys, tendersApi, type Invitation, type InvitationAction, type TenderCard,
+  type TenderPatch,
 } from './api';
 import { AddParticipantDialog } from './AddParticipantDialog';
 import { ExtendDialog } from './ExtendDialog';
@@ -53,7 +54,6 @@ import {
 
 const REASON_MIN = 10;
 /** Приглашения в этих статусах действий не имеют. */
-const CLOSED_INVITATIONS = ['revoked', 'expired', 'declined', 'awarded', 'not_awarded'];
 
 interface DraftForm {
   deadline: string;
@@ -254,9 +254,11 @@ export function TenderCardPage() {
   };
 
   const invitationActions = (row: Invitation): [string, BppDocumentAction][] => {
-    if (!allowed.includes('invite') || CLOSED_INVITATIONS.includes(row.status)) return [];
+    // Действия приглашения считает сервер (`invitation_actions`): после срока
+    // остаётся только отзыв, у закрытого приглашения — ничего.
+    const can = (action: InvitationAction) => row.allowed_actions.includes(action);
     const actions: [string, BppDocumentAction][] = [];
-    if (card.status === 'intake' && row.status !== 'created') {
+    if (can('reissue')) {
       actions.push([`reissue:${row.id}`, {
         label: t('tender.tenders.reissue', 'Перевыпустить ссылку'),
         variant: 'outline',
@@ -269,6 +271,8 @@ export function TenderCardPage() {
           setLinks([{ invitationId: row.id, name: row.name, email: row.email, link }]);
         }),
       }]);
+    }
+    if (can('reset_device')) {
       actions.push([`reset:${row.id}`, {
         label: t('tender.tenders.resetDevice', 'Сбросить устройство'),
         variant: 'outline',
@@ -284,17 +288,19 @@ export function TenderCardPage() {
         }),
       }]);
     }
-    actions.push([`revoke:${row.id}`, {
-      label: t('tender.tenders.revoke', 'Отозвать'),
-      variant: 'outline',
-      confirm: {
-        title: t('tender.tenders.revokeConfirm', 'Отозвать приглашение {{name}}? Его ссылка перестанет работать.', { name: row.name }),
-      },
-      run: guarded(async (key) => {
-        await tendersApi.revoke(card.id, row.id, key);
-        refresh();
-      }),
-    }]);
+    if (can('revoke')) {
+      actions.push([`revoke:${row.id}`, {
+        label: t('tender.tenders.revoke', 'Отозвать'),
+        variant: 'outline',
+        confirm: {
+          title: t('tender.tenders.revokeConfirm', 'Отозвать приглашение {{name}}? Его ссылка перестанет работать.', { name: row.name }),
+        },
+        run: guarded(async (key) => {
+          await tendersApi.revoke(card.id, row.id, key);
+          refresh();
+        }),
+      }]);
+    }
     return actions;
   };
 

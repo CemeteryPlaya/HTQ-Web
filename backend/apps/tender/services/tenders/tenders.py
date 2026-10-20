@@ -56,6 +56,13 @@ REVIEWER_EDITABLE = (TenderStatus.DRAFT, TenderStatus.INTAKE, TenderStatus.OPENE
                      TenderStatus.REWORK)
 CANCELLABLE = (TenderStatus.DRAFT, TenderStatus.INTAKE, TenderStatus.OPENED,
                TenderStatus.REWORK)
+#: Приглашают и отзывают до публикации (черновик) и во время приёма.
+INVITABLE = (TenderStatus.DRAFT, TenderStatus.INTAKE)
+#: Приглашение закрыто — действий у него нет: отозвано, поставщик отказался,
+#: итог подведён, срок истёк.
+CLOSED_INVITATIONS = (InvitationStatus.REVOKED, InvitationStatus.DECLINED,
+                      InvitationStatus.AWARDED, InvitationStatus.NOT_AWARDED,
+                      InvitationStatus.EXPIRED)
 #: Ссылка дошла до поставщика: всё, кроме «Создано», ошибки доставки и отзыва.
 _DELIVERED = tuple(s for s in InvitationStatus
                    if s not in (InvitationStatus.CREATED, InvitationStatus.DELIVERY_ERROR,
@@ -125,6 +132,23 @@ def allowed_actions(ctx: Ctx, tender: Tender) -> list[str]:
     if tender.status in CANCELLABLE:
         return ["cancel"]
     return []
+
+
+def invitation_actions(ctx: Ctx, tender: Tender, row: Invitation) -> list[str]:
+    """Что автор может сделать с приглашением сейчас. Один список — и для
+    кнопок карточки (``allowed_actions`` приглашения), и для проверки самих
+    действий в ``invitations.py``: кнопка и сервер не расходятся.
+
+    Отзыв — в черновике и на приёме; перевыпуск ссылки и сброс устройства —
+    только пока приём идёт (после срока поставщик уже ничего не подаст)."""
+    if tender.author_id != ctx.user_id or not ctx.can(NODE, "edit"):
+        return []
+    if row.revoked_at is not None or row.status in CLOSED_INVITATIONS:
+        return []
+    actions = ["revoke"] if tender.status in INVITABLE else []
+    if intake_open(tender):
+        actions += ["reissue", "reset_device"]
+    return actions
 
 
 # ── проверки полей ──────────────────────────────────────────────────────
@@ -408,14 +432,16 @@ _COUNTER_FILTERS = {
 }
 
 
-def invitation_out(row: Invitation) -> dict:
-    """Приглашение наружу — белым списком: ни токена, ни хэша (T-26)."""
+def invitation_out(row: Invitation, actions: list[str]) -> dict:
+    """Приглашение наружу — белым списком: ни токена, ни хэша (T-26).
+    ``actions`` — ``invitation_actions`` для того, кто смотрит."""
     return {"id": str(row.pk), "counterparty_id": str(row.counterparty_id)
             if row.counterparty_id else None,
             "prospect_id": str(row.prospect_id) if row.prospect_id else None,
             "name": row.name, "email": row.email, "status": row.status,
             "sent_at": _iso(row.sent_at), "first_opened_at": _iso(row.first_opened_at),
-            "revoked_at": _iso(row.revoked_at), "max_devices": row.max_devices}
+            "revoked_at": _iso(row.revoked_at), "max_devices": row.max_devices,
+            "allowed_actions": actions}
 
 
 def card(ctx: Ctx, tender: Tender) -> dict:
@@ -438,7 +464,8 @@ def card(ctx: Ctx, tender: Tender) -> dict:
         "allowed_actions": allowed_actions(ctx, tender),
         "payment_scheme": schemes.out(PaymentScheme.objects.filter(tender=tender).first()),
         "counters": counters_of(invitations),
-        "invitations": [invitation_out(row) for row in invitations],
+        "invitations": [invitation_out(row, invitation_actions(ctx, tender, row))
+                        for row in invitations],
     }
 
 

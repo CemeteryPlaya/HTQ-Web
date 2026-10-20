@@ -10,7 +10,7 @@ export const REQUEST_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 export const invitation = (over: Partial<Invitation> = {}): Invitation => ({
   id: 'inv-1', counterparty_id: 'cp-1', prospect_id: null, name: 'ТОО «Металл-Снаб»',
   email: 'sales@metall.kz', status: 'created', sent_at: null, first_opened_at: null,
-  revoked_at: null, max_devices: 1,
+  revoked_at: null, max_devices: 1, allowed_actions: [],
   ...over,
 });
 

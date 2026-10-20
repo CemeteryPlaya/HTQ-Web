@@ -44,7 +44,11 @@ export interface Invitation {
   first_opened_at: string | null;
   revoked_at: string | null;
   max_devices: number;
+  /** Что автор может сделать с приглашением сейчас — решает сервер (T3.7). */
+  allowed_actions: InvitationAction[];
 }
+
+export type InvitationAction = 'revoke' | 'reissue' | 'reset_device';
 
 export interface TenderCounters {
   sent: number;
