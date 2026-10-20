@@ -21,6 +21,27 @@ from apps.users.models import User, UserStatus
 
 BASE = "/api/tender/v1"
 
+#: Ключи, которых в ответе портала поставщика нет ни на какой глубине (план
+#: этапа 3, §1): плановые цены, бюджет, другие участники, служебные ключи.
+PORTAL_FORBIDDEN = {"plan_price", "delivery_plan_amount", "works_plan_amount", "budget",
+                    "invitations", "counters", "token", "token_hash", "secret_hash",
+                    "author_id"}
+PORTAL_FORBIDDEN_PREFIXES = ("quality_reviewer", "bpp_")
+
+
+def portal_forbidden_keys(value, path: str = "") -> list[str]:
+    """Пути запрещённых ключей в ответе портала — рекурсивно."""
+    found = []
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key in PORTAL_FORBIDDEN or key.startswith(PORTAL_FORBIDDEN_PREFIXES):
+                found.append(f"{path}.{key}")
+            found += portal_forbidden_keys(inner, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, inner in enumerate(value):
+            found += portal_forbidden_keys(inner, f"{path}[{index}]")
+    return found
+
 SN, SN2, PM, FD, VIEWER, TD = 951, 952, 953, 954, 955, 956
 
 GROUPS = {"supply": ("Снабжение", "bpp.articles.supply"),

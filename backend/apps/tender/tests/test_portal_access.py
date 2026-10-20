@@ -36,23 +36,8 @@ from htqweb.tenancy.db import use_company
 BASE = "/api/tender/v1/supplier"
 REAL_IP = "10.20.30.40"
 
-#: Ключи, которых в ответе портала быть не должно (план этапа 3, §1).
-FORBIDDEN = {"plan_price", "delivery_plan_amount", "works_plan_amount", "budget",
-             "invitations", "counters", "token", "token_hash", "secret_hash", "author_id"}
-FORBIDDEN_PREFIXES = ("quality_reviewer", "bpp_")
-
-
-def forbidden_keys(value, path="") -> list[str]:
-    found = []
-    if isinstance(value, dict):
-        for key, inner in value.items():
-            if key in FORBIDDEN or key.startswith(FORBIDDEN_PREFIXES):
-                found.append(f"{path}.{key}")
-            found += forbidden_keys(inner, f"{path}.{key}")
-    elif isinstance(value, (list, tuple)):
-        for index, inner in enumerate(value):
-            found += forbidden_keys(inner, f"{path}[{index}]")
-    return found
+#: Ключи, которых в ответе портала быть не должно — общий набор (helpers).
+forbidden_keys = h.portal_forbidden_keys
 
 
 def sha(value: str) -> str:
