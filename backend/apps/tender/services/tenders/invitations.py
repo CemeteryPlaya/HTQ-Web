@@ -29,6 +29,7 @@ from apps.tender.models import (
     TenderStatus,
 )
 from apps.tender.services.core import audit
+from apps.tender.services.portal import access as portal
 from htqweb.errors import DomainError
 
 from . import tenders, tokens
@@ -185,6 +186,10 @@ def reissue(ctx: Ctx, tender_id, invitation_id) -> dict:
     invitation.save(update_fields=["token_hash", "status", "sent_at", "updated_by",
                                    "updated_at"])
     devices = _revoke_devices(invitation, now=now, actor_id=ctx.user_id)
+    if devices:
+        portal.log_event(invitation, "device_reset",
+                         meta={"by_user_id": ctx.user_id, "reason": "reissue",
+                               "devices": devices})
     audit.record(tender, "invitation_reissued", actor_id=ctx.user_id,
                  changes={"invitation": str(invitation.pk), "devices_reset": devices})
     return {"link": tokens.link(ctx.company, token)}
@@ -198,6 +203,22 @@ def reset_device(ctx: Ctx, tender_id, invitation_id) -> dict:
     if invitation.revoked_at is not None:
         raise _invitation_state_error(invitation, "сбросить устройство у")
     devices = _revoke_devices(invitation, now=timezone.now(), actor_id=ctx.user_id)
+    # В журнал портала — и сброс без привязок: закупщик нажал, поставщик увидит.
+    portal.log_event(invitation, "device_reset",
+                     meta={"by_user_id": ctx.user_id, "reason": "reset", "devices": devices})
     audit.record(tender, "device_reset", actor_id=ctx.user_id,
                  changes={"invitation": str(invitation.pk), "devices_reset": devices})
     return tenders.invitation_out(invitation)
+
+
+def events(ctx: Ctx, tender_id, invitation_id) -> list[dict]:
+    """Журнал портала приглашения — закупщику, который видит тендер (свой или
+    с ``tender.tenders.all``). Без токенов и секретов: их там нет."""
+    tender = tenders.get_visible(ctx, tender_id)
+    key = _key(invitation_id)
+    invitation = tender.invitations.filter(pk=key).first() if key else None
+    if invitation is None:
+        raise DomainError("E-NOT-FOUND", "Приглашение не найдено.", status=404)
+    return [{"id": str(row.pk), "kind": row.kind, "ip": row.ip, "user_agent": row.user_agent,
+             "meta": row.meta, "created_at": row.created_at.isoformat()}
+            for row in invitation.portal_events.order_by("created_at")]

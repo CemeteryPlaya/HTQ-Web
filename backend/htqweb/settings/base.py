@@ -412,6 +412,12 @@ CONFERENCE_INVITE_TTL_HOURS = int(env("CONFERENCE_INVITE_TTL_HOURS", "168"))
 # в отличие от браузера, origin взять неоткуда.
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", "")
 
+# ── Портал поставщика тендерного модуля (план этапа 3, §1; T-21) ────────────
+# Cookie устройства — ``__Secure-tender_device`` (HttpOnly; Secure;
+# SameSite=Strict). ``True`` — имя ``tender_device`` без Secure: только стенд
+# без HTTPS (settings.dev, settings.test). На бою — всегда False.
+TENDER_PORTAL_INSECURE_COOKIE = False
+
 # ── Утренняя сводка в Telegram (apps/core/tasks.py::send_daily_digest) ──────
 # Бот на платформе ОДИН, поэтому второй токен заводить не нужно: по умолчанию
 # берётся тот же GF_TELEGRAM_BOT_TOKEN, что читает Grafana. Префикс GF_ у него

@@ -123,7 +123,9 @@ class Invitation(TenderModel):
 
 class DeviceBinding(TenderModel):
     """Устройство, привязанное к приглашению (cookie портала, T-21). Выдаёт
-    портал (этап 3); здесь — только сброс (``revoked_at``)."""
+    портал (``services/portal/binding.py``), сбрасывает закупщик
+    (``revoked_at``). Одна cookie обслуживает несколько приглашений — по
+    строке на приглашение с тем же хэшем секрета (план этапа 3, §1)."""
 
     invitation = models.ForeignKey(Invitation, on_delete=models.CASCADE,
                                    related_name="devices")
@@ -135,7 +137,11 @@ class DeviceBinding(TenderModel):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["secret_hash"], name="uq_tender_device_secret"),
+            # Среди действующих: устройство привязано к приглашению один раз;
+            # после сброса то же устройство может привязаться снова.
+            models.UniqueConstraint(fields=["invitation", "secret_hash"],
+                                    name="uq_tender_device_secret",
+                                    condition=Q(revoked_at__isnull=True)),
         ]
         verbose_name = "Привязка устройства"
         verbose_name_plural = "Привязки устройств"

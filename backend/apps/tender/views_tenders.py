@@ -146,3 +146,9 @@ def invitation_reissue(request, tender_id, invitation_id):
 @api_view(methods=("POST",), module="tender", level="write", idempotent=True)
 def invitation_reset_device(request, tender_id, invitation_id):
     return invitations.reset_device(Ctx.from_request(request), tender_id, invitation_id)
+
+
+@api_view(methods=("GET",), module="tender", level="read")
+def invitation_events(request, tender_id, invitation_id):
+    """Журнал портала приглашения (T3.2): привязки, отказы, предложения."""
+    return invitations.events(Ctx.from_request(request), tender_id, invitation_id)

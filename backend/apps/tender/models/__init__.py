@@ -6,6 +6,8 @@
 """
 
 from .core import AuditLog, NumberSequence, TenderModel, VersionedModel
+from .offer import ExtraKind, Offer, OfferExtra, OfferLine, OfferStatus
+from .portal import PortalEvent, PortalEventKind
 from .request import (
     InitiatorRole,
     PartKind,
@@ -33,6 +35,8 @@ from .tender import (
 )
 
 __all__ = [
+    "PortalEvent", "PortalEventKind",
+    "ExtraKind", "Offer", "OfferExtra", "OfferLine", "OfferStatus",
     "ACTIVE_TENDER_STATUSES", "DeviceBinding", "Invitation", "InvitationStatus",
     "PaymentKind", "PaymentScheme", "PaymentStage", "PaymentTrigger", "SupplierContact",
     "SupplierProspect", "Tender", "TenderStatus",

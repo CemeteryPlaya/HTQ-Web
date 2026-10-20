@@ -11,4 +11,5 @@ urlpatterns = [
     path("", include("apps.tender.urls_requests")),
     path("", include("apps.tender.urls_tenders")),
     path("", include("apps.tender.urls_suppliers")),
+    path("", include("apps.tender.urls_supplier")),
 ]

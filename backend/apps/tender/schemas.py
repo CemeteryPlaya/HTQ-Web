@@ -175,3 +175,59 @@ class ProspectUpdate(BaseModel):
     email: str | None = None
     reg_number: str | None = None
     country_code: str | None = None
+
+
+
+# ── портал поставщика: предложение (T3.3) ───────────────────────────────
+# Только ТИПЫ; значения проверяет ``services/portal/offers.py`` и отвечает
+# конвертом ``fields`` с именами полей тела (``lines[0].price``).
+
+class PortalLineIn(BaseModel):
+    item_id: str
+    participates: bool | None = None
+    price: Decimal | None = None
+    qty: Decimal | None = None
+    delivery_date: date | None = None
+    is_analog: bool | None = None
+    analog_note: str | None = None
+    comment: str | None = None
+
+
+class PortalExtraIn(BaseModel):
+    amount: Decimal | None = None
+    included_in_price: bool | None = None
+    note: str | None = None
+
+
+class PortalSchemeIn(BaseModel):
+    kind: str
+    advance_pct: Decimal | None = None
+    postpay_days: int | None = None
+
+
+class PortalOfferIn(BaseModel):
+    """``PUT supplier/<token>/offer``: меняются только переданные блоки."""
+
+    version: int | None = None
+    currency_code: str | None = None
+    with_vat: bool | None = None
+    vat_rate: Decimal | None = None
+    valid_until: date | None = None
+    extra_terms: str | None = None
+    lines: list[PortalLineIn] | None = None
+    extras: dict[str, PortalExtraIn] | None = None
+    payment_scheme: PortalSchemeIn | None = None
+    requisites: dict[str, str | bool | None] | None = None
+
+
+class PortalSubmitIn(BaseModel):
+    version: int | None = None
+    pd_consent: bool = False
+
+
+class PortalVersionIn(BaseModel):
+    version: int | None = None
+
+
+class PortalDeclineIn(BaseModel):
+    reason: str = ""

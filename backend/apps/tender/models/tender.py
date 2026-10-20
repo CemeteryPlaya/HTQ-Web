@@ -96,6 +96,9 @@ class PaymentScheme(TenderModel):
 
     tender = models.ForeignKey(Tender, on_delete=models.CASCADE, null=True, blank=True,
                                related_name="payment_schemes")
+    # Схема, предложенная поставщиком (T3.3): у неё ``tender`` пуст.
+    offer = models.ForeignKey("tender.Offer", on_delete=models.CASCADE, null=True,
+                              blank=True, related_name="payment_schemes")
     kind = models.CharField(max_length=8, choices=PaymentKind.choices)
     postpay_days = models.PositiveSmallIntegerField(null=True, blank=True)
 
@@ -103,6 +106,8 @@ class PaymentScheme(TenderModel):
         constraints = [
             models.UniqueConstraint(fields=["tender"], name="uq_tender_payment_scheme",
                                     condition=Q(tender__isnull=False)),
+            models.UniqueConstraint(fields=["offer"], name="uq_tender_offer_payment_scheme",
+                                    condition=Q(offer__isnull=False)),
         ]
         verbose_name = "Схема оплаты"
         verbose_name_plural = "Схемы оплаты"

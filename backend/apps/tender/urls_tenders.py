@@ -33,4 +33,6 @@ urlpatterns = [
     path(f"{INV}/reissue/", views.invitation_reissue),
     path(f"{INV}/reset-device", views.invitation_reset_device),
     path(f"{INV}/reset-device/", views.invitation_reset_device),
+    path(f"{INV}/events", views.invitation_events),
+    path(f"{INV}/events/", views.invitation_events),
 ]
