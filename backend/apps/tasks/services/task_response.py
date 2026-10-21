@@ -188,10 +188,36 @@ def _list_payload(task: Task, ctx: _Ctx) -> dict:
     return payload
 
 
-def build_list(tasks: list[Task]) -> list[schemas.TaskListResponse]:
+def build_list(tasks: list[Task], *, scope=None) -> list[schemas.TaskListResponse]:
+    """``scope`` — ``TaskScope`` вызывающего: флаг ``can.claim`` строки (канбан
+    K1.6), из уже загруженных связей и исполнителей, без новых запросов."""
+    from . import task_service
+
     ctx = _Ctx(tasks, deep=False)
-    return [schemas.TaskListResponse.model_validate(_list_payload(t, ctx))
-            for t in tasks]
+    out = []
+    for task in tasks:
+        payload = _list_payload(task, ctx)
+        payload["can"] = {"claim": scope is not None and task_service.can_claim(task, scope)}
+        out.append(schemas.TaskListResponse.model_validate(payload))
+    return out
+
+
+def _can(task: Task, scope) -> dict:
+    """Флаги кнопок карточки — те же функции, что проверяют ручки (K1.6)."""
+    from . import task_service, transfer
+
+    if scope is None:
+        return dict.fromkeys(("full_edit", "soft_edit", "comment", "transfer", "delete"),
+                             True) | {"claim": False}
+    full = task_service.can_edit(task, scope)
+    return {
+        "full_edit": full,
+        "soft_edit": task_service.can_progress(task, scope),
+        "comment": True,                                   # видна — значит можно (K-16)
+        "transfer": transfer.can_transfer(task, scope),
+        "claim": task_service.can_claim(task, scope),
+        "delete": full,
+    }
 
 
 def _link_payload(link) -> dict:
@@ -297,5 +323,10 @@ def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
                                     "site_block", "parent")
                     .prefetch_related("labels", "assignees", "department_links",
                                       "subtasks"))
-    payload["subtasks"] = [s.model_dump() for s in build_list(subtasks)]
+    payload["subtasks"] = [s.model_dump() for s in build_list(subtasks, scope=scope)]
+    payload["can"] = _can(task, scope)
+    payload["department_links"] = [
+        {"department_id": link.department_id, "name": ctx.dept(link.department_id),
+         "kind": link.kind}
+        for link in task.department_links.all()]
     return schemas.TaskDetailResponse.model_validate(payload)

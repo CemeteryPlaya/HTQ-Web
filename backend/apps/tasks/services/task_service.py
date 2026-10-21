@@ -195,15 +195,18 @@ def filtered_tasks(*, status=None, priority=None, task_type=None,
                    site_id=None, site_unset=False, site_block_id=None,
                    contractor_id=None, contractor_unset=False,
                    parent_id=None, label_id=None,
-                   search=None, scope=None, legacy_q=None):
+                   search=None, scope=None, legacy_q=None, extra_q=None):
     """``scope`` — ``TaskScope`` вызывающего (``None`` — без ограничений);
     ``legacy_q`` — готовое условие прежнего правила, только для
-    ``task_stats`` (S1-11)."""
+    ``task_stats`` (S1-11); ``extra_q`` — сужение поверх видимости (вкладки
+    ``scope=mine|department`` списка, канбан K1.6)."""
     qs = _base_queryset()
 
     vq = legacy_q if legacy_q is not None else visibility_q(scope)
     if vq is not None:
         qs = qs.filter(vq)
+    if extra_q is not None:
+        qs = qs.filter(extra_q)
 
     if status:
         qs = qs.filter(status=status)
@@ -343,6 +346,73 @@ def can_edit(task: Task, scope) -> bool:
     if is_head_of(task, scope):
         return True
     return task.delegates.filter(user_id=scope.user_id).exists()
+
+
+def tab_q(tab: str | None, scope) -> Q | None:
+    """Вкладки списка ``scope=mine|department`` (канбан K1.6, S1-04): «мои» —
+    участие (то, что станет личной доской, K-03), «отдел» — поддеревья своего
+    отдела и управляемых, без «всех отделов» и досок проектов."""
+    if tab == "mine":
+        return _participant_q(scope.user_id)
+    if tab == "department":
+        if scope.elevated:
+            return None                                  # администратор видит всё (K-17)
+        return department_q(scope.department_ids) if scope.department_ids else Q(pk__in=[])
+    return None
+
+
+def in_own_department(task: Task, scope) -> bool:
+    """Задача своего отдела вызывающего: основной отдел или связь-участник в
+    поддеревьях его отдела и управляемых. Связь-отправитель, «все отделы» и
+    доска проекта сюда не входят (S1-07). ``department_links`` — из prefetch,
+    если он есть."""
+    if scope is None or not scope.department_ids:
+        return False
+    if task.department_id in scope.department_ids:
+        return True
+    return any(link.kind == DepartmentLinkKind.MEMBER
+               and link.department_id in scope.department_ids
+               for link in task.department_links.all())
+
+
+def can_claim(task: Task, scope) -> bool:
+    """«Взять в работу»: задача своего отдела, без исполнителя, в «Бэклог» или
+    «К выполнению» (канбан K1.6). ``assignees`` — из prefetch списка/карточки."""
+    return (in_own_department(task, scope)
+            and task.assignee_id is None
+            and not task.assignees.all()
+            and task.status in (Status.BACKLOG, Status.TODO))
+
+
+@transaction.atomic
+def claim(task_id: int, request) -> Task:
+    """Взять неразобранную задачу своего отдела в работу (канбан K1.6).
+
+    Видимость — ``load_for_action`` (404); блокировка — ОТДЕЛЬНЫМ запросом:
+    выборка видимости с ``distinct`` не совместима с ``FOR UPDATE``. Под
+    блокировкой второй одновременный «Взять» видит исполнителя и получает 409.
+    """
+    scope = task_scope.for_request(request)
+    load_for_action(task_id, request)
+    task = (Task.objects.select_for_update().prefetch_related("department_links")
+            .get(pk=task_id, is_deleted=False))
+    if not in_own_department(task, scope):
+        raise DomainError("task_claim_forbidden",
+                          "Взять в работу можно только задачу своего отдела", status=403)
+    if (task.assignee_id is not None or task.assignees.exists()
+            or task.status not in (Status.BACKLOG, Status.TODO)):
+        raise DomainError("task_claim_unavailable",
+                          "Задачу уже взяли в работу", status=409)
+    user_id = scope.user_id
+    TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY)
+    old_status = task.status
+    task.assignee_id = user_id
+    task.apply_transition(Status.IN_PROGRESS)
+    task.save()
+    _log(task, user_id, "claim", None, user_id)
+    _log(task, user_id, "assignee_id", None, user_id)
+    _log(task, user_id, "status", old_status, task.status)
+    return task
 
 
 def can_progress(task: Task, scope) -> bool:
@@ -529,8 +599,10 @@ def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
 def update_task(task_id: int, data, user_id: int | None = None, *,
                 scope=None) -> Task:
     """``scope`` — ``TaskScope`` вызывающего: правила отдела, автора и
-    родителя (канбан K1.5). ``None`` — внутренний вызов без проверок."""
-    task = Task.objects.filter(pk=task_id, is_deleted=False).first()
+    родителя (канбан K1.5). ``None`` — внутренний вызов без проверок.
+    Строка блокируется: связи отделов пишут и перенос, и «Взять в работу» —
+    под той же блокировкой (ревью K1.6)."""
+    task = Task.objects.select_for_update().filter(pk=task_id, is_deleted=False).first()
     if task is None:
         raise Http404("Task not found")
 

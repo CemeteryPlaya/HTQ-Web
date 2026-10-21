@@ -56,6 +56,7 @@ from .services import task_content_service
 from .services import task_response
 from .services import task_scope
 from .services import task_service
+from .services import transfer
 
 
 def _no_content() -> HttpResponse:
@@ -443,13 +444,18 @@ def _list_tasks(request):
             "label_id": _int_param(request, "label_id"),
             "search": _str_param(request, "search"),
         }
+        tab = _str_param(request, "scope")
+        if tab not in (None, "mine", "department"):
+            raise _ParamError(json_error("scope must be one of: mine, department", 422))
     except _ParamError as exc:
         return exc.response
 
+    scope = task_scope.for_request(request)
     tasks = task_service.list_tasks(
-        offset=offset, limit=limit, scope=task_scope.for_request(request), **filters,
+        offset=offset, limit=limit, scope=scope,
+        extra_q=task_service.tab_q(tab, scope), **filters,
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 @api_view(methods=("POST",), body=schemas.TaskCreate, status=201, module="tasks", level="write")
@@ -544,6 +550,24 @@ def task_transitions(request, task_id: int):
     task = task_service.load_for_action(task_id, request)
     return [{"status": status}
             for status in task_service.available_transitions(task)]
+
+
+@api_view(methods=("POST",), body=schemas.TransferIn, module="tasks", level="write")
+def task_transfer(request, task_id: int, data: schemas.TransferIn):
+    """«Отправить в отдел» (канбан K1.6): глава отдела задачи или администратор;
+    исполнители снимаются, отдел-отправитель остаётся связью ``origin``."""
+    task = transfer.transfer(task_id, data.department_id, request,
+                             sender_department_id=data.sender_department_id)
+    return task_response.build_detail(
+        task_service.get_task(task.id), scope=task_scope.for_request(request))
+
+
+@api_view(methods=("POST",), module="tasks", level="write")
+def task_claim(request, task_id: int):
+    """«Взять в работу» (канбан K1.6): неразобранная задача своего отдела."""
+    task = task_service.claim(task_id, request)
+    return task_response.build_detail(
+        task_service.get_task(task.id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("PATCH",), body=schemas.AssigneesUpdate, module="tasks", level="write")
@@ -1461,7 +1485,7 @@ def site_tasks(request, site_id: int):
     tasks = task_service.list_tasks(
         limit=1000, site_id=site_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1839,7 +1863,7 @@ def roadmap_tasks(request, roadmap_id: int):
     tasks = task_service.list_tasks(
         limit=1000, roadmap_id=roadmap_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
@@ -1870,7 +1894,7 @@ def project_tasks(request, project_id: int):
     tasks = task_service.list_tasks(
         limit=1000, project_id=project_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
