@@ -13,7 +13,7 @@ import type {
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
   ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
-  ProjectBoardCreate, ProjectLinkCandidate,
+  ProjectBoardCreate, ProjectLinkCandidate, TaskTransferBody,
 } from '@/types/tasks';
 import i18next from '@/i18n';
 
@@ -750,6 +750,18 @@ export const updateTask = async (id: number, data: Partial<Task>): Promise<Task>
 
 export const deleteTask = async (id: number): Promise<void> => {
   await api.delete(`${BASE}tasks/${id}/`);
+};
+
+/** «Взять в работу»: неразобранная задача своего отдела → исполнитель я, «В работе». */
+export const claimTask = async (id: number): Promise<Task> => {
+  const res = await api.post(`${BASE}tasks/${id}/claim/`);
+  return normalizeTask(res.data);
+};
+
+/** «Отправить в отдел»: исполнители снимаются, задача встаёт в «К выполнению». */
+export const transferTask = async (id: number, body: TaskTransferBody): Promise<Task> => {
+  const res = await api.post(`${BASE}tasks/${id}/transfer/`, body);
+  return normalizeTask(res.data);
 };
 
 export const fetchTaskStats = async (params?: Record<string, string>): Promise<TaskStats> => {

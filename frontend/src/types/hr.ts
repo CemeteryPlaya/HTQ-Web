@@ -7,6 +7,8 @@ export interface Department {
   name: string;
   description: string;
   created_at: string;
+  path?: string;
+  is_active?: boolean;
 }
 
 export interface Position {

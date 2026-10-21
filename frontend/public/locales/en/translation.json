@@ -671,7 +671,7 @@
       "effectiveDue": "Eff: {{date}}",
       "empty": "No tasks",
       "mine": "My tasks",
-      "departmentFree": "Unclaimed department tasks",
+      "department": "Department tasks",
       "filters": "Filters",
       "totalCount": "Total: {{count}}",
       "kanban": "Kanban",
@@ -1899,6 +1899,38 @@
     }
   },
   "tasks": {
+    "claim": {
+      "action": "Take on",
+      "success": "You took the task on",
+      "error": "Could not take the task on"
+    },
+    "transfer": {
+      "action": "Send to department",
+      "title": "Send to department",
+      "hint": "Assignees will be removed and the task will move to \"To do\". Your department will keep seeing its progress.",
+      "target": "Receiving department",
+      "search": "Find a department",
+      "empty": "No departments found",
+      "sender": "Sending department",
+      "senderAuto": "My department (automatic)",
+      "submit": "Send",
+      "success": "Task sent to the department",
+      "error": "Could not send the task"
+    },
+    "errors": {
+      "task_department_forbidden": "You can only pick your own department or its sub-departments",
+      "task_department_use_transfer": "Tasks go to another department via \"Send to department\": assignees are removed and your department keeps seeing progress",
+      "task_reporter_forbidden": "Only an administrator can change the task author",
+      "task_department_inactive": "The department is closed or not found",
+      "task_transfer_forbidden": "Only the head of the task's department can send it elsewhere",
+      "task_transfer_terminal": "Done or cancelled tasks cannot be sent",
+      "task_transfer_same": "The task is already in this department",
+      "task_transfer_assignees": "Tasks for another department are sent without assignees — the receiver assigns them",
+      "task_transfer_sender": "The sending department must be one you head",
+      "task_claim_unavailable": "The task is already taken or is not waiting for an assignee",
+      "task_claim_forbidden": "You can only take on tasks of your own department",
+      "task_status_initial": "A new task starts in \"Backlog\" or \"To do\""
+    },
     "title": "Tasks",
     "navigation": "Navigation",
     "projects": {

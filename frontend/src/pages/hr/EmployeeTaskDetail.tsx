@@ -20,7 +20,7 @@ import {
     User, Building2, Tag, Clock, Check, AlertTriangle
 } from 'lucide-react';
 import {
-    fetchTask, updateTask, addTaskComment, addTaskAttachment
+    fetchTask, updateTask, addTaskComment, addTaskAttachment, claimTask
 } from '@/api/tasks';
 import type { UserProfile } from '@/types/userProfile';
 import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
@@ -28,6 +28,8 @@ import {
     TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
 } from '@/lib/tasks/status';
 import { reportApiError } from '@/lib/apiError';
+import { reportTaskError } from '@/features/tasks/errors';
+import { TransferDialog } from '@/features/tasks/board/TransferDialog';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
 /* ---- Config Maps ---- */
@@ -54,6 +56,7 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [commentText, setCommentText] = useState('');
+    const [transferOpen, setTransferOpen] = useState(false);
     const taskId = Number(id);
 
     const { data: task, isLoading, error } = useQuery({
@@ -62,19 +65,22 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
         enabled: !!taskId,
     });
 
-    const currentUserDepartmentId = profile.department_id;
     const currentUserId = Number(profile.id);
-
     const isAssignedToCurrentUser = task?.assignee === currentUserId;
-    const isDepartmentTask = currentUserDepartmentId
-        ? task?.department === currentUserDepartmentId
-        : Boolean(profile.department && task?.department_name === profile.department);
 
-    // Render "Accept" button conditionally
-    const shouldShowAcceptButton = task &&
-        isDepartmentTask &&
-        (task.status === 'todo' || task.status === 'backlog') &&
-        !task.assignee;
+    // «Взять в работу» — по флагу сервера и своей ручкой: свой отдел, связь
+    // отдела-участника, статус и пустой состав считает сервер (S1-07), а
+    // прежний PATCH исполнителя был полной правкой и отвечал 403.
+    const claimMutation = useMutation({
+        mutationFn: () => claimTask(taskId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['employee-task', taskId] });
+            queryClient.invalidateQueries({ queryKey: ['employee-tasks'] });
+            queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
+            toast.success(t('tasks.claim.success'));
+        },
+        onError: (err) => reportTaskError(err, t, t('tasks.claim.error')),
+    });
 
     const updateMutation = useMutation({
         mutationFn: (data: Partial<Task>) => updateTask(taskId, data),
@@ -262,22 +268,15 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                 <div className="text-sm font-medium">
                                     {task.assignee_name || t('tasks.pages.detail.unassigned')}
                                 </div>
-                                {shouldShowAcceptButton && (
+                                {task.can?.claim && (
                                     <Button
                                         size="sm"
                                         className="w-full mt-3"
-                                        onClick={() => {
-                                            updateMutation.mutate({
-                                                assignee: currentUserId,
-                                                status: (task.status === 'todo' || task.status === 'backlog')
-                                                    ? 'in_progress'
-                                                    : task.status,
-                                            } as Partial<Task>);
-                                        }}
-                                        disabled={updateMutation.isPending}
+                                        onClick={() => claimMutation.mutate()}
+                                        disabled={claimMutation.isPending}
                                     >
                                         <Check className="h-4 w-4 mr-2" />
-                                        {t('tasks.pages.detail.acceptTask')}
+                                        {t('tasks.claim.action')}
                                     </Button>
                                 )}
                             </div>
@@ -330,6 +329,17 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                                     <Building2 className="h-3 w-3" /> {t('tasks.pages.detail.department')}
                                 </Label>
                                 <p className="text-sm mt-1">{task.department_name || '—'}</p>
+                                {task.can?.transfer && (
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="w-full mt-2"
+                                        onClick={() => setTransferOpen(true)}
+                                    >
+                                        <Send className="h-4 w-4 mr-2" />
+                                        {t('tasks.transfer.action')}
+                                    </Button>
+                                )}
                             </div>
 
                             {/* Date Rollups & Warnings */}
@@ -388,6 +398,8 @@ const EmployeeTaskDetail: React.FC<Props> = ({ profile }) => {
                     </Card>
                 </div>
             </div>
+
+            <TransferDialog task={task} open={transferOpen} onOpenChange={setTransferOpen} />
         </TasksLayout>
     );
 };
