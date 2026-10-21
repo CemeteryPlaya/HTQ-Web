@@ -1091,6 +1091,16 @@ class Task(models.Model):
             self.progress_percent = 100
 
 
+class DepartmentLinkKind(models.TextChoices):
+    """Чем отдел приходится задаче (канбан-доски, мастер-план K-08)."""
+
+    # Отдел-участник: задача на его доске, глава отдела правит её (K-06).
+    MEMBER = "member"
+    # Отдел-отправитель после переноса в другой отдел: задачу видит и следит
+    # за ходом работ, но прав на неё не получает (спека этапа 1, S1-03).
+    ORIGIN = "origin"
+
+
 class TaskDepartmentLink(models.Model):
     """A task may span several departments (cross-functional work).
 
@@ -1104,6 +1114,13 @@ class TaskDepartmentLink(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE,
                              related_name="department_links")
     department_id = models.IntegerField(db_index=True)
+    # ``db_default`` — чтобы старый код (откат выкатки, отставшая по
+    # миграциям компания) вставлял связи без поля и получал «участника».
+    kind = models.CharField(
+        max_length=10, choices=DepartmentLinkKind.choices,
+        default=DepartmentLinkKind.MEMBER, db_default=DepartmentLinkKind.MEMBER,
+        db_index=True,
+    )
 
     class Meta:
         verbose_name = "Отдел задачи"
