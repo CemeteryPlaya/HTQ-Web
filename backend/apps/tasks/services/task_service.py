@@ -277,12 +277,16 @@ def get_task(task_id: int, *, visibility="all", visibility_user_id=None,
     return task
 
 
-def load_for_action(task_id: int, token) -> Task:
+def load_for_action(task_id: int, request) -> Task:
     """Visibility-checked load used by every mutating endpoint.
 
     Does NOT check write permission — the caller decides whether full edit,
     soft edit, or mere visibility is required.
+
+    Takes the REQUEST, not the token (канбан K1.3, спека этапа 1 S1-01): the
+    caller's scope will be computed once per request and cached on it.
     """
+    token = request.token
     visibility, department_id = scope_for(token)
     return get_task(task_id, visibility=visibility,
                     visibility_user_id=token.user_id,
@@ -311,14 +315,16 @@ def can_progress(task: Task, user_id: int, is_elevated: bool) -> bool:
     return task.assignees.filter(user_id=user_id).exists()
 
 
-def require_full_edit(task: Task, token) -> None:
+def require_full_edit(task: Task, request) -> None:
+    token = request.token
     if not can_edit(task, token.user_id, token.is_elevated):
         raise PermissionDenied(
             "Only supervisor, delegate, reporter or admin can edit this task"
         )
 
 
-def require_soft_edit(task: Task, token) -> None:
+def require_soft_edit(task: Task, request) -> None:
+    token = request.token
     if not can_progress(task, token.user_id, token.is_elevated):
         raise PermissionDenied(
             "Only assignees, supervisor, delegate, reporter or admin can "

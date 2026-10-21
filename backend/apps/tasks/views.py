@@ -497,20 +497,20 @@ def task_stats(request):
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_task(request, task_id: int):
     return task_response.build_detail(
-        task_service.load_for_action(task_id, request.token)
+        task_service.load_for_action(task_id, request)
     )
 
 
 @api_view(methods=("PATCH",), body=schemas.TaskUpdate, module="tasks", level="write")
 def _update_task(request, task_id: int, data: schemas.TaskUpdate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Status/progress alone need only the soft-edit role; touching anything
     # else requires full edit.
     fields = set(data.model_dump(exclude_unset=True))
     if fields and fields.issubset({"status", "progress_percent"}):
-        task_service.require_soft_edit(task, request.token)
+        task_service.require_soft_edit(task, request)
     else:
-        task_service.require_full_edit(task, request.token)
+        task_service.require_full_edit(task, request)
 
     try:
         task_service.update_task(task_id, data, user_id=request.token.user_id)
@@ -525,8 +525,8 @@ def _update_task(request, task_id: int, data: schemas.TaskUpdate):
 
 @api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_task(request, task_id: int):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.delete_task(task_id)
     return _no_content()
 
@@ -543,15 +543,15 @@ def task_detail(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def task_transitions(request, task_id: int):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     return [{"status": status}
             for status in task_service.available_transitions(task)]
 
 
 @api_view(methods=("PATCH",), body=schemas.AssigneesUpdate, module="tasks", level="write")
 def update_assignees(request, task_id: int, data: schemas.AssigneesUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.replace_assignees(task_id, data.assignees,
                                    actor_id=request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
@@ -559,8 +559,8 @@ def update_assignees(request, task_id: int, data: schemas.AssigneesUpdate):
 
 @api_view(methods=("PATCH",), body=schemas.SupervisorUpdate, module="tasks", level="write")
 def update_supervisor(request, task_id: int, data: schemas.SupervisorUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.set_supervisor(task_id, data.user_id,
                                 actor_id=request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
@@ -568,7 +568,7 @@ def update_supervisor(request, task_id: int, data: schemas.SupervisorUpdate):
 
 @api_view(methods=("POST",), body=schemas.DelegateCreate, status=201, module="tasks", level="write")
 def _add_delegate(request, task_id: int, data: schemas.DelegateCreate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Only the supervisor (or an admin) may delegate. Reporters and existing
     # delegates deliberately cannot — otherwise delegates self-propagate.
     if not request.token.is_elevated and task.supervisor_id != request.token.user_id:
@@ -588,7 +588,7 @@ def task_delegates(request, task_id: int):
 def remove_delegate(request, task_id: int, user_id: int):
     """The supervisor can revoke anyone; a delegate may also give up their
     own seat. Returns the task (200), not 204 — as the original did."""
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     is_self = user_id == request.token.user_id
     is_supervisor = task.supervisor_id == request.token.user_id
     if not (request.token.is_elevated or is_supervisor or is_self):
@@ -600,14 +600,14 @@ def remove_delegate(request, task_id: int, user_id: int):
 
 @api_view(methods=("POST",), status=201, module="tasks", level="write")
 def _watch_task(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     task_service.add_watcher(task_id, request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
 
 
 @api_view(methods=("DELETE",), module="tasks", level="write")
 def _unwatch_task(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     task_service.remove_watcher(task_id, request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
 
@@ -623,8 +623,8 @@ def task_watch(request, task_id: int):
 
 @api_view(methods=("PATCH",), body=schemas.ProgressUpdate, module="tasks", level="write")
 def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_soft_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_soft_edit(task, request)
     task_service.set_progress(task_id, data.percent,
                               actor_id=request.token.user_id)
     return task_response.build_detail(task_service.get_task(task_id))
@@ -643,7 +643,7 @@ def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_comments(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_comments(task_id)
 
 
@@ -654,7 +654,7 @@ def _create_comment(request, task_id: int, data: schemas.CommentCreate):
     # watcher or a colleague looking at free work in their department — may
     # say something about it. What must not happen is commenting on a task
     # the caller cannot see at all.
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.create_comment(task_id, data.body,
                                                request.token.user_id)
 
@@ -669,7 +669,7 @@ def task_comments(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_attachments(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_attachments(task_id)
 
 
@@ -688,8 +688,8 @@ def _upload_attachment(request, task_id: int):
     """
     from apps.media_files import interface as media_interface
 
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_soft_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_soft_edit(task, request)
 
     upload = request.FILES.get("file")
     if upload is None:
@@ -740,25 +740,25 @@ def task_attachments(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def task_activity(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_activity(task_id)
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_volumes(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return [schemas.TaskVolumeResponse.model_validate(row)
             for row in task_content_service.list_task_volumes(task_id)]
 
 
 @api_view(methods=("PUT",), body=schemas.VolumesUpdate, module="tasks", level="write")
 def _set_task_volumes(request, task_id: int, data: schemas.VolumesUpdate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Мягкое право, а не полное: «развезли 180 из 250» — это отчёт о ходе
     # работ, ровно то же, что progress_percent, а он под require_soft_edit.
     # Требовать здесь full_edit значило бы запретить исполнителю отчитаться
     # о собственной задаче.
-    task_service.require_soft_edit(task, request.token)
+    task_service.require_soft_edit(task, request)
     try:
         rows = task_content_service.set_task_volumes(
             task_id, [v.model_dump() for v in data.volumes])
@@ -785,7 +785,7 @@ def task_volumes(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_reports(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return [schemas.DailyReportResponse.model_validate(row)
             for row in daily_report_service.build_reports(
                 daily_report_service.list_reports(task_id=task_id))]
@@ -793,11 +793,11 @@ def _list_task_reports(request, task_id: int):
 
 @api_view(methods=("POST",), body=schemas.DailyReportCreate, status=201, module="tasks", level="write")
 def _create_task_report(request, task_id: int, data: schemas.DailyReportCreate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Мягкое право: отчёт о выполненном — то же, что progress, а не
     # планирование. Требовать full_edit значило бы запретить исполнителю
     # отчитаться о собственной смене.
-    task_service.require_soft_edit(task, request.token)
+    task_service.require_soft_edit(task, request)
     try:
         report = daily_report_service.create_report(
             task_id, data.model_dump(), author_id=request.token.user_id)
@@ -824,7 +824,7 @@ def _report_for_write(request, report_id: int):
     завести свою.
     """
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     token = request.token
     if not (token.is_elevated
             or report.author_id == token.user_id
@@ -838,7 +838,7 @@ def _report_for_write(request, report_id: int):
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_report(request, report_id: int):
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     return schemas.DailyReportResponse.model_validate(
         daily_report_service.build_report(report))
 
@@ -877,7 +877,7 @@ def daily_report_detail(request, report_id: int):
 def daily_report_revisions(request, report_id: int):
     """Лента версий отчёта. Читают все, кто видит задачу."""
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     return [schemas.DailyReportRevisionResponse.model_validate(row)
             for row in daily_report_service.build_revisions(
                 daily_report_service.list_revisions(report_id))]
@@ -1097,9 +1097,9 @@ def _create_link(request, data: schemas.LinkCreate):
     # the response and on the other task's card. Write permission is
     # required on the source only — that is the side the link is created
     # from, and the side link_detail authorises deletion against.
-    source = task_service.load_for_action(data.source_id, request.token)
-    task_service.load_for_action(data.target_id, request.token)
-    task_service.require_full_edit(source, request.token)
+    source = task_service.load_for_action(data.source_id, request)
+    task_service.load_for_action(data.target_id, request)
+    task_service.require_full_edit(source, request)
     try:
         link = link_service.create_link(source_id=data.source_id,
                                         target_id=data.target_id,
@@ -1126,8 +1126,8 @@ def links_collection(request):
 @api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def link_detail(request, link_id: int):
     source = task_service.load_for_action(
-        link_service.link_source_task_id(link_id), request.token)
-    task_service.require_full_edit(source, request.token)
+        link_service.link_source_task_id(link_id), request)
+    task_service.require_full_edit(source, request)
     link_service.delete_link(link_id)
     return _no_content()
 
@@ -1887,8 +1887,8 @@ def _authorise_resource_target(request, task_id: int | None,
                                roadmap_id: int | None):
     """Проверить право писать ресурсы указанной цели."""
     if task_id is not None:
-        task = task_service.load_for_action(task_id, request.token)
-        task_service.require_full_edit(task, request.token)
+        task = task_service.load_for_action(task_id, request)
+        task_service.require_full_edit(task, request)
     else:
         _roadmap_for_write(request, roadmap_id)
 
@@ -1897,7 +1897,7 @@ def _read_resource_target(request, task_id: int | None,
                           roadmap_id: int | None):
     """Проверить право ЧИТАТЬ ресурсы цели — только видимость, без правки."""
     if task_id is not None:
-        task_service.load_for_action(task_id, request.token)
+        task_service.load_for_action(task_id, request)
     else:
         employee_scope, department_id = roadmap_service.scope_for(request.token)
         roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
