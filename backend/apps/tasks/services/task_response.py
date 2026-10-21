@@ -16,7 +16,7 @@ inside a per-task loop is the bug this module exists to prevent.
 from __future__ import annotations
 
 from .. import schemas
-from ..models import Task
+from ..models import DepartmentLinkKind, Task
 from . import contractor_service
 from . import hydration
 from . import task_content_service
@@ -97,7 +97,11 @@ def _iter_list_user_ids(tasks: list[Task]):
 def _common_fields(task: Task, ctx: _Ctx) -> dict:
     """Fields shared by the list and detail shapes."""
     type_row = task.task_type
-    dept_ids = [link.department_id for link in task.department_links.all()]
+    # Только отделы-участники: отдел-отправитель (``origin``) — не отдел
+    # задачи, и интерфейс, отправив список обратно, не должен делать его
+    # участником (S1-20).
+    dept_ids = [link.department_id for link in task.department_links.all()
+                if link.kind == DepartmentLinkKind.MEMBER]
     return {
         "id": task.id,
         "key": task.key,

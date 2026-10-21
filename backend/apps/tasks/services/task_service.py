@@ -30,6 +30,8 @@ from django.db import transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.db.models.functions import TruncDate
 from django.http import Http404
+
+from htqweb.errors import DomainError
 from django.utils import timezone
 
 from apps.notifications import interface as notifications
@@ -50,6 +52,7 @@ from ..models import (
     TaskWatcher,
 )
 from . import board_scope
+from . import department_rules
 from . import hydration
 from . import roadmap_service
 from . import site_service
@@ -64,7 +67,8 @@ logger = logging.getLogger(__name__)
 # the task history shows), not an implementation detail.
 TRACKED_FIELDS = [
     "summary", "description", "task_type_id", "priority", "status",
-    "assignee_id", "supervisor_id", "project_id", "roadmap_id", "site_id",
+    "assignee_id", "supervisor_id", "department_id", "project_id", "roadmap_id",
+    "site_id",
     "site_block_id",
     "contractor_id", "contractor_worker_id", "progress_percent",
     "due_date", "start_date", "estimated_working_days",
@@ -417,7 +421,10 @@ def _log(task: Task, actor_id: int | None, field_name: str,
 
 
 @transaction.atomic
-def create_task(data, user_id: int | None = None) -> Task:
+def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
+    """``scope`` — ``TaskScope`` вызывающего: правила отдела, автора,
+    начального статуса и родителя (канбан K1.5). ``None`` — внутренний вызов
+    без проверок."""
     due_date = data.due_date
     if data.estimated_working_days and data.start_date:
         # A computed deadline wins over a client-sent one, as in the original.
@@ -435,6 +442,26 @@ def create_task(data, user_id: int | None = None) -> Task:
         + list(data.department_ids)
     ))
     primary_dept = data.department_id or (dept_ids[0] if dept_ids else None)
+
+    origin = None
+    reporter_id = data.reporter_id or user_id
+    if scope is not None:
+        origin = department_rules.origin_for_create(scope, dept_ids)
+        if origin is not None and crew:
+            # У получателя задача появляется без исполнителя (K-08): назначить
+            # людей чужого отдела отправитель не вправе.
+            raise DomainError("task_transfer_assignees",
+                              "Задачу в чужой отдел ставят без исполнителя", status=422)
+        if not scope.elevated:
+            # Автор с клиента — только у администратора (K-25), иначе задачу
+            # можно положить на чужую личную доску под чужим именем.
+            reporter_id = user_id
+            if data.status not in (Status.BACKLOG, Status.TODO):
+                raise DomainError("task_status_initial",
+                                  "Новая задача начинается с «Бэклог» или «К выполнению»",
+                                  status=422)
+        if data.parent_id is not None:
+            get_task(data.parent_id, scope=scope)        # невидимый родитель — 404 (S1-18)
 
     # Роудмап первым: он знает проект, площадку и блок, поэтому задаёт их, а
     # не проверяется против них (см. roadmap_service.resolve_task_roadmap).
@@ -456,7 +483,7 @@ def create_task(data, user_id: int | None = None) -> Task:
         task_type_id=resolve_task_type_id(data.task_type_id, data.task_type),
         priority=data.priority,
         status=data.status,
-        reporter_id=data.reporter_id or user_id,
+        reporter_id=reporter_id,
         assignee_id=primary_id,
         supervisor_id=data.supervisor_id,
         department_id=primary_dept,
@@ -473,15 +500,15 @@ def create_task(data, user_id: int | None = None) -> Task:
         estimated_working_days=data.estimated_working_days,
     )
 
-    # Department ids are hr-owned and unvalidated here. The original filtered
-    # them against its local replica to avoid violating a FK; with the
-    # replica gone there is no FK to violate, and filtering through
-    # hr.interface would make task creation fail whenever hr is disabled.
-    # Unknown ids are stored and simply do not hydrate to a name.
-    if dept_ids:
-        TaskDepartmentLink.objects.bulk_create(
-            [TaskDepartmentLink(task=task, department_id=d) for d in dept_ids]
-        )
+    # Отделы проверены ``department_rules`` (для вызывающего с ``scope``):
+    # существование, активность и право. Отдел-отправитель главы, ставящего
+    # задачу в чужой отдел, — связь ``origin`` (видит ход работ, прав нет).
+    links = [TaskDepartmentLink(task=task, department_id=d) for d in dept_ids]
+    if origin is not None and origin not in dept_ids:
+        links.append(TaskDepartmentLink(task=task, department_id=origin,
+                                        kind=DepartmentLinkKind.ORIGIN))
+    if links:
+        TaskDepartmentLink.objects.bulk_create(links)
 
     if data.label_ids:
         # Labels are local, so unknown ids are a client error we can detect —
@@ -499,7 +526,10 @@ def create_task(data, user_id: int | None = None) -> Task:
 
 
 @transaction.atomic
-def update_task(task_id: int, data, user_id: int | None = None) -> Task:
+def update_task(task_id: int, data, user_id: int | None = None, *,
+                scope=None) -> Task:
+    """``scope`` — ``TaskScope`` вызывающего: правила отдела, автора и
+    родителя (канбан K1.5). ``None`` — внутренний вызов без проверок."""
     task = Task.objects.filter(pk=task_id, is_deleted=False).first()
     if task is None:
         raise Http404("Task not found")
@@ -516,6 +546,9 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
     # caller set it explicitly in the same request.
     if department_ids is not None and "department_id" not in changes:
         changes["department_id"] = department_ids[0] if department_ids else None
+
+    if scope is not None:
+        _check_update(task, changes, department_ids, scope)
 
     # Объект и проект могут прийти в одном PATCH, поэтому решение принимаем
     # по итоговой паре, а не по присланным полям по отдельности. Если
@@ -593,13 +626,42 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
         task.labels.set(Label.objects.filter(id__in=label_ids))
 
     if department_ids is not None:
-        task.department_links.all().delete()
-        TaskDepartmentLink.objects.bulk_create(
-            [TaskDepartmentLink(task=task, department_id=d)
-             for d in dict.fromkeys(department_ids)]
-        )
+        # Набор отделов-участников заменяется целиком; отдел-отправитель
+        # (``origin``) остаётся, а попав в новый набор, становится участником.
+        task.department_links.filter(kind=DepartmentLinkKind.MEMBER).delete()
+        for department_id in dict.fromkeys(department_ids):
+            TaskDepartmentLink.objects.update_or_create(
+                task=task, department_id=department_id,
+                defaults={"kind": DepartmentLinkKind.MEMBER})
 
     return task
+
+
+def _check_update(task: Task, changes: dict, department_ids, scope) -> None:
+    """Проверки правки задачи по правам вызывающего (канбан K1.5)."""
+    if ("reporter_id" in changes and not scope.elevated
+            and changes["reporter_id"] != task.reporter_id):
+        raise DomainError("task_reporter_forbidden",
+                          "Автора задачи меняет только администратор", status=422)
+    # Смена ОСНОВНОГО отдела проверяется всегда, даже если отдел уже стоит
+    # связью-участником: иначе глава, создав задачу на свой и чужой отдел,
+    # одной правкой сделал бы чужой основным — перенос без переноса (ревью
+    # K1.5). Из прочих отделов — только новые: повторная отправка прежнего
+    # набора (интерфейс шлёт форму целиком) не должна упираться в старые связи.
+    current = {task.department_id} | {
+        link.department_id for link in task.department_links.all()
+        if link.kind == DepartmentLinkKind.MEMBER}
+    checked = []
+    new_primary = changes.get("department_id", task.department_id)
+    if new_primary != task.department_id:
+        checked.append(new_primary)
+    checked += [d for d in (department_ids or []) if d not in current]
+    checked = [d for d in dict.fromkeys(checked) if d is not None]
+    if checked:
+        department_rules.check_change(scope, task, checked)
+    parent_id = changes.get("parent_id")
+    if parent_id is not None and parent_id != task.parent_id:
+        get_task(parent_id, scope=scope)                 # невидимый родитель — 404 (S1-18)
 
 
 def _sync_primary_assignee(task: Task, new_primary_id: int | None) -> None:

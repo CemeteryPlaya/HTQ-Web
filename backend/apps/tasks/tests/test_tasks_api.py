@@ -213,8 +213,11 @@ def test_create_task_notifies_the_crew():
 
 @pytest.mark.django_db
 def test_create_task_stores_multi_department_set():
+    # Администратор: правила отдела (свой отдел у рядового, существование в
+    # hr — канбан K1.5) к нему не применяются; тест — о первичном отделе и
+    # наборе, их проверки — в test_department_rules.py.
     resp = post_json(Client(), f"{BASE}/tasks/",
-                     {"summary": "D", "department_ids": [3, 5]}, **auth())
+                     {"summary": "D", "department_ids": [3, 5]}, **auth(admin_token()))
     body = resp.json()
     assert body["department_id"] == 3           # first becomes primary
     assert sorted(body["department_ids"]) == [3, 5]

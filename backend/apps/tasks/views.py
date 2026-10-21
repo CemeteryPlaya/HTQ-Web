@@ -458,7 +458,8 @@ def _create_task(request, data: schemas.TaskCreate):
     # the task's project. Unlike _update_task this view had no except arm at
     # all, so any ValueError from the service reached the client as a 500.
     try:
-        task = task_service.create_task(data, user_id=request.token.user_id)
+        task = task_service.create_task(data, user_id=request.token.user_id,
+                                        scope=task_scope.for_request(request))
     except ValueError as exc:
         return json_error(str(exc), 400)
     # Re-read through the visibility-aware loader so the response is built
@@ -508,7 +509,8 @@ def _update_task(request, task_id: int, data: schemas.TaskUpdate):
         task_service.require_full_edit(task, request)
 
     try:
-        task_service.update_task(task_id, data, user_id=request.token.user_id)
+        task_service.update_task(task_id, data, user_id=request.token.user_id,
+                                 scope=task_scope.for_request(request))
     except date_rules.DatesOutOfOrder as exc:
         # 422, а не 500: до правила дат раньше добиралась только БД.
         return json_error(str(exc), 422)
