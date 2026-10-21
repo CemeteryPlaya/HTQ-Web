@@ -26,39 +26,42 @@ from ..models import (TERMINAL_STATUSES, Project, ProjectSite, Roadmap,
                       RoadmapStatus, SiteBlock, Task, TaskVolume)
 from . import board_scope
 from . import hydration
+from . import task_scope
 
 
-def scope_for(token) -> tuple[bool, int | None]:
-    """``(employee_scope, department_id)`` — как у проектов, буква в букву:
+def scope_for(request) -> tuple[bool, frozenset[int]]:
+    """``(employee_scope, department_ids)`` — как у проектов, буква в букву:
     роудмап наследует ту же ось видимости, и расходиться им незачем."""
-    if token.is_elevated:
-        return False, None
-    return True, hydration.employee_department_id(token.user_id)
+    scope = task_scope.for_request(request)
+    if scope.elevated:
+        return False, frozenset()
+    return True, scope.department_ids
 
 
-def _visible(employee_scope: bool, department_id: int | None, refs=None):
+def _visible(employee_scope: bool, department_ids, refs=None):
     """``refs`` — доски «Проектов» держателя «Доски задач проекта»
     (``board_scope``): их роудмапы видны в списке доски, в добавок к отделу."""
     qs = Roadmap.objects.all()
     if not employee_scope:
         return qs
     cond = None
-    if department_id is not None:
+    if department_ids:
+        ids = list(department_ids)
         # Отдел проекта тоже считается своим: роудмап часто заводят без
         # собственного отдела, и без этого он пропал бы из списка у всех.
-        cond = (Q(department_id=department_id)
-                | Q(department_id__isnull=True, project__department_id=department_id))
+        cond = (Q(department_id__in=ids)
+                | Q(department_id__isnull=True, project__department_id__in=ids))
     linked = board_scope.board_q(refs, prefix="project__")
     if linked is not None:
         cond = linked if cond is None else cond | linked
     return Roadmap.objects.none() if cond is None else qs.filter(cond)
 
 
-def list_roadmaps(*, employee_scope: bool, department_id: int | None,
+def list_roadmaps(*, employee_scope: bool, department_ids,
                   project_id: int | None = None, site_id: int | None = None,
                   block_id: int | None = None,
                   status: str | None = None, refs=None) -> list[Roadmap]:
-    qs = (_visible(employee_scope, department_id, refs)
+    qs = (_visible(employee_scope, department_ids, refs)
           .select_related("project", "site_block", "site_block__site"))
     if project_id is not None:
         qs = qs.filter(project_id=project_id)
@@ -75,8 +78,10 @@ def list_roadmaps(*, employee_scope: bool, department_id: int | None,
 
 
 def get_roadmap(roadmap_id: int, *, employee_scope: bool,
-                department_id: int | None) -> Roadmap:
-    roadmap = (_visible(employee_scope, department_id)
+                department_ids, refs=None) -> Roadmap:
+    """``refs`` — доски держателя «Доски задач проекта»: роудмап его доски
+    открывается, как и в списке (S1-23)."""
+    roadmap = (_visible(employee_scope, department_ids, refs)
                .select_related("project", "site_block", "site_block__site")
                .filter(pk=roadmap_id).first())
     if roadmap is None:

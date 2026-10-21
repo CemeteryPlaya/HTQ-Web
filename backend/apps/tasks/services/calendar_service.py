@@ -221,7 +221,12 @@ def _event_timeline_item(event: CalendarEvent, users: dict[int, dict]) -> dict:
     }
 
 
-def timeline(token, range_start: dt.date, range_end: dt.date) -> dict:
+def timeline(token, range_start: dt.date, range_end: dt.date, *,
+             task_condition=None) -> dict:
+    """``task_condition`` — видимость задач вызывающего
+    (``task_service.visibility_q``, канбан K1.4, S1-17): раньше лента отдавала
+    любые задачи с датами в окне, в том числе чужие личные. ``None`` — без
+    ограничений (администратор)."""
     window_start = dt.datetime.combine(range_start, dt.time.min,
                                        tzinfo=dt.timezone.utc)
     window_end = dt.datetime.combine(range_end, dt.time.max,
@@ -235,7 +240,10 @@ def timeline(token, range_start: dt.date, range_end: dt.date) -> dict:
 
     # A task shows on the timeline if its date span touches the window; a
     # single-dated task is a point that must fall inside it.
-    tasks = list(Task.objects.filter(is_deleted=False).filter(
+    tasks_qs = Task.objects.filter(is_deleted=False)
+    if task_condition is not None:
+        tasks_qs = tasks_qs.filter(task_condition).distinct()
+    tasks = list(tasks_qs.filter(
         Q(start_date__isnull=False, due_date__isnull=False,
           start_date__lte=range_end, due_date__gte=range_start)
         | Q(start_date__isnull=False, due_date__isnull=True,

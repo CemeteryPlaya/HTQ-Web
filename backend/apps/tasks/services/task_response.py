@@ -211,8 +211,26 @@ def _link_payload(link) -> dict:
     }
 
 
-def build_detail(task: Task) -> schemas.TaskDetailResponse:
+def _visible_ids(ids: set[int], scope) -> set[int]:
+    """Какие из этих задач вызывающий видит — одним запросом. ``scope=None``
+    или администратор — все."""
+    from . import task_service
+
+    condition = task_service.visibility_q(scope)
+    if not ids or condition is None:
+        return ids
+    return set(Task.objects.filter(id__in=ids, is_deleted=False).filter(condition)
+               .values_list("id", flat=True).distinct())
+
+
+def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
+    """``scope`` — ``TaskScope`` вызывающего (обязателен, канбан K1.4): связи
+    и подзадачи — только видимые ему, иначе карточка отдавала бы заголовки
+    чужих задач (S1-17). ``None`` — без ограничений."""
     ctx = _Ctx([task], deep=True)
+    linked_visible = _visible_ids(
+        {link.target_id for link in task.outgoing_links.all()}
+        | {link.source_id for link in task.incoming_links.all()}, scope)
     payload = _common_fields(task, ctx)
     payload.update({
         "description": task.description,
@@ -251,15 +269,23 @@ def build_detail(task: Task) -> schemas.TaskDetailResponse:
             for row in task.activities.all()
         ],
         "outgoing_links": [_link_payload(link)
-                           for link in task.outgoing_links.all()],
+                           for link in task.outgoing_links.all()
+                           if link.target_id in linked_visible],
         "incoming_links": [_link_payload(link)
-                           for link in task.incoming_links.all()],
+                           for link in task.incoming_links.all()
+                           if link.source_id in linked_visible],
         # Факт по каждому виду работ — свёртка отчётов задачи; в самой
         # строке объёма его нет (см. докстринг TaskVolume).
         "volumes": task_content_service.list_task_volumes(task.id),
         "subtasks": [],
     })
-    subtasks = list(task.subtasks.filter(is_deleted=False)
+    from . import task_service
+
+    subtask_qs = task.subtasks.filter(is_deleted=False)
+    condition = task_service.visibility_q(scope)
+    if condition is not None:
+        subtask_qs = subtask_qs.filter(condition).distinct()
+    subtasks = list(subtask_qs
                     # ``site``/``site_block`` тоже: ``_common_fields`` печатает
                     # их имена, и без джойна каждая подзадача стоила бы двух
                     # лишних запросов.
