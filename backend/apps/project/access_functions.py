@@ -21,4 +21,9 @@ FUNCTIONS = (
 #: Узлы проектной структуры не наследуют глубину от ``project``: широкая роль
 #: модуля (``project:admin``) без явной строки структуры не правит — правят
 #: ФД, ТД, ОД, ГД, АДМ и ``hr-lead`` по явной строке (access/0024).
-EXPLICIT_ONLY = frozenset({"project.structure", "project.roles"})
+#:
+#: ``project.board`` с канбан-досок открывает не только список досок, но и
+#: задачи внутри них (мастер-план K-14, K-15), поэтому тоже только по явной
+#: строке: ТД, ОД, ГД, ПМ, АДМ (access/0020, 0028). ``platform-admin`` и
+#: кастомные роли с модулем ``project`` без строки доски проектов не видят.
+EXPLICIT_ONLY = frozenset({"project.structure", "project.roles", "project.board"})
