@@ -24,6 +24,14 @@ def is_member(project_id: str, user_id: int) -> bool:
     return ProjectMember.objects.filter(project_id=project_id, user_id=user_id).exists()
 
 
+def has_projects() -> bool:
+    """Есть ли в схеме текущей компании хоть один «Проект» (удалённые
+    каскадом не считаются). Без ``require_service``: спрашивают реестр
+    компаний перед тем, как увести БЗО компании в чужую схему, и ответ
+    нужен и при выключенном модуле — данные от рубильника не исчезают."""
+    return Project.objects.exists()
+
+
 def member_project_ids(user_id: int) -> list[str]:
     require_service("project")
     return [str(pid) for pid in ProjectMember.objects.filter(user_id=user_id)

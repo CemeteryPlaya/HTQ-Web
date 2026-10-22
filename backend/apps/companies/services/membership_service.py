@@ -59,7 +59,7 @@ def find_user_id(identifier: str) -> int | None:
 
 
 def grant_membership(company: Company, user_id: int, *,
-                      is_default: bool = False) -> bool:
+                      is_default: bool = False, login_allowed: bool = True) -> bool:
     """Выдать пользователю право работать в компании.
 
     Идемпотентно: повторный вызов с теми же (company, user_id) не создаёт
@@ -87,7 +87,7 @@ def grant_membership(company: Company, user_id: int, *,
     with transaction.atomic():
         _, created = CompanyMembership.objects.get_or_create(
             company=company, user_id=user_id,
-            defaults={"is_default": is_default},
+            defaults={"is_default": is_default, "login_allowed": login_allowed},
         )
         if created:
             access.ensure_basic_role(company.slug, user_id)
@@ -124,7 +124,7 @@ def list_memberships(company: Company) -> list[dict]:
     rows = list(
         CompanyMembership.objects.filter(company=company)
         .order_by("-is_default", "user_id")
-        .values("user_id", "is_default")
+        .values("user_id", "is_default", "login_allowed")
     )
     briefs = {b["id"]: b for b in get_users_brief([r["user_id"] for r in rows])}
     out = []
@@ -137,8 +137,20 @@ def list_memberships(company: Company) -> list[dict]:
             "email": brief.get("email", ""),
             "is_active": bool(brief.get("is_active", False)),
             "is_default": row["is_default"],
+            "login_allowed": row["login_allowed"],
         })
     return out
+
+
+def set_login_allowed(company: Company, user_id: int, allowed: bool) -> bool:
+    """Разрешить или закрыть вход участнику (решение 19.10). ``False`` —
+    членства нет. Закрывая вход, снимаем и «основную компанию»: основной
+    может быть только компания, куда пускают."""
+    updated = CompanyMembership.objects.filter(company=company, user_id=user_id)
+    fields = {"login_allowed": allowed}
+    if not allowed:
+        fields["is_default"] = False
+    return updated.update(**fields) > 0
 
 
 def revoke_membership(company: Company, user_id: int) -> bool:

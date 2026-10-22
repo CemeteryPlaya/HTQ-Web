@@ -39,6 +39,7 @@ from apps.users.interface import get_user_brief
 from htqweb.http import ApiView, api_view, json_error
 from htqweb.tenancy.context import current_company_or_none
 
+from . import interface as companies_interface
 from . import schemas
 from .models import Company, CompanyMembership, CompanyStatus
 from .services import lifecycle, membership_service, module_service
@@ -102,10 +103,13 @@ class MyCompaniesView(ApiView):
     @method_decorator(api_view(methods=("GET",), auth="jwt"))
     def get(self, request):
         current = request.company["slug"] if getattr(request, "company", None) else None
+        # Только компании, куда разрешён вход: участник без входа (решение
+        # 19.10) числится в компании, но переключиться в неё не может.
         rows = (
             CompanyMembership.objects
-            .filter(user_id=request.token.user_id, company__status=CompanyStatus.ACTIVE)
-            .select_related("company")
+            .filter(user_id=request.token.user_id, company__status=CompanyStatus.ACTIVE,
+                    login_allowed=True)
+            .select_related("company", "company__bpp_data_company")
             .order_by("-is_default", "company__name")
         )
         result = [
@@ -113,6 +117,9 @@ class MyCompaniesView(ApiView):
                 slug=m.company.slug, subdomain=m.company.subdomain,
                 name=m.company.name, kind=m.company.kind,
                 is_default=m.is_default, is_current=(m.company.slug == current),
+                bpp_data_company_slug=m.company.bpp_data_company_slug,
+                bpp_data_company_name=(m.company.bpp_data_company.name
+                                       if m.company.bpp_data_company_id else None),
             )
             for m in rows
         ]
@@ -203,6 +210,9 @@ class CompanyItemView(CompaniesView):
             # Ключ есть — ""/null снимают псевдоним; ключа нет — UNSET
             # (умолчание update_company), поле не трогается.
             kwargs["subdomain"] = data.subdomain
+        if "bpp_data_company_slug" in data.model_fields_set:
+            # Решение 19.10: где вести БЗО компании; ""/null — у себя.
+            kwargs["bpp_data_company"] = data.bpp_data_company_slug
         try:
             company = lifecycle.update_company(slug, **kwargs)
         except lifecycle.LifecycleError as exc:
@@ -381,6 +391,29 @@ class CompanyMembershipItemView(CompaniesView):
         if not membership_service.revoke_membership(company, user_id):
             return json_error("Членства нет", 404)
         return HttpResponse(status=204)
+
+    @platform("PATCH", body=schemas.MembershipPatch)
+    def patch(self, request, slug: str, user_id: int, data: schemas.MembershipPatch):
+        """Решение 19.10: «вход разрешён» у участника. Без входа человек
+        числится в компании (роли, уведомления, выбор сотрудника), но токена
+        на её поддомен не получает. Платформенная операция — как выдача
+        членства: открывает или закрывает вход в чужую схему целиком."""
+        denied = self.deny_unless_platform_admin()
+        if denied is not None:
+            return denied
+        try:
+            company = self.company_or_404(slug)
+        except lifecycle.LifecycleError as exc:
+            return self.lifecycle_error(exc)
+        if not data.login_allowed and user_id == request.token.user_id:
+            return JsonResponse({"detail": "Нельзя закрыть вход себе",
+                                 "code": "self_revoke"}, status=409)
+        if not membership_service.set_login_allowed(company, user_id, data.login_allowed):
+            return json_error("Членства нет", 404)
+        companies_interface.forget_user_memberships(user_id)
+        row = next(m for m in membership_service.list_memberships(company)
+                   if m["user_id"] == user_id)
+        return schemas.MembershipRead(**row)
 
 
 # ── Внешние держатели прав ──────────────────────────────────────────────

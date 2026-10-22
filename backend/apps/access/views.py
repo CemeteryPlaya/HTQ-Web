@@ -48,7 +48,7 @@ from . import schemas
 from .models import Level, LEVEL_ORDER, Role
 from apps.access import depth as depth_flags
 from apps.access import registry
-from .services import assignment, catalog, holders as holders_svc, resolve
+from .services import assignment, bpp_delegation, catalog, holders as holders_svc, resolve
 from .services import hierarchy
 from .services.errors import (
     DepthNotApplicable,
@@ -426,6 +426,10 @@ class MeView(AccessView):
         permissions = resolve.permissions_for(request.token, company,
                                               resolution=resolution)
         depth_map = resolve.depth_map(request.token, company, resolution=resolution)
+        # БЗО компании может вестись в другой (решение 19.10): права на него
+        # показываем оттуда, где их проверит сервер.
+        permissions, depth_map = bpp_delegation.merge_me(
+            request.token, company, permissions, depth_map, resolution=resolution)
         archived = archive.is_archived(getattr(request, "company", None))
         if archived:
             # Архив — только чтение (спека архива §7.1). Сюда доходит лишь

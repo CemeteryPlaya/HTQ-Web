@@ -72,6 +72,42 @@ describe('CompanyFormDialog', () => {
     expect(patch).toHaveBeenCalledWith('hi-tech-qazaqstan', { subdomain: 'htq' });
   });
 
+  it('«БЗО ведётся в компании»: в списке нет самой компании, архива и компаний, что сами ведут БЗО не у себя', () => {
+    const ltd: Company = { ...group, id: 3, slug: 'ltd', name: 'LTD', kind: 'construction' };
+    const old: Company = { ...group, id: 4, slug: 'old', name: 'Old', status: 'archived' };
+    const delegating: Company = { ...group, id: 5, slug: 'sub', name: 'Sub', bpp_data_company_slug: 'hi-tech-group' };
+    renderWithProviders(
+      <CompanyFormDialog company={ltd} candidates={[group, htq, ltd, old, delegating]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const options = Array.from((screen.getByLabelText(/БЗО ведётся в компании/) as HTMLSelectElement).options).map((o) => o.value);
+    expect(options).toEqual(['', 'hi-tech-group', 'hi-tech-qazaqstan']);
+  });
+
+  it('выбор компании данных БЗО уходит в PATCH, «у себя» — пустой строкой', async () => {
+    patch.mockReset();
+    const ltd: Company = { ...group, id: 3, slug: 'ltd', name: 'LTD', kind: 'construction' };
+    patch.mockResolvedValue({ data: { ...ltd, bpp_data_company_slug: 'hi-tech-qazaqstan' } });
+    const { unmount } = renderWithProviders(
+      <CompanyFormDialog company={ltd} candidates={[group, htq, ltd]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    await userEvent.selectOptions(screen.getByLabelText(/БЗО ведётся в компании/), 'hi-tech-qazaqstan');
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+    expect(patch).toHaveBeenCalledWith('ltd', { bpp_data_company_slug: 'hi-tech-qazaqstan' });
+    unmount();
+
+    patch.mockReset();
+    const delegating: Company = { ...ltd, bpp_data_company_slug: 'hi-tech-qazaqstan' };
+    patch.mockResolvedValue({ data: ltd });
+    renderWithProviders(
+      <CompanyFormDialog company={delegating} candidates={[group, htq, delegating]} open onOpenChange={() => {}} onSaved={() => {}} />,
+    );
+    const select = screen.getByLabelText(/БЗО ведётся в компании/) as HTMLSelectElement;
+    expect(select.value).toBe('hi-tech-qazaqstan');
+    await userEvent.selectOptions(select, '');
+    await userEvent.click(screen.getByRole('button', { name: /Сохранить/ }));
+    expect(patch).toHaveBeenCalledWith('ltd', { bpp_data_company_slug: '' });
+  });
+
   it('очищенный короткий адрес уходит пустой строкой — снять псевдоним', async () => {
     patch.mockReset();
     const aliased: Company = { ...htq, subdomain: 'htq' };

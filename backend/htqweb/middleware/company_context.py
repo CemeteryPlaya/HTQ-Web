@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from django.db import connection
 
-from apps.companies.interface import resolve_host_label
-from htqweb.tenancy import archive
+from apps.companies.interface import get_company, resolve_host_label
+from htqweb.tenancy import archive, bpp_delegation
 from htqweb.tenancy.context import reset_company, set_company
 from htqweb.tenancy.db import apply_search_path
 
@@ -48,7 +48,7 @@ class CompanyContextMiddleware:
 
     def __call__(self, request):
         if request.path.startswith(_EXEMPT_PREFIXES):
-            request.company = None
+            request.company = request.address_company = None
             return self.get_response(request)
 
         label = request.headers.get(COMPANY_HEADER, "").strip().lower()
@@ -56,7 +56,7 @@ class CompanyContextMiddleware:
             # Компания не указана — запрос обслуживается в public. Это режим
             # общих доменов (users/cms/media) и страниц голого домена: вход,
             # регистрация, выбор компании, /join/<token>.
-            request.company = None
+            request.company = request.address_company = None
             return self.get_response(request)
 
         # Метка хоста — это псевдоним ИЛИ слаг (apps.companies.interface.
@@ -80,8 +80,22 @@ class CompanyContextMiddleware:
                     and request.path not in archive.TOKEN_PATHS):
                 return archive.archived_response()
 
-        slug = company["slug"]
-        request.company = company
+        request.company = request.address_company = company
+        # БЗО компании может вестись в другой (решение 19.10,
+        # htqweb/tenancy/bpp_delegation.py): тогда запрос БЗО работает в
+        # данных компании данных — она и становится request.company, чтобы
+        # права узлов, выгрузки и ключи идемпотентности считались там же, где
+        # схема. Компания адреса остаётся в request.address_company: по ней
+        # api_view сверяет claim токена, ServiceGateMiddleware — её рубильник.
+        data_slug = company.get("bpp_data_company")
+        if data_slug and bpp_delegation.is_bpp_request(request):
+            data = get_company(data_slug)
+            if data is None or not data["is_active"]:
+                # Головной офис в архиве — его данные читает только
+                # суперпользователь на его собственном поддомене.
+                return archive.not_found_response()
+            request.company = data
+        slug = request.company["slug"]
         token = set_company(slug)
         try:
             apply_search_path(slug)

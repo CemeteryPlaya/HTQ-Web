@@ -13,7 +13,9 @@
  *
  * «Доска задач» — ссылка на доску задач проекта (`/manage/projects?board=`)
  * у держателей узла `project.board` (ТД, ОД, АДМ, ПМ — решение 01.10); доски
- * нет — так и написано.
+ * нет — так и написано. Если БЗО компании ведётся в другой (решение 19.10),
+ * строки нет вовсе: «Проект» живёт там, и доска к нему — тоже там, а задачи
+ * этого адреса — задачи своей компании.
  */
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +31,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/hooks/usePermissions';
 import { errorStatus, reportApiError } from '@/lib/apiError';
 
+import { useBppDataCompany } from '../core/useBppDataCompany';
 import { formatDate } from '../format';
 
 import { PROJECTS_BASE, projectApi, projectKeys, type Project } from './api';
@@ -70,7 +73,9 @@ export function ProjectCardPage() {
 
   const canEdit = permissions.can('project.projects', 'edit');
   const canMembers = permissions.can('project.members', 'edit');
-  const canBoard = permissions.can('project.board', 'view');
+  const dataCompany = useBppDataCompany();
+  const canBoard = permissions.can('project.board', 'view')
+    && !dataCompany.isLoading && dataCompany.company === null;
   const board = useQuery({
     queryKey: ['tasks', 'project-board', id],
     queryFn: () => fetchProjectBoard(id),
