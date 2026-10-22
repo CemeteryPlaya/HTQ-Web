@@ -21,7 +21,10 @@ D = dt.date
 
 
 def _mk_task(**over) -> Task:
-    fields = {"key": f"TASK-{Task.objects.count() + 1}", "summary": "S"}
+    # Автор — вызывающий: Ганта отчётов отдаёт только видимые ему задачи
+    # (канбан-доски, S1-17); эти тесты — о форме полос и фильтрах.
+    fields = {"key": f"TASK-{Task.objects.count() + 1}", "summary": "S",
+              "reporter_id": USER}
     fields.update(over)
     return Task.objects.create(**fields)
 

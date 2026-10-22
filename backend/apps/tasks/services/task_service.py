@@ -27,9 +27,11 @@ from django.core.exceptions import PermissionDenied
 
 from htqweb import date_rules
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Exists, OuterRef, Q
 from django.db.models.functions import TruncDate
 from django.http import Http404
+
+from htqweb.errors import DomainError
 from django.utils import timezone
 
 from apps.notifications import interface as notifications
@@ -37,6 +39,7 @@ from htqweb.tenancy.context import current_company_or_none
 
 from ..models import (
     AssigneeRole,
+    DepartmentLinkKind,
     Label,
     Status,
     TERMINAL_STATUSES,
@@ -48,9 +51,12 @@ from ..models import (
     TaskDepartmentLink,
     TaskWatcher,
 )
+from . import board_scope
+from . import department_rules
 from . import hydration
 from . import roadmap_service
 from . import site_service
+from . import task_scope
 from .reference_service import resolve_task_type_id
 from .sequence_service import due_date_from_working_days, next_task_key
 
@@ -61,7 +67,8 @@ logger = logging.getLogger(__name__)
 # the task history shows), not an implementation detail.
 TRACKED_FIELDS = [
     "summary", "description", "task_type_id", "priority", "status",
-    "assignee_id", "supervisor_id", "project_id", "roadmap_id", "site_id",
+    "assignee_id", "supervisor_id", "department_id", "project_id", "roadmap_id",
+    "site_id",
     "site_block_id",
     "contractor_id", "contractor_worker_id", "progress_percent",
     "due_date", "start_date", "estimated_working_days",
@@ -114,13 +121,42 @@ def soft_edit_q(user_id: int) -> Q:
     )
 
 
-def _employee_visibility_q(user_id: int, department_id: int | None) -> Q:
-    q = _participant_q(user_id)
-    if department_id is not None:
-        # Unclaimed work in your own department is visible so it can be
-        # picked up — but only while it is still unassigned and open.
-        q |= Q(department_id=department_id, assignee_id__isnull=True,
-               status__in=[Status.BACKLOG, Status.TODO])
+def department_q(department_ids, *, member_only: bool = False) -> Q:
+    """Задачи этих отделов: основной отдел или связь с отделом.
+
+    ``Exists``, а не джойн: ``_participant_q`` уже множит строки джойнами
+    (``filtered_tasks`` их схлопывает ``distinct``), ещё один к связям отделов
+    множил бы их дальше. ``member_only`` — без отделов-отправителей (``origin``
+    видит задачу, но не «берёт в работу» и не правит её, S1-03).
+    """
+    ids = list(department_ids)
+    links = TaskDepartmentLink.objects.filter(task=OuterRef("pk"), department_id__in=ids)
+    if member_only:
+        links = links.filter(kind=DepartmentLinkKind.MEMBER)
+    return Q(department_id__in=ids) | Exists(links)
+
+
+def visibility_q(scope) -> Q | None:
+    """Что видит вызывающий (мастер-план канбан-досок §5.2).
+
+    ``None`` — без ограничений (``elevated`` и внутренние вызовы без
+    ``scope``). Иначе: участие в задаче | поддеревья своего и управляемых
+    отделов (основной отдел или связь) | все отделы (узел
+    ``tasks.departments.all``) | задачи досок «Проектов» держателя
+    ``project.board``. Задача без проекта, отдела и связей сюда попадает только
+    через участие (K-10).
+    """
+    if scope is None or scope.elevated:
+        return None
+    q = _participant_q(scope.user_id)
+    if scope.department_ids:
+        q |= department_q(scope.department_ids)
+    if scope.all_departments:
+        q |= (Q(department_id__isnull=False)
+              | Exists(TaskDepartmentLink.objects.filter(task=OuterRef("pk"))))
+    boards = board_scope.board_q(scope.board_refs, prefix="project__")
+    if boards is not None:
+        q |= boards
     return q
 
 
@@ -133,25 +169,15 @@ def _report_visibility_q(user_id: int, department_id: int | None) -> Q:
     return q
 
 
-def visibility_q(visibility: str, user_id: int | None,
-                 department_id: int | None) -> Q | None:
-    """``None`` means unrestricted; a false ``Q`` means "nothing visible"."""
-    if visibility == "all":
-        return None
-    if user_id is None:
-        return Q(pk__in=[])
-    if visibility == "employee":
-        return _employee_visibility_q(user_id, department_id)
-    if visibility == "reports":
-        return _report_visibility_q(user_id, department_id)
-    return Q(pk__in=[])
-
-
-def scope_for(token, *, reports: bool = False) -> tuple[str, int | None]:
-    """Visibility mode + department for the caller. Elevated users see all."""
+def report_visibility_q(token) -> Q | None:
+    """Прежнее правило статистики ``/tasks/stats`` — не меняется вместе с
+    досками (спека этапа 1, S1-11): свои завершённые плюс неразобранные
+    своего отдела. ``None`` — без ограничений."""
     if token.is_elevated:
-        return "all", None
-    return ("reports" if reports else "employee"), user_department_id(token.user_id)
+        return None
+    if token.user_id is None:
+        return Q(pk__in=[])
+    return _report_visibility_q(token.user_id, user_department_id(token.user_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -169,13 +195,18 @@ def filtered_tasks(*, status=None, priority=None, task_type=None,
                    site_id=None, site_unset=False, site_block_id=None,
                    contractor_id=None, contractor_unset=False,
                    parent_id=None, label_id=None,
-                   search=None, visibility="all", visibility_user_id=None,
-                   visibility_department_id=None):
+                   search=None, scope=None, legacy_q=None, extra_q=None):
+    """``scope`` — ``TaskScope`` вызывающего (``None`` — без ограничений);
+    ``legacy_q`` — готовое условие прежнего правила, только для
+    ``task_stats`` (S1-11); ``extra_q`` — сужение поверх видимости (вкладки
+    ``scope=mine|department`` списка, канбан K1.6)."""
     qs = _base_queryset()
 
-    vq = visibility_q(visibility, visibility_user_id, visibility_department_id)
+    vq = legacy_q if legacy_q is not None else visibility_q(scope)
     if vq is not None:
         qs = qs.filter(vq)
+    if extra_q is not None:
+        qs = qs.filter(extra_q)
 
     if status:
         qs = qs.filter(status=status)
@@ -248,14 +279,12 @@ def list_tasks(*, offset: int = 0, limit: int = 50, **filters) -> list[Task]:
     return list(qs[offset:offset + limit])
 
 
-def get_task(task_id: int, *, visibility="all", visibility_user_id=None,
-             visibility_department_id=None) -> Task:
+def get_task(task_id: int, *, scope=None) -> Task:
     """Load one task honouring visibility. Raises 404 when out of scope —
     deliberately indistinguishable from "does not exist", so the endpoint
-    does not leak the existence of tasks the caller may not see."""
-    qs = filtered_tasks(visibility=visibility,
-                        visibility_user_id=visibility_user_id,
-                        visibility_department_id=visibility_department_id)
+    does not leak the existence of tasks the caller may not see.
+    ``scope=None`` — без ограничений (внутренние вызовы после проверки)."""
+    qs = filtered_tasks(scope=scope)
     task = (qs.select_related("task_type", "project", "roadmap", "site",
                               "site_block", "parent", "contractor",
                               "contractor_worker")
@@ -277,49 +306,133 @@ def get_task(task_id: int, *, visibility="all", visibility_user_id=None,
     return task
 
 
-def load_for_action(task_id: int, token) -> Task:
+def load_for_action(task_id: int, request) -> Task:
     """Visibility-checked load used by every mutating endpoint.
 
     Does NOT check write permission — the caller decides whether full edit,
     soft edit, or mere visibility is required.
+
+    Takes the REQUEST, not the token (канбан K1.3, спека этапа 1 S1-01): the
+    caller's ``TaskScope`` is computed once per request and cached on it.
     """
-    visibility, department_id = scope_for(token)
-    return get_task(task_id, visibility=visibility,
-                    visibility_user_id=token.user_id,
-                    visibility_department_id=department_id)
+    return get_task(task_id, scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # Permissions
 # ─────────────────────────────────────────────────────────────────────────
 
-def can_edit(task: Task, user_id: int, is_elevated: bool) -> bool:
-    """Full edit — any field. Elevated / reporter / supervisor / delegate."""
-    if is_elevated:
+def is_head_of(task: Task, scope) -> bool:
+    """Глава отдела задачи (K-06): основной отдел задачи или её связь
+    «участник» — в поддереве отдела, которым руководит вызывающий. Связь
+    «отправитель» прав не даёт (S1-03). ``department_links`` — из prefetch
+    ``get_task``."""
+    if scope is None or not scope.managed_subtree:
+        return False
+    if task.department_id in scope.managed_subtree:
         return True
-    if task.reporter_id == user_id or task.supervisor_id == user_id:
-        return True
-    return task.delegates.filter(user_id=user_id).exists()
+    return any(link.kind == DepartmentLinkKind.MEMBER
+               and link.department_id in scope.managed_subtree
+               for link in task.department_links.all())
 
 
-def can_progress(task: Task, user_id: int, is_elevated: bool) -> bool:
+def can_edit(task: Task, scope) -> bool:
+    """Full edit — any field. Elevated / reporter / supervisor / delegate /
+    глава отдела задачи (K-06: для правки он равен руководителю)."""
+    if scope.elevated:
+        return True
+    if task.reporter_id == scope.user_id or task.supervisor_id == scope.user_id:
+        return True
+    if is_head_of(task, scope):
+        return True
+    return task.delegates.filter(user_id=scope.user_id).exists()
+
+
+def tab_q(tab: str | None, scope) -> Q | None:
+    """Вкладки списка ``scope=mine|department`` (канбан K1.6, S1-04): «мои» —
+    участие (то, что станет личной доской, K-03), «отдел» — поддеревья своего
+    отдела и управляемых, без «всех отделов» и досок проектов."""
+    if tab == "mine":
+        return _participant_q(scope.user_id)
+    if tab == "department":
+        if scope.elevated:
+            return None                                  # администратор видит всё (K-17)
+        return department_q(scope.department_ids) if scope.department_ids else Q(pk__in=[])
+    return None
+
+
+def in_own_department(task: Task, scope) -> bool:
+    """Задача своего отдела вызывающего: основной отдел или связь-участник в
+    поддеревьях его отдела и управляемых. Связь-отправитель, «все отделы» и
+    доска проекта сюда не входят (S1-07). ``department_links`` — из prefetch,
+    если он есть."""
+    if scope is None or not scope.department_ids:
+        return False
+    if task.department_id in scope.department_ids:
+        return True
+    return any(link.kind == DepartmentLinkKind.MEMBER
+               and link.department_id in scope.department_ids
+               for link in task.department_links.all())
+
+
+def can_claim(task: Task, scope) -> bool:
+    """«Взять в работу»: задача своего отдела, без исполнителя, в «Бэклог» или
+    «К выполнению» (канбан K1.6). ``assignees`` — из prefetch списка/карточки."""
+    return (in_own_department(task, scope)
+            and task.assignee_id is None
+            and not task.assignees.all()
+            and task.status in (Status.BACKLOG, Status.TODO))
+
+
+@transaction.atomic
+def claim(task_id: int, request) -> Task:
+    """Взять неразобранную задачу своего отдела в работу (канбан K1.6).
+
+    Видимость — ``load_for_action`` (404); блокировка — ОТДЕЛЬНЫМ запросом:
+    выборка видимости с ``distinct`` не совместима с ``FOR UPDATE``. Под
+    блокировкой второй одновременный «Взять» видит исполнителя и получает 409.
+    """
+    scope = task_scope.for_request(request)
+    load_for_action(task_id, request)
+    task = (Task.objects.select_for_update().prefetch_related("department_links")
+            .get(pk=task_id, is_deleted=False))
+    if not in_own_department(task, scope):
+        raise DomainError("task_claim_forbidden",
+                          "Взять в работу можно только задачу своего отдела", status=403)
+    if (task.assignee_id is not None or task.assignees.exists()
+            or task.status not in (Status.BACKLOG, Status.TODO)):
+        raise DomainError("task_claim_unavailable",
+                          "Задачу уже взяли в работу", status=409)
+    user_id = scope.user_id
+    TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY)
+    old_status = task.status
+    task.assignee_id = user_id
+    task.apply_transition(Status.IN_PROGRESS)
+    task.save()
+    _log(task, user_id, "claim", None, user_id)
+    _log(task, user_id, "assignee_id", None, user_id)
+    _log(task, user_id, "status", old_status, task.status)
+    return task
+
+
+def can_progress(task: Task, scope) -> bool:
     """Soft edit — status / progress / comments. Adds any assignee."""
-    if can_edit(task, user_id, is_elevated):
+    if can_edit(task, scope):
         return True
-    if task.assignee_id == user_id:
+    if task.assignee_id == scope.user_id:
         return True
-    return task.assignees.filter(user_id=user_id).exists()
+    return task.assignees.filter(user_id=scope.user_id).exists()
 
 
-def require_full_edit(task: Task, token) -> None:
-    if not can_edit(task, token.user_id, token.is_elevated):
+def require_full_edit(task: Task, request) -> None:
+    if not can_edit(task, task_scope.for_request(request)):
         raise PermissionDenied(
             "Only supervisor, delegate, reporter or admin can edit this task"
         )
 
 
-def require_soft_edit(task: Task, token) -> None:
-    if not can_progress(task, token.user_id, token.is_elevated):
+def require_soft_edit(task: Task, request) -> None:
+    if not can_progress(task, task_scope.for_request(request)):
         raise PermissionDenied(
             "Only assignees, supervisor, delegate, reporter or admin can "
             "change status/progress"
@@ -378,7 +491,10 @@ def _log(task: Task, actor_id: int | None, field_name: str,
 
 
 @transaction.atomic
-def create_task(data, user_id: int | None = None) -> Task:
+def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
+    """``scope`` — ``TaskScope`` вызывающего: правила отдела, автора,
+    начального статуса и родителя (канбан K1.5). ``None`` — внутренний вызов
+    без проверок."""
     due_date = data.due_date
     if data.estimated_working_days and data.start_date:
         # A computed deadline wins over a client-sent one, as in the original.
@@ -396,6 +512,26 @@ def create_task(data, user_id: int | None = None) -> Task:
         + list(data.department_ids)
     ))
     primary_dept = data.department_id or (dept_ids[0] if dept_ids else None)
+
+    origin = None
+    reporter_id = data.reporter_id or user_id
+    if scope is not None:
+        origin = department_rules.origin_for_create(scope, dept_ids)
+        if origin is not None and crew:
+            # У получателя задача появляется без исполнителя (K-08): назначить
+            # людей чужого отдела отправитель не вправе.
+            raise DomainError("task_transfer_assignees",
+                              "Задачу в чужой отдел ставят без исполнителя", status=422)
+        if not scope.elevated:
+            # Автор с клиента — только у администратора (K-25), иначе задачу
+            # можно положить на чужую личную доску под чужим именем.
+            reporter_id = user_id
+            if data.status not in (Status.BACKLOG, Status.TODO):
+                raise DomainError("task_status_initial",
+                                  "Новая задача начинается с «Бэклог» или «К выполнению»",
+                                  status=422)
+        if data.parent_id is not None:
+            get_task(data.parent_id, scope=scope)        # невидимый родитель — 404 (S1-18)
 
     # Роудмап первым: он знает проект, площадку и блок, поэтому задаёт их, а
     # не проверяется против них (см. roadmap_service.resolve_task_roadmap).
@@ -417,7 +553,7 @@ def create_task(data, user_id: int | None = None) -> Task:
         task_type_id=resolve_task_type_id(data.task_type_id, data.task_type),
         priority=data.priority,
         status=data.status,
-        reporter_id=data.reporter_id or user_id,
+        reporter_id=reporter_id,
         assignee_id=primary_id,
         supervisor_id=data.supervisor_id,
         department_id=primary_dept,
@@ -434,15 +570,15 @@ def create_task(data, user_id: int | None = None) -> Task:
         estimated_working_days=data.estimated_working_days,
     )
 
-    # Department ids are hr-owned and unvalidated here. The original filtered
-    # them against its local replica to avoid violating a FK; with the
-    # replica gone there is no FK to violate, and filtering through
-    # hr.interface would make task creation fail whenever hr is disabled.
-    # Unknown ids are stored and simply do not hydrate to a name.
-    if dept_ids:
-        TaskDepartmentLink.objects.bulk_create(
-            [TaskDepartmentLink(task=task, department_id=d) for d in dept_ids]
-        )
+    # Отделы проверены ``department_rules`` (для вызывающего с ``scope``):
+    # существование, активность и право. Отдел-отправитель главы, ставящего
+    # задачу в чужой отдел, — связь ``origin`` (видит ход работ, прав нет).
+    links = [TaskDepartmentLink(task=task, department_id=d) for d in dept_ids]
+    if origin is not None and origin not in dept_ids:
+        links.append(TaskDepartmentLink(task=task, department_id=origin,
+                                        kind=DepartmentLinkKind.ORIGIN))
+    if links:
+        TaskDepartmentLink.objects.bulk_create(links)
 
     if data.label_ids:
         # Labels are local, so unknown ids are a client error we can detect —
@@ -460,8 +596,13 @@ def create_task(data, user_id: int | None = None) -> Task:
 
 
 @transaction.atomic
-def update_task(task_id: int, data, user_id: int | None = None) -> Task:
-    task = Task.objects.filter(pk=task_id, is_deleted=False).first()
+def update_task(task_id: int, data, user_id: int | None = None, *,
+                scope=None) -> Task:
+    """``scope`` — ``TaskScope`` вызывающего: правила отдела, автора и
+    родителя (канбан K1.5). ``None`` — внутренний вызов без проверок.
+    Строка блокируется: связи отделов пишут и перенос, и «Взять в работу» —
+    под той же блокировкой (ревью K1.6)."""
+    task = Task.objects.select_for_update().filter(pk=task_id, is_deleted=False).first()
     if task is None:
         raise Http404("Task not found")
 
@@ -477,6 +618,9 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
     # caller set it explicitly in the same request.
     if department_ids is not None and "department_id" not in changes:
         changes["department_id"] = department_ids[0] if department_ids else None
+
+    if scope is not None:
+        _check_update(task, changes, department_ids, scope)
 
     # Объект и проект могут прийти в одном PATCH, поэтому решение принимаем
     # по итоговой паре, а не по присланным полям по отдельности. Если
@@ -554,13 +698,42 @@ def update_task(task_id: int, data, user_id: int | None = None) -> Task:
         task.labels.set(Label.objects.filter(id__in=label_ids))
 
     if department_ids is not None:
-        task.department_links.all().delete()
-        TaskDepartmentLink.objects.bulk_create(
-            [TaskDepartmentLink(task=task, department_id=d)
-             for d in dict.fromkeys(department_ids)]
-        )
+        # Набор отделов-участников заменяется целиком; отдел-отправитель
+        # (``origin``) остаётся, а попав в новый набор, становится участником.
+        task.department_links.filter(kind=DepartmentLinkKind.MEMBER).delete()
+        for department_id in dict.fromkeys(department_ids):
+            TaskDepartmentLink.objects.update_or_create(
+                task=task, department_id=department_id,
+                defaults={"kind": DepartmentLinkKind.MEMBER})
 
     return task
+
+
+def _check_update(task: Task, changes: dict, department_ids, scope) -> None:
+    """Проверки правки задачи по правам вызывающего (канбан K1.5)."""
+    if ("reporter_id" in changes and not scope.elevated
+            and changes["reporter_id"] != task.reporter_id):
+        raise DomainError("task_reporter_forbidden",
+                          "Автора задачи меняет только администратор", status=422)
+    # Смена ОСНОВНОГО отдела проверяется всегда, даже если отдел уже стоит
+    # связью-участником: иначе глава, создав задачу на свой и чужой отдел,
+    # одной правкой сделал бы чужой основным — перенос без переноса (ревью
+    # K1.5). Из прочих отделов — только новые: повторная отправка прежнего
+    # набора (интерфейс шлёт форму целиком) не должна упираться в старые связи.
+    current = {task.department_id} | {
+        link.department_id for link in task.department_links.all()
+        if link.kind == DepartmentLinkKind.MEMBER}
+    checked = []
+    new_primary = changes.get("department_id", task.department_id)
+    if new_primary != task.department_id:
+        checked.append(new_primary)
+    checked += [d for d in (department_ids or []) if d not in current]
+    checked = [d for d in dict.fromkeys(checked) if d is not None]
+    if checked:
+        department_rules.check_change(scope, task, checked)
+    parent_id = changes.get("parent_id")
+    if parent_id is not None and parent_id != task.parent_id:
+        get_task(parent_id, scope=scope)                 # невидимый родитель — 404 (S1-18)
 
 
 def _sync_primary_assignee(task: Task, new_primary_id: int | None) -> None:
@@ -712,13 +885,11 @@ def set_progress(task_id: int, percent: int, actor_id: int | None) -> Task:
 # ─────────────────────────────────────────────────────────────────────────
 
 def task_stats(*, department_id=None, project_id=None, site_id=None,
-               visibility="all", visibility_user_id=None,
-               visibility_department_id=None) -> dict:
+               visibility_condition=None) -> dict:
+    """``visibility_condition`` — ``report_visibility_q(token)``: у статистики
+    своё, прежнее правило видимости (S1-11)."""
     qs = filtered_tasks(department_id=department_id, project_id=project_id,
-                        site_id=site_id,
-                        visibility=visibility,
-                        visibility_user_id=visibility_user_id,
-                        visibility_department_id=visibility_department_id)
+                        site_id=site_id, legacy_q=visibility_condition)
 
     total = qs.count()
 

@@ -17,7 +17,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { reportApiError } from '@/lib/apiError';
+import { errorCode, reportApiError } from '@/lib/apiError';
+import { reportTaskError, taskErrorText } from '@/features/tasks/errors';
+import { TransferDialog } from '@/features/tasks/board/TransferDialog';
 import { DateInput } from '@/components/ui/date-input';
 import { DATES_OUT_OF_ORDER, datesOutOfOrder } from '@/lib/validation';
 import {
@@ -75,6 +77,7 @@ const HRTaskDetail: React.FC = () => {
   const [linkTargetId, setLinkTargetId] = useState('');
 
   const [isCreateSubtaskOpen, setCreateSubtaskOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const taskId = Number(id);
 
@@ -121,7 +124,18 @@ const HRTaskDetail: React.FC = () => {
       toast.success(t('tasks.pages.detail.success'));
       setEditingField(null);
     },
-    onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
+    onError: (err) => {
+      // Отдел за пределы своих поддеревьев глава уводит переносом, а не
+      // правкой (S1-13): перенос снимает исполнителей и оставляет отделу
+      // ход работ. Сервер так и отвечает — тост предлагает сразу перенести.
+      if (errorCode(err) === 'task_department_use_transfer' && task?.can?.transfer) {
+        toast.error(taskErrorText(err, t, t('tasks.pages.detail.error')), {
+          action: { label: t('tasks.transfer.action'), onClick: () => setTransferOpen(true) },
+        });
+        return;
+      }
+      reportTaskError(err, t, t('tasks.pages.detail.error'));
+    },
   });
 
   /**
@@ -619,6 +633,16 @@ const HRTaskDetail: React.FC = () => {
                     ))}
                   </SelectContent>
                 </Select>
+                {task.can?.transfer && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full mt-2"
+                    onClick={() => setTransferOpen(true)}
+                  >
+                    <Send className="h-4 w-4 mr-2" /> {t('tasks.transfer.action')}
+                  </Button>
+                )}
               </div>
 
               {/* Project */}
@@ -758,6 +782,7 @@ const HRTaskDetail: React.FC = () => {
         defaultParent={taskId}
         defaultProject={task?.project ?? undefined}
       />
+      <TransferDialog task={task} open={transferOpen} onOpenChange={setTransferOpen} />
     </TasksLayout>
   );
 };

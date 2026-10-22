@@ -252,9 +252,12 @@ def test_calendar_responses_match_the_fastapi_schemas():
 
 @pytest.mark.django_db
 def test_gantt_responses_match_the_fastapi_schemas():
+    # Автор — вызывающий (user 7): Ганта отчётов отдаёт только видимые ему
+    # задачи (канбан-доски, S1-17).
     task = Task.objects.create(key="TASK-1", summary="A",
                                start_date=dt.date(2026, 3, 2),
-                               due_date=dt.date(2026, 3, 6), assignee_id=11)
+                               due_date=dt.date(2026, 3, 6), assignee_id=11,
+                               reporter_id=7)
     ResourceAllocation.objects.create(
         task=task, equipment=Equipment.objects.create(name="Кран"))
 

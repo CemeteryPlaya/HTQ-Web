@@ -50,6 +50,7 @@ from apps.bpp.services.core import audit
 from apps.core.infrastructure import client_ip
 from apps.core.services import require_service
 from htqweb.errors import DomainError
+from htqweb.xlsx_safe import safe_cell
 from htqweb.tenancy.context import current_company
 
 logger = logging.getLogger(__name__)
@@ -179,11 +180,10 @@ def _filename(name: str) -> str:
 
 
 def _cell(sheet, value, fmt: str | None) -> WriteOnlyCell:
-    cell = WriteOnlyCell(sheet, value=value)
-    if isinstance(value, str) and value.startswith("="):
-        # openpyxl считает строку с «=» формулой — наименование контрагента
-        # «=HYPERLINK(…)» выполнилось бы у читателя файла. Только текст.
-        cell.data_type = "s"
+    # Строка с «= + - @», табуляцией или CR — только текст (T-27,
+    # htqweb/xlsx_safe.py): наименование «=HYPERLINK(…)» выполнилось бы у
+    # читателя файла.
+    cell = safe_cell(sheet, value)
     if fmt is not None and value is not None and not isinstance(value, str):
         cell.number_format = fmt
     return cell

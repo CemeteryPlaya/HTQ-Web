@@ -17,10 +17,17 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.bpp.models import InitiatorRole, ItemStatus, PurchaseRequestItem, RequestStatus
+from apps.bpp.models import (
+    InitiatorRole,
+    ItemStatus,
+    PurchaseRequestItem,
+    RequestSource,
+    RequestStatus,
+)
 from apps.bpp.services.actor import Actor
 from apps.bpp.services.agreements import positions
 from apps.bpp.services.core import audit
+from apps.bpp.services.requests.requests import tender_locked
 from apps.project import interface as projects
 from apps.refdata import interface as refdata
 from apps.users import interface as users
@@ -56,10 +63,23 @@ def _role(actor: Actor, wanted: str | None) -> str:
 
 
 def _base():
+    """Позиции ЗЗ тендерного модуля (``source="tender"``) в План не попадают:
+    документы по ним создаёт только tender (T-07); «Тендер не состоялся»
+    снимает признак, и позиции возвращаются исполнителю (``release_to_plan``)."""
     return (PurchaseRequestItem.objects
             .filter(request__status=RequestStatus.APPROVED, status__in=OPEN,
-                    request__is_migrated=False)
+                    request__is_migrated=False, request__source=RequestSource.BPP)
             .select_related("request"))
+
+
+def _refuse_tender_items(item_ids) -> None:
+    """Мастер F-03 не берёт позиции ЗЗ тендерного модуля — 409 ``E-STS-02``,
+    а не «позиции недоступны»: пользователь должен знать, где их ведут."""
+    row = (PurchaseRequestItem.objects.select_related("request")
+           .filter(pk__in=item_ids, request__source=RequestSource.TENDER)
+           .order_by("sys_number").first())
+    if row is not None:
+        raise tender_locked(row.request)
 
 
 def _left(items) -> dict[str, dict]:
@@ -223,6 +243,7 @@ def validate_selection(actor: Actor, item_ids: list[str], *, target: str,
         raise DomainError("E-VAL-01", "Отметьте хотя бы одну позицию.",
                           fields=[{"field": "item_ids", "message": "Нет позиций"}])
     role = _role(actor, role)
+    _refuse_tender_items(item_ids)
     rows = list(_base().filter(pk__in=item_ids, executor_id=actor.user_id,
                                request__initiator_role=role))
     if len(rows) != len(set(map(str, item_ids))):

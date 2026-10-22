@@ -21,7 +21,7 @@ from .core import VersionedModel
 
 __all__ = [
     "InitiatorRole", "ItemStatus", "PurchaseRequest", "PurchaseRequestItem",
-    "PurchaseType", "RequestStatus",
+    "PurchaseType", "RequestSource", "RequestStatus",
 ]
 
 
@@ -43,6 +43,11 @@ class RequestStatus(models.TextChoices):
     REJECTED = "rejected", "Отклонена"
     CANCELLED = "cancelled", "Отменена"
     CLOSED = "closed", "Закрыта"
+
+
+class RequestSource(models.TextChoices):
+    BPP = "", "БЗО"
+    TENDER = "tender", "Тендерный модуль"
 
 
 class ItemStatus(models.TextChoices):
@@ -76,6 +81,14 @@ class PurchaseRequest(signoff.Approvable, VersionedModel):
     # Техническая заявка переноса из contracts (B6.1, Q-D06): не видна в
     # Плане закупок, реестрах и статистике.
     is_migrated = models.BooleanField(default=False, db_default=False)
+    # Откуда заявка (T1.2, мастер-план tender T-07): ``"tender"`` — её завёл
+    # и ведёт тендерный модуль через ``bpp.interface``; сервисы и API БЗО её
+    # не правят (409 ``E-STS-02``), позиции скрыты из Плана закупок. «Тендер не
+    # состоялся» снимает признак (``release_to_plan``), номер тендерной заявки
+    # остаётся — по нему tender читает статус.
+    source = models.CharField(max_length=16, choices=RequestSource.choices,
+                              default="", blank=True, db_default="")
+    tender_number = models.CharField(max_length=32, default="", blank=True, db_default="")
 
     class Meta:
         constraints = [

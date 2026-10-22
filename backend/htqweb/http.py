@@ -269,7 +269,10 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     if idem_key is not None:
                         idempotency.release(request, idem_key)
             except DomainError as exc:
-                return JsonResponse(exc.payload(), status=exc.status)
+                response = JsonResponse(exc.payload(), status=exc.status)
+                for name, value in exc.headers.items():
+                    response[name] = value
+                return response
             except ApiError as exc:
                 return json_error(exc.detail or str(exc), exc.status_code)
             except ServiceDisabled as exc:

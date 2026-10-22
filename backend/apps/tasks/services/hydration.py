@@ -148,7 +148,13 @@ def employee_department_id(user_id: int) -> int | None:
     """
     brief = _safe(lambda: hr_interface.get_employee_brief(user_id),
                   "hr.get_employee_brief", None)
-    return brief.get("department_id") if brief else None
+    if not brief:
+        return None
+    # Уволенный сотрудник отдела не получает (канбан-доски, S1-22): с
+    # видимостью по поддереву он увидел бы весь отдел. Нет поля — действует.
+    if brief.get("status", "active") != "active":
+        return None
+    return brief.get("department_id")
 
 
 def department_name(briefs: dict[int, dict], department_id: int | None) -> str | None:

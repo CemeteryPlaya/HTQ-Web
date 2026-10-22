@@ -930,6 +930,43 @@ class ProgressUpdate(BaseModel):
     percent: int = Field(..., ge=0, le=100)
 
 
+class TransferIn(BaseModel):
+    """«Отправить в отдел» (канбан K1.6). ``sender_department_id`` — отдел-
+    отправитель, только для задачи без отдела (иначе им становится прежний
+    основной отдел). Лишние поля — 422: исполнителей перенос не назначает."""
+
+    department_id: int
+    sender_department_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class TaskCan(BaseModel):
+    """Что вызывающему можно с задачей — для кнопок интерфейса (канбан K1.6).
+    Те же правила, что у ручек: флаг не расходится с ответом ручки."""
+
+    full_edit: bool = False
+    soft_edit: bool = False
+    comment: bool = False
+    transfer: bool = False
+    claim: bool = False
+    delete: bool = False
+
+
+class TaskListCan(BaseModel):
+    """Флаги строки списка — только то, что нужно вкладкам списка."""
+
+    claim: bool = False
+
+
+class TaskDepartmentLinkOut(BaseModel):
+    """Отдел задачи с видом связи: участник или отправитель (``origin``)."""
+
+    department_id: int
+    name: str | None = None
+    kind: str
+
+
 class TaskListResponse(BaseModel):
     """Compact task response for list views."""
 
@@ -989,6 +1026,7 @@ class TaskListResponse(BaseModel):
     subtask_count: int = 0
     created_at: datetime
     updated_at: datetime
+    can: TaskListCan = TaskListCan()
 
     model_config = {"from_attributes": True}
 
@@ -1064,6 +1102,9 @@ class TaskDetailResponse(BaseModel):
 
     created_at: datetime
     updated_at: datetime
+
+    can: TaskCan = TaskCan()
+    department_links: list[TaskDepartmentLinkOut] = []
 
     model_config = {"from_attributes": True}
 

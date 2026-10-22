@@ -1,0 +1,393 @@
+{
+  "uid": "htqweb-tender",
+  "title": "HTQWeb · Тендеры: утверждение выбора и поставка",
+  "tags": [
+    "htqweb",
+    "business",
+    "tender"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "",
+  "annotations": {
+    "list": []
+  },
+  "description": "Тендерный модуль закупок (apps/tender/metrics.py, этап 5, T5.6). Считает Celery-beat раз в 60 с по каждой компании (метка company); пустая панель = метрики нет, а не ноль (см. apps/core/metrics.py).",
+  "templating": {
+    "list": [
+      {
+        "name": "company",
+        "label": "Компания",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(htqweb_tender_tenders, company)",
+        "query": {
+          "query": "label_values(htqweb_tender_tenders, company)",
+          "refId": "company"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Тендеры",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 100
+    },
+    {
+      "type": "stat",
+      "title": "Приём предложений",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_tenders{company=~\"$company\",status=\"intake\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Тендеры в статусе «Приём предложений» (htqweb_tender_tenders{status=\"intake\"}). Справочная.",
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Выбор на утверждении",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_tenders{company=~\"$company\",status=\"on_approval\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Тендеры «На утверждении»: выбор поставщиков у проверяющего качества или ФД (маршрут tender.award). Справочная; застрявшие — соседняя панель.",
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Утверждение дольше 3 рабочих дней",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_award_approval_stale{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Выборы на утверждении дольше 3 рабочих дней по производственному календарю, отсчёт — с активации текущего этапа (apps/tender/metrics.py). Бизнес-правило htqweb-tender-award-stale (чат бизнес-событий). Пусто — signoff или refdata выключены, а не ноль.",
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Поставка после срока",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_delivery_overdue{company=~\"$company\"})",
+          "refId": "A"
+        }
+      ],
+      "description": "Поставщики «В поставке» / «Принято частично», у которых прошла самая поздняя дата поставки выбранных строк предложения. Справочная. Пусто — у компании выключен bpp (стадии считают документы БЗО).",
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Тендеры по статусам",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 16,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_tenders{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "description": "Число тендеров в каждом статусе (htqweb_tender_tenders). Каждый статус — серией, отсутствующий — нулём.",
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Утверждение и поставка",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 6,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_award_approval_stale{company=~\"$company\"})",
+          "refId": "A",
+          "legendFormat": "Утверждение > 3 раб. дней"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum without (company) (htqweb_tender_delivery_overdue{company=~\"$company\"})",
+          "refId": "B",
+          "legendFormat": "Поставка после срока"
+        }
+      ],
+      "description": "Динамика застрявших утверждений и просроченных поставок.",
+      "id": 6
+    }
+  ]
+}

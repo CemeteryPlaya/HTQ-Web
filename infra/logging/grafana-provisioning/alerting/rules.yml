@@ -2178,3 +2178,52 @@ groups:
           severity: warning
           team: platform
           channel: business
+
+      - uid: htqweb-tender-award-stale
+        title: "Тендеры: выбор поставщиков на утверждении дольше 3 рабочих дней"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              datasource: { type: prometheus, uid: prometheus }
+              editorMode: code
+              # Серия на компанию, без агрегации — уведомление называет
+              # компанию. signoff или refdata выключены, таблиц выбора ещё
+              # нет (до migrate_companies) — метрики нет, noDataState: OK.
+              expr: 'htqweb_tender_award_approval_stale'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [A] }
+                  reducer: { type: last, params: [] }
+                  type: query
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        for: 1h
+        annotations:
+          __dashboardUid__: htqweb-tender
+          __panelId__: "3"
+          threshold: "0"
+          summary: "{{ $values.A }} выборов поставщиков ждут утверждения дольше 3 рабочих дней"
+          description: |
+            Закупщик отправил выбор поставщиков тендера на утверждение, а
+            проверяющий качества или ФД больше 3 рабочих дней не решает
+            (отсчёт — с активации текущего этапа, по производственному
+            календарю). Пока выбор не утверждён, документы в БЗО не
+            создаются и поставщики ждут итога в портале.
+            Кто держит — «Ждёт меня» согласующего и карточка тендера,
+            вкладка «Выбор» («Ход согласования»).
+        labels:
+          severity: warning
+          team: platform
+          channel: business

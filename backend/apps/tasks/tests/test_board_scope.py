@@ -82,3 +82,19 @@ def test_roadmaps_of_his_board_are_listed():
     assert _ids(client.get(f"{BASE}/roadmaps/?project_id={board.pk}", **auth())) == set()
     assign(COMPANY, ME, "project.board", "view")
     assert _ids(client.get(f"{BASE}/roadmaps/?project_id={board.pk}", **auth())) == {roadmap.pk}
+
+
+def test_holder_sees_tasks_inside_the_board():
+    """С канбан-досок (K1.4, K-14) держатель узла видит ВСЕ задачи доски
+    своего «Проекта», а не только те, где он участник."""
+    from apps.tasks.models import Task
+
+    _, board = _board("П-1", member=ME)
+    stranger_task = Task.objects.create(key="BS-1", summary="Чужая задача доски",
+                                        project=board, assignee_id=4242)
+    client = Client()
+    assign(COMPANY, ME, "project.board", "view")
+    rows = client.get(f"{BASE}/projects/{board.pk}/tasks/", **auth())
+    assert rows.status_code == 200
+    assert [row["id"] for row in rows.json()] == [stranger_task.pk]
+    assert client.get(f"{BASE}/tasks/{stranger_task.pk}/", **auth()).status_code == 200

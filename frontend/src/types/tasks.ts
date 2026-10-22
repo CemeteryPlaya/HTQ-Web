@@ -890,9 +890,44 @@ export interface Task {
   incoming_links?: TaskLink[];
   /** Объёмы работ: «развезти 250 валов», из них сделано 180. */
   volumes?: TaskVolume[];
+  /** Что вызывающему можно с задачей — считает сервер (канбан K1.6). */
+  can?: TaskCan;
+  /** Отделы задачи с видом связи; `origin` — отдел-отправитель переноса. */
+  department_links?: TaskDepartmentLink[];
 
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Флаги прав на задачу — те же правила, что у ручек: кнопка показывается по
+ * флагу, и сервер на неё не ответит 403. Карточка отдаёт все флаги, строка
+ * списка — только `claim`, поэтому каждый флаг необязателен: нет флага —
+ * нет действия.
+ */
+export interface TaskCan {
+  full_edit?: boolean;
+  soft_edit?: boolean;
+  comment?: boolean;
+  transfer?: boolean;
+  claim?: boolean;
+  delete?: boolean;
+}
+
+export interface TaskDepartmentLink {
+  department_id: number;
+  name: string;
+  /** `member` — отдел-участник; `origin` — отправитель: видит ход, прав не имеет. */
+  kind: 'member' | 'origin';
+}
+
+/** Вкладка списка задач, которую отбирает сервер (`?scope=`). */
+export type TaskListScope = 'mine' | 'department';
+
+export interface TaskTransferBody {
+  department_id: number;
+  /** Только у задачи без отдела: от какого из своих отделов отправляет глава. */
+  sender_department_id?: number;
 }
 
 /* ---------- Resource planning (Gantt) ---------- */

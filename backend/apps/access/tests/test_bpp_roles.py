@@ -93,11 +93,12 @@ def test_gd_sees_every_section():
 
 
 @pytest.mark.django_db
-def test_board_link_is_for_td_od_pm_and_adm():
+def test_board_link_is_for_td_od_gd_pm_and_adm():
     """«Доска задач проекта» (access/0020): ссылка с «Проекта» и вход в доски
-    задач — у ТД, ОД, ПМ и АДМ; у остальных явная пустая строка."""
+    задач — у ТД, ОД, ПМ и АДМ; с канбан-досок (access/0028, решение
+    заказчика 21.10) — и у ГД; у остальных явная пустая строка."""
     assert [c for c in ROLES if "view" in _flags(c, "project.board")] == [
-        "bpp-td", "bpp-od", "bpp-pm", "bpp-adm"]
+        "bpp-td", "bpp-od", "bpp-gd", "bpp-pm", "bpp-adm"]
     for code in ROLES:
         assert _flags(code, "project.board") <= {"view"}, code
 

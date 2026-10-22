@@ -1,4 +1,5 @@
-"""Ограничение частоты — сейчас только блокировка входа по логину (D-S7-3).
+"""Ограничение частоты: блокировка входа по логину (D-S7-3) и общий лимитер
+запросов ``hit`` (тендерный портал, T3.1).
 
 Что делает. ``AUTH_LOCKOUT_THRESHOLD`` неудач входа по одному логину за
 ``AUTH_LOCKOUT_SECONDS`` секунд — и вход по этому логину закрыт на столько же
@@ -25,8 +26,14 @@ Redis отдаёт ``None`` вместо ошибки. Тогда блокиро
 ``fallback("htqweb.ratelimit.store_unavailable", expected=False)`` поднимает
 алерт.
 
-Задел. ``_incr`` — общий атомарный счётчик фиксированного окна; лимит запросов
-на пользователя (D-S7-4, позже) строится на нём же.
+Общий лимитер. ``hit(bucket, key, limit=, window=)`` — не больше ``limit``
+обращений в окне ``window`` секунд; окно фиксированное и выровнено по часам
+(номер окна ``time // window`` — часть ключа), поэтому ``retry_after`` знает
+конец окна без чтения TTL. Ключ — ``ratelimit:<bucket>:<sha256(key)[:32]>``:
+сырое значение (токен ссылки, адрес) в хранилище не попадает. Недоступное
+хранилище — пропуск с ``fallback(expected=False)`` (лимит — защита от шума,
+а не замок); ``fail_closed=True`` — отказ (OTP, этап 4: там перебор кода и есть
+атака). На том же ``_incr`` построится лимит запросов на пользователя (D-S7-4).
 """
 from __future__ import annotations
 
@@ -110,10 +117,46 @@ def _incr(key: str, timeout: int) -> int | None:
     return None
 
 
-def _store_unavailable(op: str) -> None:
-    fallback("htqweb.ratelimit.store_unavailable", None,
-             reason="хранилище счётчиков не ответило — блокировка входа не действует",
+def _store_unavailable(op: str, *,
+                       reason: str = "хранилище счётчиков не ответило — блокировка "
+                                     "входа не действует") -> None:
+    fallback("htqweb.ratelimit.store_unavailable", None, reason=reason,
              expected=False, op=op)
+
+
+_HIT_PREFIX = "ratelimit:"
+
+
+def _slot(window: int) -> int:
+    return int(time.time() // window)
+
+
+def _hit_key(bucket: str, key: str, window: int) -> str:
+    digest = hashlib.sha256(str(key).encode("utf-8")).hexdigest()[:32]
+    return f"{_HIT_PREFIX}{bucket}:{digest}:{window}:{_slot(window)}"
+
+
+def hit(bucket: str, key: str, *, limit: int, window: int, fail_closed: bool = False) -> bool:
+    """Засчитать обращение: ``True`` — в пределах ``limit`` за окно ``window``
+    секунд, ``False`` — сверх лимита (ответ 429 с ``retry_after``)."""
+    if limit < 1 or window < 1:
+        raise ValueError("limit и window — положительные целые")
+    count = _incr(_hit_key(bucket, key, window), window)
+    if count is None:
+        if fail_closed:
+            return False
+        _store_unavailable(f"hit:{bucket}",
+                           reason="хранилище счётчиков не ответило — лимит запросов "
+                                  "не действует")
+        return True
+    return count <= limit
+
+
+def retry_after(bucket: str, key: str, window: int) -> int:
+    """Секунд до конца текущего окна (для ``Retry-After``), не меньше 1.
+    ``bucket``/``key`` — для симметрии с ``hit``: окно у всех ключей общее."""
+    left = window - (time.time() % window)
+    return max(1, math.ceil(left))
 
 
 def login_locked(login: str) -> int | None:

@@ -101,6 +101,15 @@ export interface InvoiceCard {
   current_holders: CurrentHolders | null;
   /** Связь с альтернативой (B5.1): основание нового счёта и чем заменён исходный. */
   alternative?: AlternativeLinks;
+  /** Счёт из тендера (пакет B-2): приёмку и оригиналы отмечает закупщик в тендере. */
+  source_tender?: string;
+  pay_after_receipt?: boolean;
+  postpay_days?: number | null;
+  received_at?: string | null;
+  originals_at?: string | null;
+  originals_to?: string;
+  /** Постоплата после приёмки, а товар ещё не принят. */
+  awaiting_receipt?: boolean;
   allowed_actions: string[];
 }
 
@@ -204,6 +213,9 @@ export interface InvoiceRow {
   due_date: string | null;
   planned_pay_date: string | null;
   overdue: boolean;
+  /** Постоплата после приёмки, товар ещё не принят (счёт из тендера). */
+  awaiting_receipt?: boolean;
+  received_at?: string | null;
   docs_required: { avr?: boolean; waybill?: boolean; vat_invoice?: boolean };
   days_waiting_docs: number | null;
   recon_status: string;

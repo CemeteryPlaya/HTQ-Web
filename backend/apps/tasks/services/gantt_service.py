@@ -66,8 +66,14 @@ def reports_gantt(ids: list[int] | None,
                   project_id: int | None = None,
                   site_id: int | None = None,
                   roadmap_id: int | None = None,
-                  site_block_id: int | None = None) -> dict:
+                  site_block_id: int | None = None, *,
+                  task_condition=None) -> dict:
+    """``task_condition`` — видимость задач вызывающего (канбан K1.4,
+    S1-17): ``?ids=`` раньше отдавал заголовок любой задачи. ``None`` — без
+    ограничений (администратор)."""
     qs = Task.objects.filter(is_deleted=False)
+    if task_condition is not None:
+        qs = qs.filter(task_condition).distinct()
     if ids:
         qs = qs.filter(id__in=ids)
     if statuses:
@@ -124,7 +130,11 @@ def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
                    department_id: int | None = None,
                    search: str | None = None,
                    project_id: int | None = None,
-                   site_id: int | None = None) -> dict:
+                   site_id: int | None = None, *,
+                   task_condition=None) -> dict:
+    """``task_condition`` — видимость задач вызывающего (канбан K1.4, S1-17):
+    иначе полосы ресурсов отдавали заголовки любых задач. ``None`` — без
+    ограничений (администратор)."""
     # The original's overlap test, expressed in SQL exactly as it was:
     # a one-dated task is treated as a zero-length bar on that date, and a
     # task with no dates at all has no bar and never appears.
@@ -143,6 +153,8 @@ def resource_gantt(dt_from: date, dt_to: date, kinds: set[str],
         tasks_in_window = tasks_in_window.filter(project_id=project_id)
     if site_id is not None:
         tasks_in_window = tasks_in_window.filter(site_id=site_id)
+    if task_condition is not None:
+        tasks_in_window = tasks_in_window.filter(task_condition).distinct()
 
     rows: dict[str, dict] = {}
     seen: set[tuple[str, str]] = set()

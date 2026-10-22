@@ -27,14 +27,12 @@ import { Loader2 } from 'lucide-react';
 import { newIdempotencyKey } from '@/api/files';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 import { reportApiError } from '@/lib/apiError';
 import { cn } from '@/lib/utils';
 
+import { ComparisonGrid } from '../core/ComparisonGrid';
 import { StatusBadge } from '../core/StatusBadge';
 import { formatDate, formatMoney } from '../format';
 
@@ -164,6 +162,13 @@ export function AlternativesBlock({ sourceType, sourceId, renderSelect }: Props)
   );
 }
 
+interface InfoRow {
+  key: string;
+  label: string;
+  source: ReactNode;
+  offer: (offer: ComparisonOffer) => ReactNode;
+}
+
 function ComparisonTable({ data, offers, dim, renderSelect }: {
   data: Comparison;
   offers: ComparisonOffer[];
@@ -174,117 +179,105 @@ function ComparisonTable({ data, offers, dim, renderSelect }: {
   const { source } = data;
   const cpName = (cp: { short_name: string; name: string; country_name?: string | null; country_code: string } | null) =>
     cp ? `${cp.short_name || cp.name} · ${cp.country_name ?? cp.country_code}` : '—';
-  const row = (label: string, sourceCell: ReactNode, offerCell: (offer: ComparisonOffer) => ReactNode) => (
-    <TableRow>
-      <TableHead scope="row" className="whitespace-nowrap">{label}</TableHead>
-      <TableCell>{sourceCell}</TableCell>
-      {offers.map((offer) => (
-        <TableCell key={offer.id} className={dim(offer)}>{offerCell(offer)}</TableCell>
-      ))}
-    </TableRow>
-  );
+  const noVat = t('bpp.alternatives.noVat', 'без НДС');
+  const info: InfoRow[] = [
+    { key: 'counterparty', label: t('bpp.alternatives.counterparty', 'Контрагент'),
+      source: cpName(source.counterparty), offer: (offer) => cpName(offer.counterparty) },
+    { key: 'amount', label: t('bpp.alternatives.amount', 'Сумма'),
+      source: source.amount ? formatMoney(source.amount, source.currency_code) : '—',
+      offer: (offer) => (offer.amount ? formatMoney(offer.amount, offer.currency_code) : '—') },
+    { key: 'amount_kzt', label: t('bpp.alternatives.amountKzt', 'В тенге'),
+      source: source.amount_kzt ? formatMoney(source.amount_kzt, 'KZT') : '—',
+      offer: (offer) => (offer.amount_kzt ? formatMoney(offer.amount_kzt, 'KZT') : '—') },
+    { key: 'vat', label: t('bpp.alternatives.vat', 'НДС'),
+      source: source.with_vat ? `${source.vat_rate ?? ''}%` : noVat,
+      offer: (offer) => (offer.with_vat ? `${offer.vat_rate ?? ''}%` : noVat) },
+    { key: 'saving', label: t('bpp.alternatives.saving', 'Экономия'), source: '—', offer: (offer) => {
+      const value = offer.saving.amount !== null && offer.saving.pct !== null
+        ? savingFromString(offer.saving.amount, offer.saving.pct) : null;
+      if (!value) return '—';
+      return (
+        <span className={cn('font-medium', value.moreExpensive && ORANGE)}>
+          {savingText(value, 'KZT', t('bpp.alternatives.dearer', 'Дороже на'))}
+        </span>
+      );
+    } },
+    { key: 'term', label: t('bpp.alternatives.term', 'Срок поставки'),
+      source: source.delivery_date
+        ? `${t('bpp.alternatives.need', 'Потребность')}: ${formatDate(source.delivery_date)}`
+        : '',
+      offer: (offer) => formatDate(offer.delivery_date) },
+    { key: 'payment', label: t('bpp.alternatives.paymentTerms', 'Условия оплаты'), source: '—',
+      offer: (offer) => paymentTermsLabel(offer.payment_terms, t) },
+    { key: 'files', label: t('bpp.alternatives.offerFiles', 'КП'), source: '—',
+      offer: (offer) => (offer.files.length > 0 ? offer.files.map((file) => file.filename ?? file.id).join(', ') : '—') },
+    { key: 'author', label: t('bpp.alternatives.author', 'Автор'), source: source.author.name ?? '—',
+      offer: (offer) => offer.author.name ?? '—' },
+  ];
+  const offerKey = (offer: ComparisonOffer) => offer.id;
 
   return (
     <div className="space-y-4 overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead />
-            <TableHead>
+      <ComparisonGrid
+        columns={offers}
+        columnKey={offerKey}
+        dim={dim}
+        renderColumn={(offer) => (
+          <>
+            <Link className="text-primary hover:underline" to={offerHref(offer.id)}>{offer.number}</Link>
+            <span className="mt-1 block"><StatusBadge kind="alternative_offer" status={offer.status} /></span>
+          </>
+        )}
+        leading={[{
+          key: 'source',
+          header: (
+            <>
               <Link className="text-primary hover:underline" to={source.url}>{source.number}</Link>
               <span className="block text-xs font-normal text-muted-foreground">
                 {t('bpp.alternatives.original', 'Исходный документ')}
               </span>
-            </TableHead>
-            {offers.map((offer) => (
-              <TableHead key={offer.id} className={dim(offer)}>
-                <Link className="text-primary hover:underline" to={offerHref(offer.id)}>{offer.number}</Link>
-                <span className="mt-1 block"><StatusBadge kind="alternative_offer" status={offer.status} /></span>
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {row(t('bpp.alternatives.counterparty', 'Контрагент'), cpName(source.counterparty),
-            (offer) => cpName(offer.counterparty))}
-          {row(t('bpp.alternatives.amount', 'Сумма'),
-            source.amount ? formatMoney(source.amount, source.currency_code) : '—',
-            (offer) => (offer.amount ? formatMoney(offer.amount, offer.currency_code) : '—'))}
-          {row(t('bpp.alternatives.amountKzt', 'В тенге'),
-            source.amount_kzt ? formatMoney(source.amount_kzt, 'KZT') : '—',
-            (offer) => (offer.amount_kzt ? formatMoney(offer.amount_kzt, 'KZT') : '—'))}
-          {row(t('bpp.alternatives.vat', 'НДС'),
-            source.with_vat ? `${source.vat_rate ?? ''}%` : t('bpp.alternatives.noVat', 'без НДС'),
-            (offer) => (offer.with_vat ? `${offer.vat_rate ?? ''}%` : t('bpp.alternatives.noVat', 'без НДС')))}
-          {row(t('bpp.alternatives.saving', 'Экономия'), '—', (offer) => {
-            const value = offer.saving.amount !== null && offer.saving.pct !== null
-              ? savingFromString(offer.saving.amount, offer.saving.pct) : null;
-            if (!value) return '—';
-            return (
-              <span className={cn('font-medium', value.moreExpensive && ORANGE)}>
-                {savingText(value, 'KZT', t('bpp.alternatives.dearer', 'Дороже на'))}
-              </span>
-            );
-          })}
-          {row(t('bpp.alternatives.term', 'Срок поставки'),
-            source.delivery_date
-              ? `${t('bpp.alternatives.need', 'Потребность')}: ${formatDate(source.delivery_date)}`
-              : '',
-            (offer) => formatDate(offer.delivery_date))}
-          {row(t('bpp.alternatives.paymentTerms', 'Условия оплаты'), '—',
-            (offer) => paymentTermsLabel(offer.payment_terms, t))}
-          {row(t('bpp.alternatives.offerFiles', 'КП'), '—',
-            (offer) => (offer.files.length > 0 ? offer.files.map((file) => file.filename ?? file.id).join(', ') : '—'))}
-          {row(t('bpp.alternatives.author', 'Автор'), source.author.name ?? '—',
-            (offer) => offer.author.name ?? '—')}
-          {renderSelect && (
-            <TableRow>
-              <TableHead scope="row" />
-              <TableCell />
-              {offers.map((offer) => (
-                <TableCell key={offer.id}>{offer.status === 'submitted' ? renderSelect(offer) : null}</TableCell>
-              ))}
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+            </>
+          ),
+          cell: (row: InfoRow) => row.source,
+        }]}
+        rows={info}
+        rowKey={(row) => row.key}
+        renderRow={(row) => row.label}
+        cell={(row, offer) => row.offer(offer)}
+        footer={renderSelect
+          ? (offer) => (offer.status === 'submitted' ? renderSelect(offer) : null)
+          : undefined}
+      />
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('bpp.alternatives.item', 'Позиция')}</TableHead>
-            <TableHead className="text-right">{t('bpp.alternatives.qty', 'Кол-во')}</TableHead>
-            <TableHead className="text-right">{t('bpp.alternatives.sourcePrice', 'Цена исходная')}</TableHead>
-            {offers.map((offer) => (
-              <TableHead key={offer.id} className={cn('text-right', dim(offer))}>{offer.number}</TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {data.positions.map((position) => (
-            <TableRow key={position.source_line_id}>
-              <TableCell>{position.name}</TableCell>
-              <TableCell className="text-right">{position.qty} {position.uom ?? ''}</TableCell>
-              <TableCell className="text-right">{formatMoney(position.source_price)}</TableCell>
-              {offers.map((offer) => {
-                const cell = position.offers[offer.id];
-                return (
-                  <TableCell key={offer.id} className={cn('text-right', dim(offer))}>
-                    {cell?.price ? (
-                      <>
-                        {formatMoney(cell.price)}
-                        <span className={cn('block text-xs', isDearer(cell.deviation_pct) ? ORANGE : 'text-muted-foreground')}>
-                          {deviationText(cell.deviation_pct)}
-                        </span>
-                      </>
-                    ) : '—'}
-                  </TableCell>
-                );
-              })}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <ComparisonGrid
+        columns={offers}
+        columnKey={offerKey}
+        dim={dim}
+        cellClassName="text-right"
+        rowHeader={t('bpp.alternatives.item', 'Позиция')}
+        rowHeadClassName="whitespace-normal"
+        renderColumn={(offer) => offer.number}
+        leading={[
+          { key: 'qty', className: 'text-right', header: t('bpp.alternatives.qty', 'Кол-во'),
+            cell: (position: Comparison['positions'][number]) => `${position.qty} ${position.uom ?? ''}` },
+          { key: 'price', className: 'text-right', header: t('bpp.alternatives.sourcePrice', 'Цена исходная'),
+            cell: (position: Comparison['positions'][number]) => formatMoney(position.source_price) },
+        ]}
+        rows={data.positions}
+        rowKey={(position) => position.source_line_id}
+        renderRow={(position) => position.name}
+        cell={(position, offer) => {
+          const value = position.offers[offer.id];
+          return value?.price ? (
+            <>
+              {formatMoney(value.price)}
+              <span className={cn('block text-xs', isDearer(value.deviation_pct) ? ORANGE : 'text-muted-foreground')}>
+                {deviationText(value.deviation_pct)}
+              </span>
+            </>
+          ) : '—';
+        }}
+      />
     </div>
   );
 }

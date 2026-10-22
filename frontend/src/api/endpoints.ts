@@ -31,6 +31,8 @@ export const API_ENDPOINTS = {
   refdata: 'refdata/v1',
   notifications: 'notifications/v1',
   bpp: 'bpp/v1',
+  // Тендерный модуль закупок (docs/plans/2026-10-06-tender-master-plan.md).
+  tender: 'tender/v1',
   // Django "core" app (Phase 0) — service on/off registry (Task 0.5/0.7).
   // Not fronted by nginx yet; see hooks/useServiceStatus.ts for the
   // graceful-degradation contract while the Django backend isn't in traffic.

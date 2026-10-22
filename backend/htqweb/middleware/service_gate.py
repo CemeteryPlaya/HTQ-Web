@@ -33,6 +33,7 @@ PREFIX_TO_SERVICE = {
     "/api/bpp/v1/kpi": "bpp_alternatives",
     "/api/bpp/v1/accountable": "bpp_accountable",
     "/api/bpp/": "bpp",
+    "/api/tender/": "tender",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }
