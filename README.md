@@ -124,6 +124,30 @@ docker compose restart nginx
 `htq-web-backend-web-1`, `htq-web-redis-1` и т.д. У тестовых стеков имя проекта своё:
 `htqweb-local-<service>-1` и `htqweb-env-<service>-1` — тома и сети у них тоже раздельные.
 
+Полный список переменных окружения — в `.env.production.example` (копируется в `.env`).
+
+### Сборка за перехватывающим TLS-прокси (Falcongaze / Palo Alto)
+
+Если сеть сборки подменяет TLS-сертификаты, `pip`/`npm`/`apt` в Docker-сборке
+падают на проверке сертификата. Передайте перехватывающий корневой CA через
+переменную `CORPORATE_CA_BASE64` в `.env` — Dockerfile'ы сами установят и
+доверят его **на время сборки**. В обычной сети переменную оставляют **пустой**:
+шаг пропускается, сборка идёт как раньше (поведение обратно совместимо).
+
+Значение — base64 самого CA-сертификата, одной строкой без переносов:
+
+```bash
+# Linux / WSL
+base64 -w0 Falcongaze.crt
+# macOS
+base64 -b0 Falcongaze.crt
+# PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("Falcongaze.crt"))
+```
+
+Вывод вставляется в `.env` как `CORPORATE_CA_BASE64=<одна_длинная_строка>`. Сам
+сертификат в репозиторий не коммитится — он живёт только в `.env` (в `.gitignore`).
+
 ---
 
 ## Структура репозитория

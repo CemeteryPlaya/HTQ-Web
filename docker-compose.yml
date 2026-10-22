@@ -149,12 +149,35 @@ x-django-env: &django-env
   ANTIVIRUS_TIMEOUT: ${ANTIVIRUS_TIMEOUT:-30}
 
 services:
-  # Контейнеров `db` и `pgbouncer` здесь НЕТ намеренно: боевая БД внешняя
-  # (адрес обязателен в .env, умолчания нет), а Django ходит в Postgres напрямую —
-  # CONN_MAX_AGE пулит на уровне приложения, тогда как PgBouncer в
-  # transaction-режиме рвал бы DDL и prepared-statements.
-  # Postgres в контейнере (и PgBouncer на :6432 для хостовых утилит) живёт в
-  # docker-compose.test-local.yml.
+  # ─── Postgres (БД платформы, на этом же VPS) ────────────────────────────
+  # БД в стеке: один сервер владеет приложением И данными (чистый разрыв со
+  # старым внешним хостом). В .env должно быть DB_HOST=db. Django ходит в
+  # Postgres напрямую (CONN_MAX_AGE пулит на уровне приложения); PgBouncer
+  # намеренно нет — transaction-режим рвал бы DDL/prepared-statements.
+  # Внешняя БД по-прежнему возможна: убрать этот сервис и прописать реальный
+  # DB_HOST в .env.
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-htqweb}
+      POSTGRES_USER: ${DB_USER:-htqweb}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # ltree + pgcrypto нужны миграциям (apps/hr орг-структура). Выполняется
+      # один раз при инициализации ПУСТОГО тома.
+      - ./infra/db/init-ltree.sql:/docker-entrypoint-initdb.d/01-ltree.sql:ro
+    # Наружу порт НЕ публикуем: в БД ходят только контейнеры этой сети.
+    # Нужен pg_dump/psql с хоста — добавьте "127.0.0.1:55432:5432".
+    command: ["postgres", "-c", "max_connections=200"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-htqweb}"]
+      interval: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   # ─── Redis (кэш + channel layer) ────────────────
   redis:
@@ -989,6 +1012,7 @@ services:
         max-file: "3"
 
 volumes:
+  postgres_data:
   clamav_db:
   static_files:
   media_files:

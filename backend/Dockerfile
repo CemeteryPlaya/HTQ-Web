@@ -21,14 +21,39 @@ WORKDIR /app
 # Debian). fonts-dejavu-core — шрифт кириллицы (шаблон
 # apps/bpp/templates/bpp/print/base.html): без него текст ушёл бы
 # пустыми прямоугольниками без единой ошибки.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Hash Sum mismatch: перехватывающий прокси (Falcongaze) ломает скачивание.
+# Одинаковый размер при разном SHA — признак порчи HTTP-pipeline, поэтому
+# Pipeline-Depth=0 (один файл на соединение). No-Cache гонит прокси
+# перепроверять вместо отдачи протухшего кэша, Retries переживает рассинхрон
+# зеркала, чистка списков до update убирает уже подсунутый старый индекс.
+RUN rm -rf /var/lib/apt/lists/* \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 \
+               -o Acquire::http::No-Cache=true \
+               -o Acquire::https::No-Cache=true \
+               -o Acquire::Retries=3 \
+               update \
+    && apt-get -o Acquire::http::Pipeline-Depth=0 \
+               -o Acquire::http::No-Cache=true \
+               -o Acquire::https::No-Cache=true \
+               -o Acquire::Retries=3 \
+               install -y --no-install-recommends \
         build-essential libpq5 \
         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fontconfig fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
+ARG CORPORATE_CA_BASE64=""
+RUN if [ -n "$CORPORATE_CA_BASE64" ]; then \
+      printf '%s' "$CORPORATE_CA_BASE64" | base64 -d > /usr/local/share/ca-certificates/corporate-ca.crt \
+      && update-ca-certificates; \
+    fi
+
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN if [ -f /usr/local/share/ca-certificates/corporate-ca.crt ]; then \
+      PIP_CERT=/etc/ssl/certs/ca-certificates.crt pip install --upgrade pip \
+      && PIP_CERT=/etc/ssl/certs/ca-certificates.crt pip install -r requirements.txt; \
+    else \
+      pip install --upgrade pip && pip install -r requirements.txt; \
+    fi
 
 COPY . .
 RUN chmod +x docker-entrypoint.sh

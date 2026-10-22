@@ -287,6 +287,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS (Palo Alto + Falcongaze): без CA pip/apt по
+        # https не проходят проверку сертификата. Значение — в корневом .env.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
     env_file:
@@ -333,6 +337,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS (Palo Alto + Falcongaze): без CA pip/apt по
+        # https не проходят проверку сертификата. Значение — в корневом .env.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
     env_file:
@@ -359,6 +367,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS (Palo Alto + Falcongaze): без CA pip/apt по
+        # https не проходят проверку сертификата. Значение — в корневом .env.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
     env_file:
@@ -383,6 +395,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS (Palo Alto + Falcongaze): без CA pip/apt по
+        # https не проходят проверку сертификата. Значение — в корневом .env.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     # Доступы к 1С (D-S7-5): файл секретов, не в репозитории; нет файла — не ошибка (compose >= 2.24).
     env_file:
@@ -407,6 +423,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS (Palo Alto + Falcongaze): без CA pip/apt по
+        # https не проходят проверку сертификата. Значение — в корневом .env.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     environment:
       <<: *django-env
@@ -427,6 +447,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+      args:
+        # Корпоративный перехват TLS: без CA npm по https не проходит проверку.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     entrypoint: []
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
     restart: unless-stopped
@@ -723,6 +746,8 @@ services:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
+        # Корпоративный перехват TLS: без CA npm по https не проходит проверку.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     # Тонкая настройка (битрейты, TURN, воркеры) — необязательный sfu/.env;
     # ключи из environment ниже имеют приоритет над ним.
     env_file:
@@ -782,6 +807,9 @@ services:
     build:
       context: ./webtransport
       dockerfile: Dockerfile
+      args:
+        # Корпоративный перехват TLS: без CA pip/apt по https не проходят проверку.
+        CORPORATE_CA_BASE64: ${CORPORATE_CA_BASE64:-}
     restart: unless-stopped
     environment:
       SFU_WS_URL: ${SFU_WS_URL:-ws://sfu:4443/ws/sfu/}

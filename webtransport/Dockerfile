@@ -2,9 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ARG CORPORATE_CA_BASE64=""
+RUN if [ -n "$CORPORATE_CA_BASE64" ]; then \
+      printf '%s' "$CORPORATE_CA_BASE64" | base64 -d > /usr/local/share/ca-certificates/corporate-ca.crt \
+      && update-ca-certificates; \
+    fi
+
 COPY requirements.txt .
 # cryptography is needed by generate_cert.py (no openssl binary required)
-RUN pip install --no-cache-dir -r requirements.txt cryptography
+RUN if [ -f /usr/local/share/ca-certificates/corporate-ca.crt ]; then \
+      PIP_CERT=/etc/ssl/certs/ca-certificates.crt pip install --no-cache-dir -r requirements.txt cryptography; \
+    else \
+      pip install --no-cache-dir -r requirements.txt cryptography; \
+    fi
 
 COPY . .
 
