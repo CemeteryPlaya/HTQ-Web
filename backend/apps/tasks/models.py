@@ -1150,6 +1150,9 @@ class TaskAssignee(models.Model):
         default=AssigneeRole.COLLABORATOR, db_default=AssigneeRole.COLLABORATOR,
     )
     assigned_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    # Признак «новая задача» (канбан K-28, мастер-план §3.3): ``NULL`` — человек
+    # ещё не открывал задачу после назначения. Своё назначение видно сразу.
+    seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Исполнитель задачи"
@@ -1157,6 +1160,10 @@ class TaskAssignee(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_assignee"),
+        ]
+        indexes = [
+            models.Index(fields=["user_id"], name="ix_task_assignee_unseen",
+                         condition=models.Q(seen_at__isnull=True)),
         ]
 
 
@@ -1197,6 +1204,74 @@ class TaskWatcher(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_watcher"),
+        ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Канбан-доски (docs/plans/2026-10-21-kanban-boards-master-plan.md, этап S1)
+#
+# Отдельной модели «доска» нет (K-01): доска — запрос над задачами, а её ключ —
+# пара (вид, id): личная — ``user_id`` владельца, отдела — id отдела ``hr``,
+# проекта — ``tasks.Project.id``. Колонка — статус задачи (K-02).
+# ─────────────────────────────────────────────────────────────────────────
+
+class BoardKind(models.TextChoices):
+    PERSONAL = "personal"
+    DEPARTMENT = "department"
+    PROJECT = "project"
+
+
+class BoardCardRank(models.Model):
+    """Порядок карточки внутри колонки доски (мастер-план §3.2).
+
+    Статус здесь не хранится: колонка — ``Task.status``. Ранг — строка
+    дробной индексации (``services/board_rank.py``), сравнивается побайтно
+    (``COLLATE "C"``). Карточки без строки идут после ранжированных, по
+    ``-created_at``: бэкфилла нет, строка появляется при первом переносе или
+    быстром добавлении.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="board_ranks")
+    rank = models.CharField(max_length=64, db_collation="C")
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Порядок карточки на доске"
+        verbose_name_plural = "Порядок карточек на досках"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "task"],
+                                    name="uq_board_card_rank"),
+        ]
+        indexes = [
+            models.Index(fields=["board_kind", "board_id", "rank"],
+                         name="ix_board_card_order"),
+        ]
+
+
+class BoardSettings(models.Model):
+    """Настройки доски (решение K-34): у каждого статуса-колонки — своё
+    название, цвет из палитры и признак «скрыта».
+
+    ``columns`` — ``{status: {"title": str, "color": str | None, "hidden": bool}}``;
+    статус без записи показывается с названием по умолчанию и без цвета.
+    Строка заводится при первом сохранении настроек.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    columns = models.JSONField(default=dict, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Настройки доски"
+        verbose_name_plural = "Настройки досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id"],
+                                    name="uq_board_settings"),
         ]
 
 

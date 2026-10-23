@@ -61,6 +61,15 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        // Канбан-доски (K-23): холст, колонка, карточка и значки срока.
+        board: {
+          column: "hsl(var(--board-column))",
+          card: "hsl(var(--board-card))",
+          ring: "hsl(var(--board-card-hover-ring))",
+          overdue: "hsl(var(--board-badge-overdue))",
+          soon: "hsl(var(--board-badge-soon))",
+          done: "hsl(var(--board-badge-done))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

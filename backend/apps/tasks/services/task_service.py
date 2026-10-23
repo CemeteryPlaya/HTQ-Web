@@ -89,7 +89,7 @@ def user_department_id(user_id: int) -> int | None:
     return hydration.employee_department_id(user_id)
 
 
-def _participant_q(user_id: int) -> Q:
+def participant_q(user_id: int) -> Q:
     """Tasks where the user has any stake at all."""
     return (
         Q(assignee_id=user_id)
@@ -108,7 +108,7 @@ def soft_edit_q(user_id: int) -> Q:
     запросом, чтобы список можно было получить одной выборкой, а не
     проверять права построчно в Python.
 
-    Наблюдателей здесь НЕТ, в отличие от ``_participant_q``: следить за
+    Наблюдателей здесь НЕТ, в отличие от ``participant_q``: следить за
     задачей и заявлять о выполненном объёме — разные вещи. Разъедется с
     ``can_progress`` — и экран покажет строки, сохранение которых даст 403.
     """
@@ -124,7 +124,7 @@ def soft_edit_q(user_id: int) -> Q:
 def department_q(department_ids, *, member_only: bool = False) -> Q:
     """Задачи этих отделов: основной отдел или связь с отделом.
 
-    ``Exists``, а не джойн: ``_participant_q`` уже множит строки джойнами
+    ``Exists``, а не джойн: ``participant_q`` уже множит строки джойнами
     (``filtered_tasks`` их схлопывает ``distinct``), ещё один к связям отделов
     множил бы их дальше. ``member_only`` — без отделов-отправителей (``origin``
     видит задачу, но не «берёт в работу» и не правит её, S1-03).
@@ -148,7 +148,7 @@ def visibility_q(scope) -> Q | None:
     """
     if scope is None or scope.elevated:
         return None
-    q = _participant_q(scope.user_id)
+    q = participant_q(scope.user_id)
     if scope.department_ids:
         q |= department_q(scope.department_ids)
     if scope.all_departments:
@@ -353,7 +353,7 @@ def tab_q(tab: str | None, scope) -> Q | None:
     участие (то, что станет личной доской, K-03), «отдел» — поддеревья своего
     отдела и управляемых, без «всех отделов» и досок проектов."""
     if tab == "mine":
-        return _participant_q(scope.user_id)
+        return participant_q(scope.user_id)
     if tab == "department":
         if scope.elevated:
             return None                                  # администратор видит всё (K-17)
@@ -404,7 +404,8 @@ def claim(task_id: int, request) -> Task:
         raise DomainError("task_claim_unavailable",
                           "Задачу уже взяли в работу", status=409)
     user_id = scope.user_id
-    TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY)
+    TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY,
+                                seen_at=timezone.now())
     old_status = task.status
     task.assignee_id = user_id
     task.apply_transition(Status.IN_PROGRESS)
@@ -585,8 +586,13 @@ def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
         # keep only real ones, exactly as the original did.
         task.labels.set(Label.objects.filter(id__in=data.label_ids))
 
+    # «Новая задача» (K-28): своё назначение видно сразу, назначенным другими
+    # — новость, пока не откроют.
+    now = timezone.now()
     TaskAssignee.objects.bulk_create(
-        [TaskAssignee(task=task, user_id=uid, role=role) for uid, role in crew]
+        [TaskAssignee(task=task, user_id=uid, role=role,
+                      seen_at=now if uid == user_id else None)
+         for uid, role in crew]
     )
 
     for uid, _role in crew:
@@ -664,11 +670,18 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
 
     if "status" in changes:
         target = changes.pop("status")
+        old_status = task.status
         try:
             task.apply_transition(target)
         except ValueError as exc:
             # Invalid FSM edge -> the original's 400.
             raise ValueError(str(exc)) from exc
+        # Смена статуса — ключевое событие ленты карточки (канбан-доски,
+        # мастер-план §6.4; в Trello — «переместил карточку из списка в
+        # список»). Прежний API её не журналировал ради паритета с FastAPI —
+        # это решение снято вместе с досками.
+        if old_status != task.status:
+            _log(task, user_id, "status", old_status, task.status)
         if task.assignee_id:
             _notify(task.assignee_id, user_id, task,
                     f"status_changed:{task.key}")
@@ -689,7 +702,7 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
     task.save()
 
     if "assignee_id" in changes:
-        _sync_primary_assignee(task, changes["assignee_id"])
+        _sync_primary_assignee(task, changes["assignee_id"], actor_id=user_id)
         if changes["assignee_id"]:
             _notify(changes["assignee_id"], user_id, task,
                     f"task_assigned:{task.key}")
@@ -736,8 +749,11 @@ def _check_update(task: Task, changes: dict, department_ids, scope) -> None:
         get_task(parent_id, scope=scope)                 # невидимый родитель — 404 (S1-18)
 
 
-def _sync_primary_assignee(task: Task, new_primary_id: int | None) -> None:
-    """Keep ``TaskAssignee`` consistent after the legacy scalar changed."""
+def _sync_primary_assignee(task: Task, new_primary_id: int | None, *,
+                           actor_id: int | None = None) -> None:
+    """Keep ``TaskAssignee`` consistent after the legacy scalar changed.
+    Новая строка — «новая задача» для назначенного, если он назначил не сам
+    себя (K-28)."""
     task.assignees.filter(role=AssigneeRole.PRIMARY).exclude(
         user_id=new_primary_id
     ).update(role=AssigneeRole.COLLABORATOR)
@@ -748,8 +764,9 @@ def _sync_primary_assignee(task: Task, new_primary_id: int | None) -> None:
         row.role = AssigneeRole.PRIMARY
         row.save(update_fields=["role"])
     else:
-        TaskAssignee.objects.create(task=task, user_id=new_primary_id,
-                                    role=AssigneeRole.PRIMARY)
+        TaskAssignee.objects.create(
+            task=task, user_id=new_primary_id, role=AssigneeRole.PRIMARY,
+            seen_at=timezone.now() if new_primary_id == actor_id else None)
 
 
 def delete_task(task_id: int) -> None:
@@ -794,8 +811,10 @@ def replace_assignees(task_id: int, assignments: list,
                 row.role = a.role
                 row.save(update_fields=["role"])
         else:
-            TaskAssignee.objects.create(task=task, user_id=a.user_id,
-                                        role=a.role)
+            # Повторное назначение снятого раньше человека — снова новость (K-28).
+            TaskAssignee.objects.create(
+                task=task, user_id=a.user_id, role=a.role,
+                seen_at=timezone.now() if a.user_id == actor_id else None)
             _notify(a.user_id, actor_id, task, f"task_assigned:{task.key}")
 
     primary = next((a.user_id for a in assignments

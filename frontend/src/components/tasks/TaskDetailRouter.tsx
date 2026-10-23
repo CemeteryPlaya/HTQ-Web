@@ -1,5 +1,7 @@
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { useMarkSeen } from '@/features/tasks/board/hooks/useBoard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePermissions } from '@/hooks/usePermissions';
 
@@ -9,6 +11,9 @@ import EmployeeTaskDetail from '@/pages/hr/EmployeeTaskDetail';
 export const TaskDetailRouter: React.FC = () => {
     const { activeProfile, isLoading } = useActiveProfile();
     const permissions = usePermissions();
+    const { id } = useParams<{ id: string }>();
+    // Задачу открыли — на личной доске она больше не «новая» (K-28).
+    useMarkSeen(Number(id) || null);
     // Раньше это был type guard над профилем; теперь права приходят
     // отдельно, поэтому проверка на наличие профиля стала явной.
     const isRegularEmployee = permissions.atLeast('tasks', 'read') && !permissions.atLeast('tasks', 'admin');

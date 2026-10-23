@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { errorCode, reportApiError } from '@/lib/apiError';
-import { reportTaskError, taskErrorText } from '@/features/tasks/errors';
+import { reportTaskError } from '@/features/tasks/errors';
 import { TransferDialog } from '@/features/tasks/board/TransferDialog';
 import { DateInput } from '@/components/ui/date-input';
 import { DATES_OUT_OF_ORDER, datesOutOfOrder } from '@/lib/validation';
@@ -128,13 +128,10 @@ const HRTaskDetail: React.FC = () => {
       // Отдел за пределы своих поддеревьев глава уводит переносом, а не
       // правкой (S1-13): перенос снимает исполнителей и оставляет отделу
       // ход работ. Сервер так и отвечает — тост предлагает сразу перенести.
-      if (errorCode(err) === 'task_department_use_transfer' && task?.can?.transfer) {
-        toast.error(taskErrorText(err, t, t('tasks.pages.detail.error')), {
-          action: { label: t('tasks.transfer.action'), onClick: () => setTransferOpen(true) },
-        });
-        return;
-      }
-      reportTaskError(err, t, t('tasks.pages.detail.error'));
+      const offerTransfer = errorCode(err) === 'task_department_use_transfer' && task?.can?.transfer;
+      reportTaskError(err, t, t('tasks.pages.detail.error'), offerTransfer
+        ? { action: { label: t('tasks.transfer.action'), onClick: () => setTransferOpen(true) } }
+        : undefined);
     },
   });
 

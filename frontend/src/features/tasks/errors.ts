@@ -9,7 +9,7 @@
  * ответ без кода разбирает общий `lib/apiError` по статусу.
  */
 import type { TFunction } from 'i18next';
-import { toast } from 'sonner';
+import { toast, type ExternalToast } from 'sonner';
 
 import { errorCode, explainedDetail, reportApiError } from '@/lib/apiError';
 
@@ -20,13 +20,15 @@ export function taskErrorText(error: unknown, t: TFunction, fallback: string): s
   return t(`tasks.errors.${code}`, { defaultValue: detail });
 }
 
-/** То же тостом; ответ без кода — по правилам `reportApiError`. */
-export function reportTaskError(error: unknown, t: TFunction, fallback: string): void {
+/** То же тостом; ответ без кода — по правилам `reportApiError`.
+ * `options` — настройки тоста (например, кнопка «Перенести» у отказа). */
+export function reportTaskError(error: unknown, t: TFunction, fallback: string,
+  options?: ExternalToast): void {
   // Архив (`company_archived`) уже объяснил `api/client.ts` — `reportApiError`
   // второй тост не покажет, поэтому такой отказ тоже идёт через него.
   if (!errorCode(error) || (error as { archivedReported?: boolean })?.archivedReported) {
-    reportApiError(error, fallback);
+    reportApiError(error, fallback, options);
     return;
   }
-  toast.error(taskErrorText(error, t, fallback));
+  toast.error(taskErrorText(error, t, fallback), options);
 }

@@ -52,7 +52,7 @@ export const TransferDialog: React.FC<Props> = ({ task, open, onOpenChange, onTr
   const [sender, setSender] = useState<string>(AUTO_SENDER);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: departments = [] } = useQuery({
+  const { data: departments = [], isFetched } = useQuery({
     queryKey: ['hr-departments'],
     queryFn: fetchDepartments,
     enabled: open,
@@ -124,6 +124,12 @@ export const TransferDialog: React.FC<Props> = ({ task, open, onOpenChange, onTr
                 ))}
               </CommandList>
             </Command>
+            {isFetched && targets.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t('tasks.transfer.noTargets',
+                  'Отправить некуда: других действующих отделов в компании нет.')}
+              </p>
+            )}
           </div>
 
           {task.department == null && (

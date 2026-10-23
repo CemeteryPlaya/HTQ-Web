@@ -1915,7 +1915,8 @@
       "senderAuto": "My department (automatic)",
       "submit": "Send",
       "success": "Task sent to the department",
-      "error": "Could not send the task"
+      "error": "Could not send the task",
+      "noTargets": "There is nowhere to send it: the company has no other active departments."
     },
     "errors": {
       "task_department_forbidden": "You can only pick your own department or its sub-departments",
@@ -2721,6 +2722,124 @@
       "meter": "m",
       "sqMeter": "m²",
       "ton": "t"
+    },
+    "board": {
+      "addCard": "Add a card",
+      "addCardPlaceholder": "Enter a task title",
+      "addFailed": "Could not add the card",
+      "badge": {
+        "attachments": "Attachments",
+        "checklist": "Checklist",
+        "comments": "Comments",
+        "description": "Has a description",
+        "due": "Due date",
+        "priority": "Priority"
+      },
+      "cancel": "Cancel",
+      "card": {
+        "complete": "Mark complete",
+        "completed": "Complete",
+        "new": "New task",
+        "quickEdit": "Quick edit"
+      },
+      "column": {
+        "actions": "List actions",
+        "collapse": "Collapse list",
+        "color": "List colour",
+        "empty": "No cards",
+        "expand": "Expand list “{{title}}”",
+        "hide": "Hide list",
+        "menu": "List actions",
+        "more": "Show more",
+        "noColor": "No colour"
+      },
+      "filter": {
+        "activity": "Activity",
+        "activity1w": "Active in the last week",
+        "activity2w": "Active in the last two weeks",
+        "activity4w": "Active in the last four weeks",
+        "activityStale": "Without activity in the last four weeks",
+        "assignedToMe": "Assigned to me",
+        "complete": "Marked as complete",
+        "completion": "Card status",
+        "due": "Due date",
+        "dueDay": "Due in the next day",
+        "dueMonth": "Due in the next month",
+        "dueNone": "No dates",
+        "dueOverdue": "Overdue",
+        "dueWeek": "Due in the next week",
+        "hideEmpty": "Hide lists without matching cards",
+        "hint": "Within a group any ticked condition matches; across groups all of them must.",
+        "incomplete": "Not marked as complete",
+        "keyword": "Keyword",
+        "keywordPlaceholder": "Task title or key",
+        "labels": "Labels",
+        "labelsEmpty": "The company has no labels yet — they are created in a task card.",
+        "members": "Members",
+        "newOnly": "Only tasks I have not opened yet",
+        "newSection": "New",
+        "noLabels": "No labels",
+        "noMembers": "No assignees",
+        "nothing": "No card matches the filter.",
+        "reset": "Clear filter",
+        "title": "Filter"
+      },
+      "kind": {
+        "department": "Department board",
+        "personal": "Personal board",
+        "project": "Project board"
+      },
+      "labels": {
+        "collapse": "Hide label names",
+        "expand": "Show label names"
+      },
+      "loadFailed": "The board could not be loaded",
+      "loadMoreFailed": "Could not load the cards",
+      "moveFailed": "Could not move the card",
+      "notFound": "The board does not exist or is not visible to you",
+      "personalTitle": "My tasks",
+      "quick": {
+        "close": "Close",
+        "copyLink": "Copy link",
+        "linkCopied": "Link copied",
+        "move": "Move",
+        "noTargets": "There is nowhere to move the task from this list: the other lists are hidden or not allowed by the status flow.",
+        "open": "Open card",
+        "save": "Save"
+      },
+      "renameFailed": "Could not rename the task",
+      "settings": {
+        "allHidden": "At least one list has to stay on the board.",
+        "columnTitle": "Title of the “{{status}}” list",
+        "hidden": "Hidden",
+        "hiddenCount": "hidden: {{count}}",
+        "hint": "A list is a task status. The board may rename, colour and hide it; the transitions between statuses stay the same.",
+        "open": "Lists",
+        "save": "Save",
+        "title": "Board lists"
+      },
+      "settingsFailed": "Could not save the board settings",
+      "switcher": {
+        "departments": "Department boards",
+        "noDepartments": "No department boards: HR records do not list you in any department.",
+        "notFound": "No board found",
+        "open": "Other boards",
+        "projects": "Project boards",
+        "search": "Find a board"
+      },
+      "toPersonal": "To my board",
+      "colors": {
+        "green": "Green",
+        "yellow": "Yellow",
+        "orange": "Orange",
+        "red": "Red",
+        "purple": "Purple",
+        "blue": "Blue",
+        "sky": "Sky",
+        "lime": "Lime",
+        "pink": "Pink",
+        "gray": "Grey"
+      }
     }
   },
   "settingsPage": {

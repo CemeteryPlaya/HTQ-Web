@@ -19,6 +19,7 @@ from htqweb.fallback import fallback
 
 from ..models import (DepartmentLinkKind, Status, TERMINAL_STATUSES, Task, TaskAssignee,
                       TaskDepartmentLink)
+from . import board_service
 from . import department_rules
 from . import task_scope
 from . import task_service
@@ -107,5 +108,9 @@ def transfer(task_id: int, target_department_id: int, request, *,
         task_service._log(task, actor, "assignee_id", old_assignee, None)
     if old_status != Status.TODO:
         task_service._log(task, actor, "status", old_status, Status.TODO)
+    # Места на досках прежних отделов больше не действуют; на доске цели —
+    # в конец «К выполнению» (мастер-план §5.5, шаг 7).
+    board_service.forget_department_ranks(task.id)
+    board_service.place_on_department(target_department_id, task)
     _notify_target_head(task, target_department_id, actor)
     return task

@@ -35,6 +35,7 @@ from apps.companies import interface as companies
 from . import schemas
 from .services import block_service
 from .services import board_scope
+from .services import board_service
 from .services import calendar_service
 from .services import contractor_service
 from .services import daily_report_service
@@ -460,6 +461,10 @@ def _list_tasks(request):
 
 @api_view(methods=("POST",), body=schemas.TaskCreate, status=201, module="tasks", level="write")
 def _create_task(request, data: schemas.TaskCreate):
+    # Быстрое добавление на доске (канбан §6.2): доска проверяется ДО создания
+    # — на невидимую доску задачу не положить (404).
+    board = (board_service.resolve(request, data.board.kind, data.board.id)
+             if data.board is not None else None)
     # ``create_task`` raises ValueError for a site that does not belong to
     # the task's project. Unlike _update_task this view had no except arm at
     # all, so any ValueError from the service reached the client as a 500.
@@ -468,6 +473,8 @@ def _create_task(request, data: schemas.TaskCreate):
                                         scope=task_scope.for_request(request))
     except ValueError as exc:
         return json_error(str(exc), 400)
+    if board is not None and board_service.board_tasks(board).filter(pk=task.id).exists():
+        board_service.place_new(board, task)
     # Re-read through the visibility-aware loader so the response is built
     # from the same fully-prefetched shape every other endpoint returns.
     return task_response.build_detail(

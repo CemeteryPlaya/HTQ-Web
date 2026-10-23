@@ -861,6 +861,10 @@ class TaskCreate(OrderedDates):
     start_date: date | None = None
     estimated_working_days: int | None = None
 
+    # Быстрое добавление на доске (§6.2): карточка встаёт в конец своей
+    # колонки на этой доске.
+    board: "BoardRef | None" = None
+
     @field_validator("summary")
     @classmethod
     def summary_not_blank(cls, v: str) -> str:
@@ -939,6 +943,70 @@ class TransferIn(BaseModel):
     sender_department_id: int | None = None
 
     model_config = {"extra": "forbid"}
+
+
+# ── канбан-доски (мастер-план §6.1, этап S1) ───────────────────────────
+
+#: Палитра цветов колонок (решение K-34); фронт — токены ``--board-color-*``.
+BOARD_COLORS = ("green", "yellow", "orange", "red", "purple", "blue", "sky", "lime",
+                "pink", "gray")
+
+
+class BoardRef(BaseModel):
+    """Какая доска. У личной ``id`` нет: владелец — всегда тот, кто спрашивает
+    (§5.4), поэтому чужой id здесь — ошибка, а не подмена."""
+
+    kind: Literal["personal", "department", "project"]
+    id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _id_by_kind(self) -> "BoardRef":
+        if self.kind == "personal" and self.id is not None:
+            raise ValueError("У личной доски нет id")
+        if self.kind != "personal" and self.id is None:
+            raise ValueError("Нужен id доски")
+        return self
+
+
+class CardMove(BaseModel):
+    """Перенос карточки: целевая колонка (статус) и соседи по месту вставки —
+    ``before_id`` — карточка над местом, ``after_id`` — под ним."""
+
+    board: BoardRef
+    status: Status
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class ColumnSettingIn(BaseModel):
+    title: str | None = Field(default=None, max_length=60)
+    color: str | None = None
+    hidden: bool = False
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("color")
+    @classmethod
+    def _known_color(cls, value: str | None) -> str | None:
+        if value is not None and value not in BOARD_COLORS:
+            raise ValueError("Неизвестный цвет колонки")
+        return value
+
+
+class BoardSettingsIn(BaseModel):
+    """Настройки колонок доски (K-34): статус → название, цвет, скрытость."""
+
+    columns: dict[Status, ColumnSettingIn] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+
+# ``TaskCreate.board`` ссылается на ``BoardRef``, объявленную ниже неё.
+TaskCreate.model_rebuild()
 
 
 class TaskCan(BaseModel):

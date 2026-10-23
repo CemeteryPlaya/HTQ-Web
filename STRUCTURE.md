@@ -628,7 +628,22 @@ GET/POST/PATCH/DELETE /api/tasks/v1/{task-types,equipment-categories,work-roles,
 
 Вторая очередь сверялась со спецификацией модуля (`docs/SPEC-projects-module.md`, в репозитории её больше нет). Расхождения с ней были намеренными и сохраняются в коде: `Subcontractor`, `ProjectObject` и `EquipmentEngagement` из её §3.1 НЕ заводились — их роль играют уже существующие `Contractor`, `Site`+`SiteBlock` и `ResourceRequirement(kind=equipment)`. Ссылки вида «SPEC §N» в докстрингах указывают на тот же документ и остаются как объяснение, откуда взято решение.
 
-**Kanban** ([KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx)) — без изменений на фронте.
+**Видимость и права (канбан, этап 1):** `task_scope.py` (`TaskScope` — отделы, поддеревья глав, узлы; один расчёт на запрос), `department_rules.py` (отдел задачи при создании и правке), `transfer.py` (перенос в отдел, связь `origin`), `board_scope.py` (доски «Проектов» по узлу `project.board`). Видимость задачи — `task_service.visibility_q`, участие — `participant_q`, отдел с поддеревом — `department_q`.
+
+**Канбан-доски (этап S1, ветка `ruslan`, 22.10; мастер-план [docs/plans/2026-10-21-kanban-boards-master-plan.md](docs/plans/2026-10-21-kanban-boards-master-plan.md), Trello-план [docs/plans/2026-10-22-kanban-trello-automation-plan.md](docs/plans/2026-10-22-kanban-trello-automation-plan.md)).** Доска — выборка задач, а не копия: личная (`participant_q`), отдела с поддеревом (`department_q`), проекта задач (`project_id`). Колонка — статус задачи (K-02); доска лишь называет, красит и скрывает колонки (`BoardSettings`, K-34). Код:
+```
+models.py        BoardCardRank(board_kind, board_id, task, rank)  # порядок в колонке, collation "C"
+                 BoardSettings(board_kind, board_id, columns)     # {status: {title, color, hidden}}
+                 TaskAssignee.seen_at                              # «новая» на личной доске (K-28)
+services/board_rank.py     дробные ранги base-62: between/spread, перебалансировка > 48 символов
+services/board_service.py  какая доска и кто её видит (404), фильтры как в Trello, колонки
+                           (окно RowNumber, 200 карточек), облегчённая карточка, перенос
+                           move() (смена колонки = смена статуса по TRANSITIONS), место новой
+                           задачи, администратор доски (K-39: глава отдела, владелец проекта,
+                           узел tasks.boards.admin, elevated)
+views_boards.py / urls_boards.py   /api/tasks/v1/boards*, tasks/{id}/move, tasks/{id}/seen (API.md)
+```
+Фронт — [frontend/src/features/tasks/board/](frontend/src/features/tasks/board/): `BoardsPage` (маршруты `/tasks/board`, `/tasks/board/department/:id`, `/tasks/board/project/:id`; пункта меню до этапа S6 нет), `BoardHeader`/`BoardSwitcher`, `BoardCanvas` (`@hello-pangea/dnd`, соседи места вставки → `move`), `BoardColumn`, `BoardCard`, `CardBadges`, `CardLabels`, `QuickAddCard`, `CardQuickEdit`, `FilterDrawer` (фильтр в адресе), `BoardSettingsDialog`; хуки — `hooks/useBoard.ts` (оптимистичный перенос с откатом), `hooks/useBoardFilters.ts`; цвета — токены `--board-*` в `index.css`. Схема переходов на фронте — копия `TRANSITIONS` в [lib/tasks/transitions.ts](frontend/src/lib/tasks/transitions.ts), расхождение ловит `apps/tasks/tests/test_transitions_mirror.py`. Старые [KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx), `HRTasks`/`EmployeeTasks` живут до переключения (этап S6).
 
 ---
 

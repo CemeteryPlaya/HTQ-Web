@@ -220,12 +220,12 @@ def test_a_stranger_cannot_edit_someone_elses_report(task):
 
     Раунд правок 1 (ревью): ``OTHER`` заведён наблюдателем задачи
     (``TaskWatcher``), а не полным чужаком, — НАРОЧНО. Полный чужак не
-    виден задаче вовсе (``task_service._participant_q`` — ни assignee, ни
+    виден задаче вовсе (``task_service.participant_q`` — ни assignee, ни
     reporter, ни supervisor, ни watcher), и ``load_for_action`` внутри
     ``_report_for_write`` отдал бы 404 раньше, чем код вообще дошёл бы до
     строки, которую этот тест должен стеречь («автор/супервайзер/админ»,
     ``_report_for_write`` дальше по функции). Наблюдатель — участник
-    (``_participant_q`` его включает, видимость есть), но НЕ входит в
+    (``participant_q`` его включает, видимость есть), но НЕ входит в
     список, которому позволена правка (``can_edit``/ручная проверка в
     ``_report_for_write`` смотрят только на ``author_id``/``supervisor_id``/
     ``is_elevated`` — наблюдателя там нет), поэтому запрос доходит именно до
@@ -386,7 +386,7 @@ def test_board_skips_finished_work(task):
 def test_board_shows_only_what_i_may_write_to(valy):
     """Наблюдатель задачу видит, но отчитаться не вправе — в сводке её нет.
 
-    Тот же водораздел, что у ``soft_edit_q`` против ``_participant_q``:
+    Тот же водораздел, что у ``soft_edit_q`` против ``participant_q``:
     иначе страница предложила бы заполнить строку, которую сервер отвергнет.
     """
     from apps.tasks.models import TaskWatcher

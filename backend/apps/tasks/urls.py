@@ -17,7 +17,7 @@ over it with a 307) — BOTH are registered, because a 307 that drops the
 convention exists to prevent.
 """
 
-from django.urls import path
+from django.urls import include, path
 
 from . import views
 
@@ -271,4 +271,7 @@ urlpatterns = [
     # ── holding — сводка по группе (блок H) ──────────────────────────────────
     path("holding/projects", views.holding_projects),
     path("holding/projects/", views.holding_projects),
+
+    # ── канбан-доски (мастер-план §6.1–6.2) ──────────────────────────────────
+    path("", include("apps.tasks.urls_boards")),
 ]

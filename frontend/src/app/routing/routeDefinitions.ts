@@ -85,6 +85,12 @@ export const protectedRoutes: RouteConfig[] = [
   // register (its writes are admin-only on the backend, so leaving it open
   // here would only mean a page full of 403s).
   { path: '/tasks', component: lazyPages.TaskRouter, requiresAuth: true },
+  // Канбан-доски (этап S1): пункта меню ещё нет, вход по ссылке. Видимость
+  // доски решает сервер (404), поэтому гейта модуля на маршруте нет — как у
+  // `/tasks`.
+  { path: '/tasks/board', component: lazyPages.TasksBoard, requiresAuth: true },
+  { path: '/tasks/board/department/:id', component: lazyPages.TasksBoard, requiresAuth: true },
+  { path: '/tasks/board/project/:id', component: lazyPages.TasksBoard, requiresAuth: true },
   { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
   // Перед `/tasks/:id` (см. ниже) и перед ним же по смыслу: карточка пакета
   // работ, а не задачи.

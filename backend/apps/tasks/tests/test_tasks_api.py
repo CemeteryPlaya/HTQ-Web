@@ -330,32 +330,27 @@ def test_update_writes_activity_log_entries():
 
 
 @pytest.mark.django_db
-def test_status_changes_are_absent_from_the_activity_log():
-    """INHERITED DEFECT, pinned deliberately (phase-4 final review).
+def test_status_changes_are_logged():
+    """Смена статуса пишется в журнал задачи (канбан-доски, мастер-план §6.4).
 
-    ``status`` is in ``TRACKED_FIELDS``, yet a status change writes no
-    activity row: ``update_task`` pops ``status`` to run the FSM transition
-    *before* the tracked-fields loop, so the loop never sees it. The FastAPI
-    original does exactly the same (``update_data.pop("status")`` ahead of
-    its own loop), and ``activities`` is part of the task detail response —
-    so "fixing" it here would change a response the frontend renders, which
-    PLAN.md §3 forbids doing unilaterally.
-
-    Pinned rather than left implicit: this test fails the day someone
-    reorders those lines, forcing the change to be a decision instead of an
-    accident. Raise it at integration (§8) as a product question — a task
-    history that omits status transitions is arguably missing the single
-    most useful entry.
+    Раньше здесь был закреплён унаследованный от FastAPI пропуск:
+    ``update_task`` вынимал ``status`` до цикла ``TRACKED_FIELDS``, и в
+    истории задачи переходов не было. Решение снято вместе с досками: лента
+    карточки показывает перенос между колонками как ключевое событие (в Trello —
+    «переместил карточку из списка в список»), а ``claim`` и перенос в отдел
+    пишут ``status`` и раньше.
     """
     task = _mk_task(status=Status.TODO)
     patch_json(Client(), f"{BASE}/tasks/{task.id}/",
                {"status": "in_progress"}, **auth())
-    assert task.activities.count() == 0
+    entry = task.activities.get(field_name="status")
+    assert (entry.old_value, entry.new_value) == ("todo", "in_progress")
+    assert entry.actor_id == USER
 
-    # …while any other tracked field is logged normally.
+    # Прочие отслеживаемые поля — как и раньше.
     patch_json(Client(), f"{BASE}/tasks/{task.id}/",
                {"summary": "renamed"}, **auth())
-    assert list(task.activities.values_list("field_name", flat=True)) == ["summary"]
+    assert sorted(task.activities.values_list("field_name", flat=True)) == ["status", "summary"]
 
 
 @pytest.mark.django_db
