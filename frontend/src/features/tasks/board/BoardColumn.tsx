@@ -4,8 +4,9 @@
  * колонка — узкая полоса с повёрнутым названием; свёрнутость — вид у
  * конкретного человека (K-34), его хранит холст.
  */
+import { useState } from 'react';
 import { Draggable, Droppable } from '@hello-pangea/dnd';
-import { ChevronsLeftRight, EyeOff, MoreHorizontal, Palette, Plus } from 'lucide-react';
+import { ChevronsLeftRight, EyeOff, MoreHorizontal, Palette } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -47,6 +48,11 @@ export function BoardColumn(props: BoardColumnProps) {
   const columnTitle = useColumnTitle();
   const { column, collapsed } = props;
   const title = columnTitle(column);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const setColor = (color: BoardColor | null) => {
+    props.onSetColor(color);
+    setMenuOpen(false);
+  };
 
   if (collapsed) {
     return (
@@ -68,18 +74,21 @@ export function BoardColumn(props: BoardColumnProps) {
     <section
       aria-label={title}
       data-testid={`board-column-${column.status}`}
-      className="flex max-h-full w-[min(272px,85vw)] shrink-0 snap-start flex-col rounded-xl"
+      // Куда схема переходов не пустит, гаснет вся колонка: зона карточек у
+      // пустой колонки — полоска в 16 px, её затемнения не видно.
+      className={cn('flex w-[min(272px,85vw)] shrink-0 flex-col rounded-xl transition-opacity',
+        props.dropDisabled && 'opacity-40')}
       style={columnStyle(column.color)}
     >
       <header className="flex items-start gap-1 px-3 pb-1 pt-2.5">
         <h3 className="min-w-0 flex-1 break-words text-sm font-semibold leading-6">{title}</h3>
-        <span className="pt-0.5 text-xs text-muted-foreground">{column.count}</span>
+        <span className="text-xs leading-6 text-muted-foreground">{column.count}</span>
         <Button size="icon" variant="ghost" className="h-6 w-6"
           aria-label={t('tasks.board.column.collapse', 'Свернуть колонку')}
           onClick={props.onToggleCollapsed}>
           <ChevronsLeftRight className="h-3.5 w-3.5" />
         </Button>
-        <DropdownMenu>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button size="icon" variant="ghost" className="h-6 w-6"
               aria-label={t('tasks.board.column.menu', 'Действия с колонкой')}>
@@ -110,12 +119,12 @@ export function BoardColumn(props: BoardColumnProps) {
                           className={cn('h-7 rounded-md ring-offset-2',
                             column.color === color && 'ring-2 ring-foreground')}
                           style={swatchStyle(color)}
-                          onClick={() => props.onSetColor(color)}
+                          onClick={() => setColor(color)}
                         />
                       ))}
                     </div>
                     <Button variant="ghost" size="sm" className="mt-2 w-full"
-                      onClick={() => props.onSetColor(null)}>
+                      onClick={() => setColor(null)}>
                       {t('tasks.board.column.noColor', 'Без цвета')}
                     </Button>
                   </DropdownMenuSubContent>
@@ -135,9 +144,9 @@ export function BoardColumn(props: BoardColumnProps) {
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className={cn('min-h-[8px] flex-1 space-y-2 overflow-y-auto px-2 pb-1',
-              snapshot.isDraggingOver && 'rounded-lg bg-black/5 dark:bg-white/5',
-              props.dropDisabled && 'opacity-60')}
+            // Без своей прокрутки: прокручивается холст (см. BoardCanvas).
+            className={cn('min-h-[16px] space-y-2 px-2 pb-1',
+              snapshot.isDraggingOver && 'rounded-lg bg-black/5 dark:bg-white/5')}
           >
             {column.cards.map((card, index) => (
               <Draggable key={card.id} draggableId={String(card.id)} index={index}
@@ -177,7 +186,6 @@ export function BoardColumn(props: BoardColumnProps) {
           {t('tasks.board.column.empty', 'Карточек нет')}
         </p>
       )}
-      <span className="sr-only"><Plus /></span>
     </section>
   );
 }

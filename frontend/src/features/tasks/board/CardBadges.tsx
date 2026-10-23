@@ -26,6 +26,12 @@ export function CardBadges({ card }: { card: BoardCard }) {
   const locale = i18n.language?.startsWith('en') ? enUS : ru;
   const tone = dueTone(card);
   const { checklist_done: done, checklist_total: total, comments, attachments } = card.counts;
+  // Обычный приоритет на карточке не пишем: значок на каждой карточке —
+  // шум, который глушит срочные.
+  const showPriority = card.priority !== 'medium';
+  if (!tone && !card.has_description && !comments && !attachments && !total && !showPriority) {
+    return null;
+  }
 
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
@@ -63,12 +69,14 @@ export function CardBadges({ card }: { card: BoardCard }) {
           <CheckSquare className="h-3.5 w-3.5" />{done}/{total}
         </span>
       )}
-      <span
-        className="rounded px-1.5 py-0.5 font-medium"
-        style={{ backgroundColor: `${priorityHex(card.priority)}2b`, color: priorityHex(card.priority) }}
-      >
-        {t('tasks.board.badge.priority', 'Приоритет')}: {priorityLabel(card.priority, t)}
-      </span>
+      {showPriority && (
+        <span
+          className="rounded px-1.5 py-0.5 font-medium"
+          style={{ backgroundColor: `${priorityHex(card.priority)}2b`, color: priorityHex(card.priority) }}
+        >
+          {t('tasks.board.badge.priority', 'Приоритет')}: {priorityLabel(card.priority, t)}
+        </span>
+      )}
     </div>
   );
 }

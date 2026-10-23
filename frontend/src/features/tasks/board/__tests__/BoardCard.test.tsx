@@ -59,6 +59,16 @@ describe('BoardCard', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it('обычный приоритет на карточке не пишется', () => {
+    renderCard({ priority: 'medium' });
+    expect(screen.queryByText(/Приоритет/)).not.toBeInTheDocument();
+  });
+
+  it('высокий приоритет виден на карточке', () => {
+    renderCard({ priority: 'high' });
+    expect(screen.getByText(/Приоритет/)).toBeInTheDocument();
+  });
+
   it('клик по карточке открывает её', async () => {
     const { onOpen } = renderCard();
     await userEvent.click(screen.getByText('Согласовать смету'));

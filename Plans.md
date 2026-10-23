@@ -154,29 +154,29 @@ Spec delta (Phase K, этап 1):
 
 ## Phase K2: канбан-доски в стиле Trello с автоматизацией (ветка `ruslan`, с 22.10)
 
-План: [docs/plans/2026-10-22-kanban-trello-automation-plan.md](docs/plans/2026-10-22-kanban-trello-automation-plan.md) (решения K-34…K-40, этапы S1–S6) поверх [мастер-плана канбана](docs/plans/2026-10-21-kanban-boards-master-plan.md) (K-01…K-33); весь оставшийся канбан — Руслан, Санжар его не трогает (решение пользователя 22.10). Этап S1 — [план и итог](docs/plans/2026-10-22-kanban-s1-boards-plan.md). Коммиты и пуш — только по команде пользователя.
+План: [docs/plans/2026-10-22-kanban-trello-automation-plan.md](docs/plans/2026-10-22-kanban-trello-automation-plan.md) (решения K-34…K-40, этапы S1–S6) поверх [мастер-плана канбана](docs/plans/2026-10-21-kanban-boards-master-plan.md) (K-01…K-33); весь оставшийся канбан — Руслан, Санжар его не трогает (решение пользователя 22.10). Этап S1 — [план и итог](docs/plans/2026-10-22-kanban-s1-boards-plan.md) (`08837efd`, живая проверка 23.10). Коммиты и пуш — только по команде пользователя.
 
 | Task | 内容 | DoD | Depends | Status |
 |------|------|-----|---------|--------|
-| S1.1 | `BoardCardRank`, `TaskAssignee.seen_at` (`tasks/0028`, `0029`) | `makemigrations --check` чисто | K1.7 | cc:完了 [не закоммичено] |
-| S1.2 | Дробные ранги `services/board_rank.py` | `test_board_rank.py` зелёный | - | cc:完了 [не закоммичено] |
-| S1.3 | Колонки доски K-34: `BoardSettings` (`tasks/0030`), схемы | `test_boards_api.py` зелёный | S1.1 | cc:完了 [не закоммичено] |
-| S1.4 | Администратор доски K-39, узел `tasks.boards.admin` (`access/0029`) | `test_tasks_boards_admin_node.py`, `test_gate.py` зелёные | - | cc:完了 [не закоммичено] |
-| S1.5 | Доски, фильтры, колонки, карточки (`board_service`, `views_boards`, `urls_boards`) | `test_boards_api.py` зелёный | S1.3, S1.4 | cc:完了 [не закоммичено] |
-| S1.6 | Перенос `move`, быстрое добавление, место при переносе в отдел, `seen` | `test_board_move.py`, `test_transfer.py`, `test_claim.py` зелёные | S1.5 | cc:完了 [не закоммичено] |
-| S1.7 | Смена статуса в журнале задачи, `seen_at` новых исполнителей | `test_tasks_api.py` зелёный | S1.1 | cc:完了 [не закоммичено] |
-| S1.8 | Фронт доски `features/tasks/board/**`, маршруты `/tasks/board*`, токены `--board-*`, переводы | vitest доски, `uxContract`, `translationKeys` зелёные; `tsc` — 148; eslint чисто | S1.5, S1.6 | cc:完了 [не закоммичено] |
-| S1.9 | Сторож копии `TRANSITIONS` на фронте | `test_transitions_mirror.py` зелёный | S1.8 | cc:完了 [не закоммичено] |
-| S1.10 | Хвосты слияния: `HRTaskDetail` (тост мимо `reportApiError`), `TransferDialog` (пустой список) | `uxContract.test.ts` зелёный | - | cc:完了 [не закоммичено] |
-| S1.11 | `API.md`, `STRUCTURE.md` §4.2, Trello-план, план S1, мастер-план (§1, §3.8) | — | S1.1–S1.10 | cc:完了 [не закоммичено] |
-| S1.12 | Живая проверка на стенде: `migrate_shared` + `migrate_companies` после дампа, доска отдела и личная в браузере | сценарии плана S1 пройдены | S1.11, «да» пользователя | cc:TODO |
+| S1.1 | `BoardCardRank`, `TaskAssignee.seen_at` (`tasks/0028`, `0029`) | `makemigrations --check` чисто | K1.7 | cc:完了 [08837efd] |
+| S1.2 | Дробные ранги `services/board_rank.py` | `test_board_rank.py` зелёный | - | cc:完了 [08837efd] |
+| S1.3 | Колонки доски K-34: `BoardSettings` (`tasks/0030`), схемы | `test_boards_api.py` зелёный | S1.1 | cc:完了 [08837efd] |
+| S1.4 | Администратор доски K-39, узел `tasks.boards.admin` (`access/0029`) | `test_tasks_boards_admin_node.py`, `test_gate.py` зелёные | - | cc:完了 [08837efd] |
+| S1.5 | Доски, фильтры, колонки, карточки (`board_service`, `views_boards`, `urls_boards`) | `test_boards_api.py` зелёный | S1.3, S1.4 | cc:完了 [08837efd] |
+| S1.6 | Перенос `move`, быстрое добавление, место при переносе в отдел, `seen` | `test_board_move.py`, `test_transfer.py`, `test_claim.py` зелёные | S1.5 | cc:完了 [08837efd] |
+| S1.7 | Смена статуса в журнале задачи, `seen_at` новых исполнителей | `test_tasks_api.py` зелёный | S1.1 | cc:完了 [08837efd] |
+| S1.8 | Фронт доски `features/tasks/board/**`, маршруты `/tasks/board*`, токены `--board-*`, переводы | vitest доски, `uxContract`, `translationKeys` зелёные; `tsc` — 148; eslint чисто | S1.5, S1.6 | cc:完了 [08837efd] |
+| S1.9 | Сторож копии `TRANSITIONS` на фронте | `test_transitions_mirror.py` зелёный | S1.8 | cc:完了 [08837efd] |
+| S1.10 | Хвосты слияния: `HRTaskDetail` (тост мимо `reportApiError`), `TransferDialog` (пустой список) | `uxContract.test.ts` зелёный | - | cc:完了 [08837efd] |
+| S1.11 | `API.md`, `STRUCTURE.md` §4.2, Trello-план, план S1, мастер-план (§1, §3.8) | — | S1.1–S1.10 | cc:完了 [08837efd] |
+| S1.12 | Живая проверка на стенде: `migrate_shared` + `migrate_companies` после дампа, доска отдела и личная в браузере; исправлено найденное (вложенная прокрутка ломала перенос, затемнение колонок, приоритет на карточке, меню цвета) | сценарии плана S1 пройдены, `BoardColumn.test.tsx` зелёный | S1.11, «да» пользователя | cc:完了 [этот коммит] |
 | S2 | Окно карточки: чек-листы (`tasks/0031`), лента, уведомления и выключатель (`0032`), запросы доступа (`0033`), всплывающие окна | план S2 | S1 | cc:TODO |
 | S3 | Свои поля доски K-35 (`tasks/0034`), значения на карточке и в окне | план S3 | S2 | cc:TODO |
 | S4 | Движок автоматизации K-36…K-38 (`tasks/0035`), шаблон K-40 и команда | план S4 | S3 | cc:TODO |
 | S5 | Интерфейс автоматизации: панель, конструктор, кнопки, журнал | план S5 | S4 | cc:TODO |
 | S6 | Переключение и уборка: меню «Доски», `/tasks` → `/tasks/board`, «Мои задачи» в профиле, e2e `42_tasks_boards.spec.ts` | план S6 | S5 | cc:TODO |
 
-Хвосты S1: дозагруженные карточки пропадают при перезапросе доски; участники фильтра — из карточек доски; счётчики чек-листа — нули до S2; восемь старых падений vitest в кадровых диалогах (`CardT2SectionDialog`, `EmployeeFormDialog`) — вне канбана.
+Хвосты S1: длинная колонка прокручивается вместе с холстом (ограничение `@hello-pangea/dnd`); дозагруженные карточки пропадают при перезапросе доски; участники фильтра — из карточек доски; счётчики чек-листа — нули до S2; восемь старых падений vitest в кадровых диалогах (`CardT2SectionDialog`, `EmployeeFormDialog`) — вне канбана.
 
 ## 事前確認
 

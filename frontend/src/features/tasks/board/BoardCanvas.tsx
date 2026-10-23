@@ -104,7 +104,11 @@ export function BoardCanvas(props: BoardCanvasProps) {
 
   return (
     <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      <div className="flex h-full snap-x snap-mandatory items-start gap-3 overflow-x-auto px-4 pb-4 pt-3 sm:snap-none">
+      {/* Холст — ЕДИНСТВЕННЫЙ прокручиваемый контейнер (вбок и вниз):
+          `@hello-pangea/dnd` не поддерживает вложенные прокрутки, и колонка
+          со своей прокруткой внутри прокручиваемого холста ломала перенос
+          между колонками («unsupported nested scroll container»). */}
+      <div className="flex h-full items-start gap-3 overflow-auto px-4 pb-4 pt-3">
         {visible.map((column) => (
           <BoardColumn
             key={column.status}
