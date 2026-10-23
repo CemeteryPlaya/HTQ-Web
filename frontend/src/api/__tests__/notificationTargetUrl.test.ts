@@ -10,6 +10,13 @@ describe('notificationTargetUrl', () => {
       .toBe('/tasks/7');
   });
 
+  it('задача с доски ведёт в окно карточки на доске, старая — на страницу задачи', () => {
+    expect(notificationTargetUrl({ ...base, target_type: 'task', target_id: '7',
+      url: '/tasks/board?card=7&event=status' })).toBe('/tasks/board?card=7&event=status');
+    expect(notificationTargetUrl({ ...base, target_type: 'task', target_id: '7', url: null }))
+      .toBe('/tasks/7');
+  });
+
   it('цель без карты маршрутов ведёт по url писателя', () => {
     expect(notificationTargetUrl({ ...base, url: '/bpp/invoices/5' })).toBe('/bpp/invoices/5');
   });

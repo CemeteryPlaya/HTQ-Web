@@ -16,7 +16,9 @@ import type { TaskStatus } from '@/types/tasks';
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }));
 vi.mock('@/components/Header', () => ({ Header: () => null }));
-vi.mock('@/api/tasks', () => ({ fetchLabels: vi.fn().mockResolvedValue([]) }));
+const fetchTask = vi.hoisted(() => vi.fn());
+vi.mock('@/api/tasks', () => ({ fetchLabels: vi.fn().mockResolvedValue([]), fetchTask }));
+vi.mock('@/hooks/useActiveProfile', () => ({ useActiveProfile: () => ({ activeProfile: { id: '7' } }) }));
 
 const permissions = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/usePermissions', () => ({ usePermissions: () => permissions() }));
@@ -61,6 +63,11 @@ function serve(board: Board | Error) {
     if (url === 'tasks/v1/boards') {
       return Promise.resolve({ data: { personal: true, departments: [], projects: [] } });
     }
+    if (url.endsWith('access-requests/inbox')) {
+      return Promise.resolve({ data: { to_decide: [], mine: [], to_decide_count: 0 } });
+    }
+    if (url.endsWith('/access-requests')) return Promise.resolve({ data: [] });
+    if (url.endsWith('/feed')) return Promise.resolve({ data: { items: [], next_before: null } });
     return board instanceof Error ? Promise.reject(board) : Promise.resolve({ data: board });
   });
 }
@@ -83,6 +90,19 @@ beforeEach(() => {
 });
 
 describe('BoardsPage', () => {
+  it('?card открывает окно карточки поверх доски', async () => {
+    serve(boardResponse());
+    fetchTask.mockResolvedValue({
+      id: 11, key: 'T-11', summary: 'Подготовить отчёт', description: '', status: 'todo',
+      priority: 'medium', labels: [], assignees: [], watchers: [], checklists: [],
+      start_date: null, due_date: null, can: { comment: true },
+    });
+    renderAt('/tasks/board?card=11');
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('T-11')).toBeInTheDocument();
+    expect(fetchTask).toHaveBeenCalledWith(11);
+  });
+
   it('показывает колонки с названиями доски и прячет скрытые', async () => {
     serve(boardResponse());
     renderAt('/tasks/board');

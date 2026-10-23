@@ -64,7 +64,8 @@ def test_transfer_notifies_target_head_who_can_open_it(org):
     task = _in_review_task(org)
     _transfer(as_user(HEAD_IT), task.pk, department_id=org.ops.id)
     note = Notification.objects.get(recipient_id=HEAD_OPS)
-    assert note.title.startswith("task_transferred:")
+    assert note.title.startswith("В ваш отдел передана задача:")
+    assert "event=transfer" in note.url
     assert Client().get(f"{BASE}/tasks/{task.pk}/", **as_user(HEAD_OPS)).status_code == 200
 
 

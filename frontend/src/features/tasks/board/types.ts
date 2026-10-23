@@ -64,6 +64,8 @@ export interface BoardCard {
   my_role: 'assignee' | 'supervisor' | 'reporter' | 'delegate' | 'watcher' | null;
   /** Может ли смотрящий двигать карточку между колонками. */
   can_move: boolean;
+  /** Полная правка: метки, участники, даты в быстрой правке. */
+  can_edit?: boolean;
 }
 
 export interface BoardColumn extends ColumnSetting {
@@ -80,6 +82,8 @@ export interface Board {
     title: string | null;
     color: string | null;
     settings: { columns: ColumnsSettings };
+    /** Уведомления о своих задачах доски (K-30); у личной — `null`. */
+    notifications_enabled?: boolean | null;
   };
   columns: BoardColumn[];
   can: { admin: boolean; reorder: boolean; create: boolean };

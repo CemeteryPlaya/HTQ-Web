@@ -1,11 +1,13 @@
 /**
  * Страница доски: `/tasks/board` (личная), `/tasks/board/department/:id`,
- * `/tasks/board/project/:id` (мастер-план §7.3, этап S1). Шапка, холст с
- * колонками, фильтр в адресе, быстрая правка и настройки колонок. Карточка
- * пока открывается страницей задачи; окно карточки (`?card=`) — этап S2.
+ * `/tasks/board/project/:id` (мастер-план §7.3). Шапка, холст с колонками,
+ * фильтр в адресе, быстрая правка, настройки колонок (этап S1); окно
+ * карточки по `?card=<id>`, панель «Запросы» по `?panel=requests`,
+ * выключатель уведомлений доски (этап S2).
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { Header } from '@/components/Header';
@@ -20,6 +22,12 @@ import { BoardHeader } from './BoardHeader';
 import { boardKeyFromPath } from './boardRoutes';
 import { BoardSettingsDialog } from './BoardSettingsDialog';
 import { canvasStyle } from './boardColors';
+import { cardKeys } from './card/api';
+import { CardModal } from './card/CardModal';
+import {
+  useBoardNotifications, useCardParam, usePanelParam, useQuickCardEdit, useRequestsInbox,
+} from './card/hooks';
+import { TasksRequestsPanel } from './card/TasksRequestsPanel';
 import { CardQuickEdit } from './CardQuickEdit';
 import { FilterDrawer } from './FilterDrawer';
 import {
@@ -82,7 +90,7 @@ export default function BoardsPage() {
 
 function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const permissions = usePermissions();
   const elevated = permissions.atLeast('tasks', 'admin');
   const { filters, setFilters, reset, active } = useBoardFilters();
@@ -92,6 +100,11 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
   const saveColumns = useSaveColumns(boardKey);
   const loadMore = useLoadMoreColumn(boardKey, filters);
   const rename = useRenameCard(boardKey);
+  const quickEdit = useQuickCardEdit();
+  const notifications = useBoardNotifications(boardKey);
+  const inbox = useRequestsInbox();
+  const cardParam = useCardParam();
+  const panel = usePanelParam();
   const [filterOpen, setFilterOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quick, setQuick] = useState<{ card: BoardCard; anchor: DOMRect } | null>(null);
@@ -122,7 +135,17 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
     move.mutate({ taskId: card.id, body: { status, before_id: before, after_id: after } });
   }, [move]);
 
-  const onOpenCard = useCallback((card: BoardCard) => navigate(`/tasks/${card.id}`), [navigate]);
+  const { open: openCard } = cardParam;
+  const onOpenCard = useCallback((card: BoardCard) => openCard(card.id), [openCard]);
+
+  /** Перенос из окна карточки: карточка на этой доске — переносом доски
+   * (место в колонке), иначе — сменой статуса задачи. */
+  const onModalMove = (task: { id: number }, status: TaskStatus) => {
+    const refreshCard = () => queryClient.invalidateQueries({ queryKey: cardKeys.card(task.id) });
+    const onBoard = board?.columns.some((column) => column.cards.some((card) => card.id === task.id));
+    if (onBoard) move.mutate({ taskId: task.id, body: { status } }, { onSettled: refreshCard });
+    else quickEdit.status.mutate({ taskId: task.id, status }, { onSettled: refreshCard });
+  };
 
   const onQuickEdit = useCallback((card: BoardCard, anchor: HTMLElement) => {
     const host = anchor.closest('[data-testid^="board-card-"]') ?? anchor;
@@ -162,6 +185,10 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
           onOpenFilter={() => setFilterOpen(true)}
           onResetFilter={reset}
           onOpenSettings={() => setSettingsOpen(true)}
+          notificationsEnabled={board?.board.notifications_enabled}
+          onToggleNotifications={(enabled) => notifications.mutate(enabled)}
+          requestsCount={inbox.data?.to_decide_count ?? 0}
+          onOpenRequests={() => panel.setOpen(true)}
         />
         {shown && active > 0 && shown.columns.every((column) => column.hidden || column.count === 0) && (
           <p className="px-4 pt-3 text-sm text-muted-foreground">
@@ -217,8 +244,25 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
           onOpen={onOpenCard}
           onMove={(card, status) => onMove(card, status, null, null)}
           onRename={(card, summary) => rename.mutate({ taskId: card.id, summary })}
+          onLabels={(card, ids) => quickEdit.labels.mutate({ taskId: card.id, ids })}
+          onDates={(card, dates) => quickEdit.dates.mutate({ taskId: card.id, ...dates })}
+          onCrew={(card, crew) => quickEdit.crew.mutate({ taskId: card.id, assignees: crew })}
         />
       )}
+      {cardParam.cardId !== null && (
+        <CardModal
+          taskId={cardParam.cardId}
+          columns={board?.columns ?? []}
+          onClose={cardParam.close}
+          onMove={onModalMove}
+        />
+      )}
+      <TasksRequestsPanel
+        open={panel.open}
+        onOpenChange={panel.setOpen}
+        onOpenCard={openCard}
+        departmentId={boardKey.kind === 'department' && board?.can.admin ? boardKey.id : null}
+      />
     </div>
   );
 }

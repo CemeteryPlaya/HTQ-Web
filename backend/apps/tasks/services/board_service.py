@@ -41,6 +41,7 @@ from ..models import (
     TRANSITIONS,
     BoardCardRank,
     BoardKind,
+    BoardNotificationMute,
     BoardSettings,
     DepartmentLinkKind,
     Project,
@@ -48,6 +49,7 @@ from ..models import (
     Task,
     TaskAssignee,
     TaskAttachment,
+    TaskChecklistItem,
     TaskComment,
 )
 from . import board_rank
@@ -285,6 +287,14 @@ def _count(model, **lookup):
         .values("task").annotate(n=Count("pk")).values("n")[:1]), 0)
 
 
+def _checklist_count(**lookup):
+    """Пункты чек-листов задачи — тем же коррелированным подзапросом, что
+    комментарии: джойн множил бы строки доски."""
+    return Coalesce(Subquery(
+        TaskChecklistItem.objects.filter(checklist__task=OuterRef("pk"), **lookup).order_by()
+        .values("checklist__task").annotate(n=Count("pk")).values("n")[:1]), 0)
+
+
 def _rank_subquery(board: Board):
     return Subquery(BoardCardRank.objects.filter(
         board_kind=board.kind, board_id=board.id, task=OuterRef("pk")).values("rank")[:1])
@@ -300,6 +310,8 @@ def _annotated(qs, board: Board):
         board_rank=_rank_subquery(board),
         comments_count=_count(TaskComment),
         attachments_count=_count(TaskAttachment),
+        checklist_total=_checklist_count(),
+        checklist_done=_checklist_count(is_done=True),
     )
     if board.kind == BoardKind.PERSONAL:
         qs = qs.annotate(is_new=Exists(TaskAssignee.objects.filter(
@@ -311,19 +323,25 @@ def _annotated(qs, board: Board):
 
 # ── карточка ────────────────────────────────────────────────────────────
 
-def _can_progress(task: Task, scope) -> bool:
-    """``task_service.can_progress`` по уже загруженным связям — без запроса
-    на карточку."""
+def _can_full(task: Task, scope) -> bool:
+    """``task_service.can_edit`` по уже загруженным связям — без запроса на
+    карточку: полная правка (метки, участники, даты быстрой правки)."""
     if scope.elevated:
         return True
     uid = scope.user_id
-    if uid in (task.reporter_id, task.supervisor_id, task.assignee_id):
+    if uid in (task.reporter_id, task.supervisor_id):
         return True
     if task_service.is_head_of(task, scope):
         return True
-    if any(row.user_id == uid for row in task.delegates.all()):
+    return any(row.user_id == uid for row in task.delegates.all())
+
+
+def _can_progress(task: Task, scope) -> bool:
+    """``task_service.can_progress`` по уже загруженным связям — без запроса
+    на карточку."""
+    if _can_full(task, scope) or task.assignee_id == scope.user_id:
         return True
-    return any(row.user_id == uid for row in task.assignees.all())
+    return any(row.user_id == scope.user_id for row in task.assignees.all())
 
 
 def _relation(task: Task, board: Board) -> str | None:
@@ -399,9 +417,8 @@ def card(task: Task, board: Board, scope, ctx: _Ctx) -> dict:
         "counts": {
             "comments": task.comments_count,
             "attachments": task.attachments_count,
-            # Чек-листы — этап S2 (``tasks/0031``).
-            "checklist_done": 0,
-            "checklist_total": 0,
+            "checklist_done": task.checklist_done,
+            "checklist_total": task.checklist_total,
         },
         "members": _members(task, ctx),
         "project": ({"id": task.project.id, "name": task.project.name,
@@ -416,6 +433,7 @@ def card(task: Task, board: Board, scope, ctx: _Ctx) -> dict:
         "is_new": bool(getattr(task, "is_new", False)) if personal_board else False,
         "my_role": _my_role(task, board.id) if personal_board else None,
         "can_move": _can_progress(task, scope),
+        "can_edit": _can_full(task, scope),
     }
 
 
@@ -491,6 +509,7 @@ def build_board(request, board: Board, filters: Filters) -> dict:
             "title": board.title,
             "color": board.project.color if board.project is not None else None,
             "settings": {"columns": settings},
+            "notifications_enabled": notifications_enabled(request, board),
         },
         "columns": columns,
         "can": {
@@ -777,3 +796,44 @@ def save_settings(request, board: Board, data: schemas.BoardSettingsIn) -> dict:
         board_kind=board.kind, board_id=board.id,
         defaults={"columns": columns, "updated_by": request.token.user_id})
     return {"columns": columns_settings(board)}
+
+
+# ── уведомления по доске (K-30) ─────────────────────────────────────────
+
+def notifications_enabled(request, board: Board) -> bool | None:
+    """Включены ли у вызывающего уведомления о его задачах этой доски.
+    У личной доски выключателя нет — ``None``."""
+    if board.kind == BoardKind.PERSONAL:
+        return None
+    return not BoardNotificationMute.objects.filter(
+        board_kind=board.kind, board_id=board.id, user_id=request.token.user_id).exists()
+
+
+def set_notifications(request, board: Board, enabled: bool) -> dict:
+    """Включить или выключить уведомления по доске; право — видимость доски
+    (её уже проверил ``department``/``project``, 404 иначе). Идемпотентно."""
+    if board.kind == BoardKind.PERSONAL:
+        raise DomainError("board_notifications_personal",
+                          "Уведомления по личной доске не выключаются", status=422)
+    rows = BoardNotificationMute.objects.filter(
+        board_kind=board.kind, board_id=board.id, user_id=request.token.user_id)
+    if enabled:
+        rows.delete()
+    else:
+        BoardNotificationMute.objects.get_or_create(
+            board_kind=board.kind, board_id=board.id, user_id=request.token.user_id)
+    return {"enabled": enabled}
+
+
+def muted_boards(request) -> list[dict]:
+    """Доски, по которым у вызывающего выключены уведомления. Доска, к которой
+    доступ потерян, не отдаётся (как и не открывается)."""
+    out = []
+    for row in (BoardNotificationMute.objects.filter(user_id=request.token.user_id)
+                .order_by("board_kind", "board_id")):
+        try:
+            board = resolve(request, row.board_kind, row.board_id)
+        except Http404:
+            continue
+        out.append({"board": {"kind": board.kind, "id": board.id, "title": board.title}})
+    return out

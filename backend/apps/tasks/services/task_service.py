@@ -34,9 +34,6 @@ from django.http import Http404
 from htqweb.errors import DomainError
 from django.utils import timezone
 
-from apps.notifications import interface as notifications
-from htqweb.tenancy.context import current_company_or_none
-
 from ..models import (
     AssigneeRole,
     DepartmentLinkKind,
@@ -56,6 +53,7 @@ from . import department_rules
 from . import hydration
 from . import roadmap_service
 from . import site_service
+from . import task_notify
 from . import task_scope
 from .reference_service import resolve_task_type_id
 from .sequence_service import due_date_from_working_days, next_task_key
@@ -413,6 +411,7 @@ def claim(task_id: int, request) -> Task:
     _log(task, user_id, "claim", None, user_id)
     _log(task, user_id, "assignee_id", None, user_id)
     _log(task, user_id, "status", old_status, task.status)
+    task_notify.claimed(task, user_id)
     return task
 
 
@@ -465,21 +464,6 @@ def _compose_initial_crew(primary_id: int | None,
             if by_user[uid] == AssigneeRole.PRIMARY and uid not in explicit_primary:
                 by_user[uid] = AssigneeRole.COLLABORATOR
     return list(by_user.items())
-
-
-def _notify(recipient_id: int, actor_id: int | None, task: Task,
-            verb: str) -> None:
-    """Best-effort notification. The original swallowed every failure here
-    so a notification problem could never fail the mutation that caused it —
-    kept, but logged rather than silently passed."""
-    try:
-        # Лента — в центре уведомлений (A1.5), только колокольчик, как было.
-        notifications.notify(
-            recipients=[recipient_id], event="tasks.task", title=verb,
-            company_slug=current_company_or_none(), target_type="task",
-            target_id=str(task.id), actor_id=actor_id, deliver=False)
-    except Exception:
-        logger.exception("tasks: failed to write notification %r", verb)
 
 
 def _log(task: Task, actor_id: int | None, field_name: str,
@@ -595,8 +579,9 @@ def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
          for uid, role in crew]
     )
 
-    for uid, _role in crew:
-        _notify(uid, user_id, task, f"task_assigned:{task.key}")
+    task_notify.assignees_added(
+        task, user_id, [uid for uid, _role in crew],
+        primary_id=next((uid for uid, role in crew if role == AssigneeRole.PRIMARY), None))
 
     return task
 
@@ -615,6 +600,8 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
     changes = data.model_dump(exclude_unset=True)
     label_ids = changes.pop("label_ids", None)
     department_ids = changes.pop("department_ids", None)
+    status_changed = False
+    old_assignee_id = task.assignee_id
 
     slug = changes.pop("task_type", None)
     if slug is not None and "task_type_id" not in changes:
@@ -682,9 +669,7 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
         # это решение снято вместе с досками.
         if old_status != task.status:
             _log(task, user_id, "status", old_status, task.status)
-        if task.assignee_id:
-            _notify(task.assignee_id, user_id, task,
-                    f"status_changed:{task.key}")
+            status_changed = True
 
     for field_name in TRACKED_FIELDS:
         if field_name in changes:
@@ -703,9 +688,6 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
 
     if "assignee_id" in changes:
         _sync_primary_assignee(task, changes["assignee_id"], actor_id=user_id)
-        if changes["assignee_id"]:
-            _notify(changes["assignee_id"], user_id, task,
-                    f"task_assigned:{task.key}")
 
     if label_ids is not None:
         task.labels.set(Label.objects.filter(id__in=label_ids))
@@ -719,6 +701,12 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
                 task=task, department_id=department_id,
                 defaults={"kind": DepartmentLinkKind.MEMBER})
 
+    # Уведомления — после всех правок: получатели — участники уже
+    # изменённой задачи (K-29).
+    if task.assignee_id != old_assignee_id:
+        task_notify.primary_changed(task, user_id, task.assignee_id)
+    if status_changed:
+        task_notify.status_changed(task, user_id, task.status)
     return task
 
 
@@ -801,6 +789,7 @@ def replace_assignees(task_id: int, assignments: list,
 
     existing = {row.user_id: row for row in task.assignees.all()}
     new_ids = {a.user_id for a in assignments}
+    added = []
 
     task.assignees.exclude(user_id__in=new_ids).delete()
 
@@ -815,14 +804,18 @@ def replace_assignees(task_id: int, assignments: list,
             TaskAssignee.objects.create(
                 task=task, user_id=a.user_id, role=a.role,
                 seen_at=timezone.now() if a.user_id == actor_id else None)
-            _notify(a.user_id, actor_id, task, f"task_assigned:{task.key}")
+            added.append(a.user_id)
 
     primary = next((a.user_id for a in assignments
                     if a.role == AssigneeRole.PRIMARY), None)
-    if task.assignee_id != primary:
+    primary_changed = task.assignee_id != primary
+    if primary_changed:
         _log(task, actor_id, "assignee_id", task.assignee_id, primary)
         task.assignee_id = primary
         task.save(update_fields=["assignee_id", "updated_at"])
+    task_notify.assignees_added(task, actor_id, added, primary_id=primary)
+    if primary_changed and primary not in added:
+        task_notify.primary_changed(task, actor_id, primary)
     return task
 
 
@@ -838,8 +831,7 @@ def set_supervisor(task_id: int, supervisor_id: int | None,
     _log(task, actor_id, "supervisor_id", task.supervisor_id, supervisor_id)
     task.supervisor_id = supervisor_id
     task.save(update_fields=["supervisor_id", "updated_at"])
-    if supervisor_id:
-        _notify(supervisor_id, actor_id, task, f"task_supervisor_set:{task.key}")
+    task_notify.supervisor_set(task, actor_id, supervisor_id)
     return task
 
 
@@ -854,7 +846,7 @@ def add_delegate(task_id: int, user_id: int, granted_by: int | None) -> Task:
     TaskDelegate.objects.create(task=task, user_id=user_id,
                                 granted_by_id=granted_by)
     _log(task, granted_by, "delegates", None, f"+{user_id}")
-    _notify(user_id, granted_by, task, f"task_delegated:{task.key}")
+    task_notify.delegated(task, granted_by, user_id)
     return task
 
 

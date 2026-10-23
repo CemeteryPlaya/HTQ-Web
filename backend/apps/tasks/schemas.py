@@ -1005,6 +1005,141 @@ class BoardSettingsIn(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class BoardNotificationsIn(BaseModel):
+    """Уведомления о своих задачах доски: включить или выключить (K-30)."""
+
+    enabled: bool
+
+    model_config = {"extra": "forbid"}
+
+
+# ── запросы доступа (K-31, мастер-план §6.2, этап S2) ──────────────────
+
+class AccessRequestIn(BaseModel):
+    kind: Literal["execute", "own"]
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class AccessApproveIn(BaseModel):
+    """``mode`` — для «владения» обязателен (с заменой или делегатом), для
+    «исполнения» — только замена (422 ``task_access_mode`` иначе)."""
+
+    mode: Literal["replace", "delegate"] | None = None
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class AccessRejectIn(BaseModel):
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+# ── чек-листы (мастер-план §6.3, этап S2) ──────────────────────────────
+
+def _not_blank(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        raise ValueError("Пустое значение")
+    return value
+
+
+class ChecklistIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+
+class ChecklistPatch(BaseModel):
+    """Название и/или место среди чек-листов задачи. ``before_id`` — чек-лист
+    над местом вставки, ``after_id`` — под ним; присланный хотя бы один из
+    них (пусть ``null``) — значит «переставить»."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+class ChecklistItemIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+
+class ChecklistDoneBy(BaseModel):
+    id: int
+    name: str | None = None
+
+
+class ChecklistItemOut(BaseModel):
+    id: int
+    text: str
+    is_done: bool = False
+    done_by: ChecklistDoneBy | None = None
+    done_at: datetime | None = None
+    position: str
+
+
+class ChecklistOut(BaseModel):
+    """Чек-лист целиком — ответ каждой ручки чек-листов и поле карточки."""
+
+    id: int
+    title: str
+    position: str
+    items: list[ChecklistItemOut] = []
+    done: int = 0
+    total: int = 0
+
+
+class ChecklistItemPatch(BaseModel):
+    """Текст, отметка, перенос в другой чек-лист той же задачи, место."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=500)
+    is_done: bool | None = None
+    checklist_id: int | None = None
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
 # ``TaskCreate.board`` ссылается на ``BoardRef``, объявленную ниже неё.
 TaskCreate.model_rebuild()
 
@@ -1019,6 +1154,9 @@ class TaskCan(BaseModel):
     transfer: bool = False
     claim: bool = False
     delete: bool = False
+    # Запросы доступа (K-31): какие можно отправить и решает ли вызывающий.
+    request_access: list[str] = []
+    decide_access: bool = False
 
 
 class TaskListCan(BaseModel):
@@ -1173,6 +1311,10 @@ class TaskDetailResponse(BaseModel):
 
     can: TaskCan = TaskCan()
     department_links: list[TaskDepartmentLinkOut] = []
+    # Чек-листы (канбан S2, мастер-план §3.6).
+    checklists: list[ChecklistOut] = []
+    # Сколько ждущих запросов доступа вызывающий может решить (K-31).
+    pending_access_requests: int = 0
 
     model_config = {"from_attributes": True}
 

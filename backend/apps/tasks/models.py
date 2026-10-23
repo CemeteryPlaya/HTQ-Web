@@ -1275,6 +1275,128 @@ class BoardSettings(models.Model):
         ]
 
 
+class BoardNotificationMute(models.Model):
+    """Выключенные уведомления по доске (решение K-30, мастер-план §3.4).
+
+    Строка есть — человек не получает уведомлений о своих задачах этой доски
+    (доска отдела действует на поддерево), нет — получает. Личную доску
+    выключить нельзя; адресные события («вас назначили», запросы доступа)
+    приходят всегда.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    user_id = models.IntegerField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Выключенные уведомления доски"
+        verbose_name_plural = "Выключенные уведомления досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "user_id"],
+                                    name="uq_board_notification_mute"),
+        ]
+
+
+class TaskChecklist(models.Model):
+    """Чек-лист задачи (решение K-20, мастер-план §3.6). Порядок —
+    дробный ранг ``board_rank`` (``COLLATE "C"``), как у карточек."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="checklists")
+    title = models.CharField(max_length=200)
+    position = models.CharField(max_length=64, db_collation="C")
+    created_by_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Чек-лист задачи"
+        verbose_name_plural = "Чек-листы задач"
+        indexes = [models.Index(fields=["task", "position"], name="ix_task_checklist_order")]
+
+
+class TaskChecklistItem(models.Model):
+    """Пункт чек-листа. Отметка хранит, кто и когда отметил; снятая отметка
+    стирает обоих (ограничение ``ck_checklist_item_done``)."""
+
+    checklist = models.ForeignKey(TaskChecklist, on_delete=models.CASCADE,
+                                  related_name="items")
+    text = models.CharField(max_length=500)
+    is_done = models.BooleanField(default=False, db_default=False)
+    done_by_id = models.IntegerField(null=True, blank=True)
+    done_at = models.DateTimeField(null=True, blank=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    created_by_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Пункт чек-листа"
+        verbose_name_plural = "Пункты чек-листов"
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(is_done=True, done_at__isnull=False)
+                           | models.Q(is_done=False, done_at__isnull=True,
+                                      done_by_id__isnull=True)),
+                name="ck_checklist_item_done"),
+        ]
+        indexes = [models.Index(fields=["checklist", "position"],
+                                name="ix_checklist_item_order")]
+
+
+class AccessRequestKind(models.TextChoices):
+    EXECUTE = "execute", "На исполнение"
+    OWN = "own", "На владение"
+
+
+class AccessRequestStatus(models.TextChoices):
+    PENDING = "pending", "Ждёт решения"
+    APPROVED = "approved", "Одобрен"
+    REJECTED = "rejected", "Отклонён"
+    CANCELLED = "cancelled", "Отозван"
+
+
+class AccessApproveMode(models.TextChoices):
+    REPLACE = "replace", "С заменой"
+    DELEGATE = "delegate", "Делегатом"
+
+
+class TaskAccessRequest(models.Model):
+    """Запрос доступа к задаче (решение K-31, мастер-план §3.5): «на
+    исполнение» — стать основным исполнителем, «на владение» — руководителем
+    (с заменой) или делегатом. Решает первый из решающих своего вида; второй
+    получает 409. ``replaced_user_id`` — кого сняли при замене (история
+    отдела, K-32)."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="access_requests")
+    requester_id = models.IntegerField(db_index=True)
+    kind = models.CharField(max_length=10, choices=AccessRequestKind.choices)
+    comment = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=10, choices=AccessRequestStatus.choices,
+                              default=AccessRequestStatus.PENDING,
+                              db_default=AccessRequestStatus.PENDING)
+    approve_mode = models.CharField(max_length=10, choices=AccessApproveMode.choices,
+                                    null=True, blank=True)
+    replaced_user_id = models.IntegerField(null=True, blank=True)
+    decided_by_id = models.IntegerField(null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_comment = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запрос доступа к задаче"
+        verbose_name_plural = "Запросы доступа к задачам"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "requester_id", "kind"],
+                condition=models.Q(status="pending"),
+                name="uq_task_access_request_pending"),
+        ]
+        indexes = [models.Index(fields=["status", "created_at"],
+                                name="ix_task_access_request_status")]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Task-attached records
 # ─────────────────────────────────────────────────────────────────────────

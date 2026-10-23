@@ -26,6 +26,7 @@ from ..models import (Task, TaskActivity, TaskAttachment, TaskComment,
 from . import block_service
 from . import daily_report_service
 from . import hydration
+from . import task_notify
 
 
 def _require_task(task_id: int) -> Task:
@@ -50,9 +51,11 @@ def list_comments(task_id: int) -> list[schemas.CommentResponse]:
 
 def create_comment(task_id: int, body: str,
                    author_id: int | None) -> schemas.CommentResponse:
-    _require_task(task_id)
+    task = _require_task(task_id)
     row = TaskComment.objects.create(task_id=task_id, author_id=author_id,
                                      body=body)
+    # Новый комментарий — событие для участников задачи (K-30).
+    task_notify.commented(task, author_id, body)
     users = hydration.user_briefs([author_id])
     return schemas.CommentResponse.model_validate({
         "id": row.id, "task_id": row.task_id, "author_id": row.author_id,

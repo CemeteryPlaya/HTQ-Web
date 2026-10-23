@@ -207,7 +207,10 @@ def test_create_task_notifies_the_crew():
     post_json(Client(), f"{BASE}/tasks/",
               {"summary": "N", "assignee_id": 11}, **auth())
     note = Notification.objects.get(recipient_id=11)
-    assert note.title.startswith("task_assigned:")
+    # Заголовок — готовая фраза для колокольчика, код события — в ссылке
+    # (канбан S2, ``services/task_notify.py``).
+    assert note.title.startswith("Вас назначили основным исполнителем:")
+    assert "event=assignee_added" in note.url
     assert note.target_type == "task"
 
 

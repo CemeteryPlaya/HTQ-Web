@@ -21,6 +21,8 @@ from ..models import (DepartmentLinkKind, Status, TERMINAL_STATUSES, Task, TaskA
                       TaskDepartmentLink)
 from . import board_service
 from . import department_rules
+from . import hydration
+from . import task_notify
 from . import task_scope
 from . import task_service
 
@@ -48,16 +50,16 @@ def _sender(task: Task, scope, sender_department_id: int | None) -> int | None:
     return min(scope.managed_ids) if scope.managed_ids else None
 
 
-def _notify_target_head(task: Task, department_id: int, actor_id: int) -> None:
+def _notify_transfer(task: Task, department_id: int, actor_id: int) -> None:
     try:
         heads = hr.department_manager_user_ids([department_id])
     except ServiceDisabled as exc:
         heads = fallback("tasks.transfer.manager_lookup", {},
                          reason="hr выключен — глава отдела-получателя не найден",
                          expected=True, exc=exc)
-    head = heads.get(department_id)
-    if head is not None and head != actor_id:
-        task_service._notify(head, actor_id, task, f"task_transferred:{task.key}")
+    name = hydration.department_name(hydration.department_briefs([department_id]),
+                                     department_id)
+    task_notify.transferred(task, actor_id, name, heads.get(department_id))
 
 
 @transaction.atomic
@@ -112,5 +114,5 @@ def transfer(task_id: int, target_department_id: int, request, *,
     # в конец «К выполнению» (мастер-план §5.5, шаг 7).
     board_service.forget_department_ranks(task.id)
     board_service.place_on_department(target_department_id, task)
-    _notify_target_head(task, target_department_id, actor)
+    _notify_transfer(task, target_department_id, actor)
     return task

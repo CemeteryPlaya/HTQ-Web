@@ -171,7 +171,9 @@
         "created_at": "str",
         "updated_at": "str",
         "can": "dict",
-        "department_links": "list"
+        "department_links": "list",
+        "checklists": "list",
+        "pending_access_requests": "int"
       }
     },
     "TaskStats": {

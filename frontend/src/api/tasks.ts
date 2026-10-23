@@ -953,7 +953,12 @@ export const deleteNotification = async (id: string): Promise<void> => {
 export const notificationTargetUrl = (
   n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb' | 'url'>,
 ): string | null => {
-  if (n.target_type === 'task' && n.target_id) return `/tasks/${n.target_id}`;
+  // Уведомления о задачах с канбан-досок (этап S2) ведут на доску с окном
+  // карточки — их ссылку положил писатель; старые строки — на страницу задачи.
+  if (n.target_type === 'task' && n.target_id) {
+    if (n.url && n.url.startsWith('/tasks/board?')) return n.url;
+    return `/tasks/${n.target_id}`;
+  }
   if (n.target_type === 'calendar_event' && n.target_id)
     return `/calendar?event=${n.target_id}`;
   if (n.target_type === 'employee' && n.target_id)

@@ -1,11 +1,11 @@
 /**
  * Быстрая правка (Trello «карандаш»): доска затемняется, карточка остаётся на
- * своём месте с полем названия, справа — действия. На этапе S1 — «Открыть»,
- * «Переместить» (только разрешённые схемой переходов колонки) и «Копировать
- * ссылку»; метки, участники и даты придут с окном карточки (S2).
+ * своём месте с полем названия, справа — действия: «Открыть», метки,
+ * участники и даты (при полной правке), «Переместить» (только разрешённые
+ * схемой переходов колонки), «Копировать ссылку».
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowRightLeft, ExternalLink, Link2 } from 'lucide-react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowRightLeft, Clock, ExternalLink, Link2, Tag, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -17,6 +17,9 @@ import type { TaskStatus } from '@/types/tasks';
 
 import { swatchStyle } from './boardColors';
 import { cardLink, useColumnTitle } from './boardUtils';
+import { DatesPopover } from './card/DatesPopover';
+import { LabelsPopover } from './card/LabelsPopover';
+import { type Crew, MembersPopover } from './card/MembersPopover';
 import type { BoardCard, BoardColumn } from './types';
 
 const CARD_WIDTH = 256;
@@ -30,9 +33,14 @@ export interface CardQuickEditProps {
   onOpen: (card: BoardCard) => void;
   onMove: (card: BoardCard, status: TaskStatus) => void;
   onRename: (card: BoardCard, summary: string) => void;
+  onLabels: (card: BoardCard, ids: number[]) => void;
+  onDates: (card: BoardCard, dates: { start_date: string | null; due_date: string | null }) => void;
+  onCrew: (card: BoardCard, crew: Crew) => void;
 }
 
-export function CardQuickEdit({ card, anchor, columns, onClose, onOpen, onMove, onRename }: CardQuickEditProps) {
+export function CardQuickEdit({
+  card, anchor, columns, onClose, onOpen, onMove, onRename, onLabels, onDates, onCrew,
+}: CardQuickEditProps) {
   const { t } = useTranslation();
   const columnTitle = useColumnTitle();
   const [text, setText] = useState(card.summary);
@@ -105,6 +113,18 @@ export function CardQuickEdit({ card, anchor, columns, onClose, onOpen, onMove, 
           <QuickButton icon={ExternalLink} onClick={() => { onClose(); onOpen(card); }}>
             {t('tasks.board.quick.open', 'Открыть карточку')}
           </QuickButton>
+          {card.can_edit && (
+            <>
+              <LabelsPopover selected={card.labels.map((label) => label.id)}
+                onChange={(ids) => onLabels(card, ids)}
+                trigger={<QuickButton icon={Tag}>{t('tasks.card.add.labels', 'Метки')}</QuickButton>} />
+              <MembersPopover assignees={card.members} onChange={(crew) => onCrew(card, crew)}
+                trigger={<QuickButton icon={Users}>{t('tasks.card.add.members', 'Участники')}</QuickButton>} />
+              <DatesPopover startDate={card.start_date} dueDate={card.due_date}
+                onSave={(dates) => onDates(card, dates)}
+                trigger={<QuickButton icon={Clock}>{t('tasks.card.add.dates', 'Даты')}</QuickButton>} />
+            </>
+          )}
           {card.can_move && (
             <QuickButton icon={ArrowRightLeft} onClick={() => setMoving((value) => !value)}
               pressed={moving}>
@@ -139,18 +159,21 @@ export function CardQuickEdit({ card, anchor, columns, onClose, onOpen, onMove, 
   );
 }
 
-function QuickButton({ icon: Icon, onClick, pressed = false, children }: {
+/** Кнопка боковой колонки; `forwardRef` — её открывают и всплывающие окна
+ * (`PopoverTrigger asChild` вешает ref и обработчики на неё саму). */
+const QuickButton = forwardRef<HTMLButtonElement, {
   icon: React.ComponentType<{ className?: string }>;
-  onClick: () => void;
   pressed?: boolean;
   children: React.ReactNode;
-}) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={pressed}
-      className={cn('flex items-center gap-2 rounded-md bg-black/70 px-3 py-1.5 text-sm font-medium text-white',
-        'transition hover:translate-x-0.5 hover:bg-black/85', pressed && 'bg-black/90')}>
-      <Icon className="h-4 w-4" />
-      {children}
-    </button>
-  );
-}
+} & React.ButtonHTMLAttributes<HTMLButtonElement>>(
+  function QuickButton({ icon: Icon, pressed = false, children, className, ...rest }, ref) {
+    return (
+      <button ref={ref} type="button" aria-pressed={pressed} {...rest}
+        className={cn('flex items-center gap-2 rounded-md bg-black/70 px-3 py-1.5 text-sm font-medium text-white',
+          'transition hover:translate-x-0.5 hover:bg-black/85', pressed && 'bg-black/90', className)}>
+        <Icon className="h-4 w-4" />
+        {children}
+      </button>
+    );
+  },
+);

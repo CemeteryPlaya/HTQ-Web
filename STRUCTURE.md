@@ -641,9 +641,23 @@ services/board_service.py  какая доска и кто её видит (404)
                            move() (смена колонки = смена статуса по TRANSITIONS), место новой
                            задачи, администратор доски (K-39: глава отдела, владелец проекта,
                            узел tasks.boards.admin, elevated)
-views_boards.py / urls_boards.py   /api/tasks/v1/boards*, tasks/{id}/move, tasks/{id}/seen (API.md)
+views_boards.py / urls_boards.py   /api/tasks/v1/boards*, tasks/{id}/move, tasks/{id}/seen, tasks/{id}/feed,
+                                   boards/*/notifications (API.md)
 ```
-Фронт — [frontend/src/features/tasks/board/](frontend/src/features/tasks/board/): `BoardsPage` (маршруты `/tasks/board`, `/tasks/board/department/:id`, `/tasks/board/project/:id`; пункта меню до этапа S6 нет), `BoardHeader`/`BoardSwitcher`, `BoardCanvas` (`@hello-pangea/dnd`, соседи места вставки → `move`), `BoardColumn`, `BoardCard`, `CardBadges`, `CardLabels`, `QuickAddCard`, `CardQuickEdit`, `FilterDrawer` (фильтр в адресе), `BoardSettingsDialog`; хуки — `hooks/useBoard.ts` (оптимистичный перенос с откатом), `hooks/useBoardFilters.ts`; цвета — токены `--board-*` в `index.css`. Схема переходов на фронте — копия `TRANSITIONS` в [lib/tasks/transitions.ts](frontend/src/lib/tasks/transitions.ts), расхождение ловит `apps/tasks/tests/test_transitions_mirror.py`. Старые [KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx), `HRTasks`/`EmployeeTasks` живут до переключения (этап S6).
+**Окно карточки (этап S2, 23.10):**
+```
+models.py        TaskChecklist / TaskChecklistItem          # чек-листы (K-20), порядок — тот же board_rank
+                 BoardNotificationMute                      # выключенные уведомления доски (K-30)
+                 TaskAccessRequest                          # запросы доступа «исполнение»/«владение» (K-31)
+services/checklist_service.py  чек-листы: права soft/full, лимиты, журнал checklist_*
+services/feed_service.py       лента «Комментарии и события»: две таблицы одной хронологией по курсору
+services/task_notify.py        ЕДИНАЯ точка уведомлений о задаче: участники − автор события −
+                               выключившие доску; адресные — всегда; DELIVER (K-33)
+services/access_requests.py    запрос, решение (замена/делегат), отзыв, решающие, входящие, история отдела
+views_checklists.py / urls_checklists.py   tasks/{id}/checklists, checklists/{id}[/items], checklist-items/{id}
+views_access.py / urls_access.py           tasks/{id}/access-requests, access-requests/*, boards/departments/{id}/access-history
+```
+Фронт — [frontend/src/features/tasks/board/](frontend/src/features/tasks/board/): `BoardsPage` (маршруты `/tasks/board`, `/tasks/board/department/:id`, `/tasks/board/project/:id`; пункта меню до этапа S6 нет), `BoardHeader`/`BoardSwitcher`, `BoardCanvas` (`@hello-pangea/dnd`, соседи места вставки → `move`), `BoardColumn`, `BoardCard`, `CardBadges`, `CardLabels`, `QuickAddCard`, `CardQuickEdit`, `FilterDrawer` (фильтр в адресе), `BoardSettingsDialog`; хуки — `hooks/useBoard.ts` (оптимистичный перенос с откатом), `hooks/useBoardFilters.ts`; цвета — токены `--board-*` в `index.css`. Окно карточки (S2) — [features/tasks/board/card/](frontend/src/features/tasks/board/card/): `CardModal` (по `?card=<id>`), `EditableText`, `LabelsPopover`/`MembersPopover`/`DatesPopover`/`MovePopover` (их же открывает быстрая правка), `ChecklistBlock`, `ActivityFeed`, `AccessRequests` (запрос, плашка решающих), `TasksRequestsPanel` (`?panel=requests`); хуки и ключи — `card/hooks.ts`, `card/api.ts`. Схема переходов на фронте — копия `TRANSITIONS` в [lib/tasks/transitions.ts](frontend/src/lib/tasks/transitions.ts), расхождение ловит `apps/tasks/tests/test_transitions_mirror.py`. Старые [KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx), `HRTasks`/`EmployeeTasks` живут до переключения (этап S6).
 
 ---
 

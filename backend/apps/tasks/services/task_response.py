@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .. import schemas
 from ..models import DepartmentLinkKind, Task
+from . import checklist_service
 from . import contractor_service
 from . import hydration
 from . import task_content_service
@@ -204,11 +205,11 @@ def build_list(tasks: list[Task], *, scope=None) -> list[schemas.TaskListRespons
 
 def _can(task: Task, scope) -> dict:
     """Флаги кнопок карточки — те же функции, что проверяют ручки (K1.6)."""
-    from . import task_service, transfer
+    from . import access_requests, task_service, transfer
 
     if scope is None:
         return dict.fromkeys(("full_edit", "soft_edit", "comment", "transfer", "delete"),
-                             True) | {"claim": False}
+                             True) | {"claim": False, "request_access": [], "decide_access": False}
     full = task_service.can_edit(task, scope)
     return {
         "full_edit": full,
@@ -217,6 +218,9 @@ def _can(task: Task, scope) -> dict:
         "transfer": transfer.can_transfer(task, scope),
         "claim": task_service.can_claim(task, scope),
         "delete": full,
+        "request_access": access_requests.can_request(task, scope),
+        "decide_access": any(access_requests.may_decide(task, kind, 0, scope)
+                             for kind in ("execute", "own")),
     }
 
 
@@ -325,6 +329,11 @@ def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
                                       "subtasks"))
     payload["subtasks"] = [s.model_dump() for s in build_list(subtasks, scope=scope)]
     payload["can"] = _can(task, scope)
+    payload["checklists"] = checklist_service.for_task(task.id)
+    if scope is not None:
+        from . import access_requests
+
+        payload["pending_access_requests"] = access_requests.pending_to_decide(task, scope)
     payload["department_links"] = [
         {"department_id": link.department_id, "name": ctx.dept(link.department_id),
          "kind": link.kind}

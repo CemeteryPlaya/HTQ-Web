@@ -894,6 +894,10 @@ export interface Task {
   can?: TaskCan;
   /** Отделы задачи с видом связи; `origin` — отдел-отправитель переноса. */
   department_links?: TaskDepartmentLink[];
+  /** Чек-листы (канбан S2). */
+  checklists?: Checklist[];
+  /** Сколько ждущих запросов доступа вызывающий может решить (K-31). */
+  pending_access_requests?: number;
 
   created_at: string;
   updated_at: string;
@@ -912,6 +916,33 @@ export interface TaskCan {
   transfer?: boolean;
   claim?: boolean;
   delete?: boolean;
+  /** Какие запросы доступа можно отправить сейчас (канбан K-31). */
+  request_access?: TaskAccessKind[];
+  /** Решает ли вызывающий запросы доступа к этой задаче. */
+  decide_access?: boolean;
+}
+
+/** Вид запроса доступа: стать основным исполнителем или руководителем. */
+export type TaskAccessKind = 'execute' | 'own';
+
+/** Пункт чек-листа (канбан S2, мастер-план §3.6). */
+export interface ChecklistItem {
+  id: number;
+  text: string;
+  is_done: boolean;
+  done_by: { id: number; name: string | null } | null;
+  done_at: string | null;
+  position: string;
+}
+
+/** Чек-лист целиком — так его отдаёт каждая ручка чек-листов. */
+export interface Checklist {
+  id: number;
+  title: string;
+  position: string;
+  items: ChecklistItem[];
+  done: number;
+  total: number;
 }
 
 export interface TaskDepartmentLink {

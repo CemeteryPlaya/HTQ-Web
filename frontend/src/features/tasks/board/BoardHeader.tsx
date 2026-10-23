@@ -1,8 +1,10 @@
 /**
  * Шапка доски (Trello): название с переключателем досок, вид доски, справа —
- * «Фильтр» со счётчиком условий и «Колонки» у администратора доски (K-39).
+ * «Запросы» со счётчиком ждущих решения (K-32), колокольчик уведомлений по
+ * доске (K-30, у досок отделов и проектов), «Фильтр» со счётчиком условий и
+ * «Колонки» у администратора доски (K-39).
  */
-import { Filter, Settings2, X } from 'lucide-react';
+import { Bell, BellOff, Filter, KeyRound, Settings2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -19,6 +21,11 @@ export interface BoardHeaderProps {
   onOpenFilter: () => void;
   onResetFilter: () => void;
   onOpenSettings: () => void;
+  /** `null`/`undefined` — у доски выключателя нет (личная). */
+  notificationsEnabled?: boolean | null;
+  onToggleNotifications: (enabled: boolean) => void;
+  requestsCount: number;
+  onOpenRequests: () => void;
 }
 
 export function BoardHeader(props: BoardHeaderProps) {
@@ -36,6 +43,27 @@ export function BoardHeader(props: BoardHeaderProps) {
         {kindLabel}
       </span>
       <div className="ml-auto flex items-center gap-1.5">
+        <Button variant="ghost" size="sm" onClick={props.onOpenRequests}
+          className="gap-1.5 hover:bg-black/10 dark:hover:bg-white/10">
+          <KeyRound className="h-4 w-4" />
+          {t('tasks.requests.button', 'Запросы')}
+          {props.requestsCount > 0 && (
+            <span className="rounded-full bg-amber-500 px-1.5 text-xs text-white">{props.requestsCount}</span>
+          )}
+        </Button>
+        {typeof props.notificationsEnabled === 'boolean' && (
+          <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-black/10 dark:hover:bg-white/10"
+            aria-pressed={!props.notificationsEnabled}
+            aria-label={props.notificationsEnabled
+              ? t('tasks.board.notifications.turnOff', 'Выключить уведомления о моих задачах этой доски')
+              : t('tasks.board.notifications.turnOn', 'Включить уведомления о моих задачах этой доски')}
+            title={props.notificationsEnabled
+              ? t('tasks.board.notifications.on', 'Уведомления о ваших задачах на этой доске включены')
+              : t('tasks.board.notifications.off', 'Уведомления о ваших задачах на этой доске выключены')}
+            onClick={() => props.onToggleNotifications(!props.notificationsEnabled)}>
+            {props.notificationsEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={props.onOpenFilter}
           className="gap-1.5 hover:bg-black/10 dark:hover:bg-white/10">
           <Filter className="h-4 w-4" />

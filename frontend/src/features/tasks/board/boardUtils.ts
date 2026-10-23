@@ -41,7 +41,8 @@ export function useColumnTitle() {
     column.title || t(TASK_STATUS[column.status].labelKey, column.status);
 }
 
-/** Ссылка на задачу — её страница (с окном карточки этапа S2 — `?card=`). */
+/** Ссылка на карточку — окно поверх личной доски (K-19, K-27). Задача
+ * чужой доски, но видимая, откроется всё равно: окно ищет задачу, а не место. */
 export function cardLink(card: Pick<BoardCard, 'id'>): string {
-  return `${window.location.origin}/tasks/${card.id}`;
+  return `${window.location.origin}/tasks/board?card=${card.id}`;
 }
