@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { errorStatus } from '@/lib/apiError';
 
 import { accessApi, cardKeys } from './api';
+import { CardButton } from './CardButton';
 import { useAccessRequests, useRequestsInbox } from './hooks';
 import type { AccessRequest, HistoryItem } from './types';
 
@@ -72,10 +73,10 @@ function InboxRow({ row, onOpen }: { row: AccessRequest; onOpen: (id: number) =>
             <Button size="sm" disabled={busy} onClick={() => approve.mutate({ id: row.id, mode: 'replace' })}>
               {t('tasks.access.transferOwnership', 'Передать владение')}
             </Button>
-            <Button size="sm" variant="secondary" disabled={busy}
+            <CardButton disabled={busy}
               onClick={() => approve.mutate({ id: row.id, mode: 'delegate' })}>
               {t('tasks.access.makeDelegate', 'Сделать делегатом')}
-            </Button>
+            </CardButton>
           </>
         )}
         <Button size="sm" variant="ghost" disabled={busy}
@@ -133,10 +134,13 @@ function History({ departmentId, onOpen }: { departmentId: number; onOpen: (id: 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1.5">
-        {HISTORY_KINDS.map((value) => (
-          <Button key={value || 'all'} size="sm" variant={kind === value ? 'default' : 'secondary'}
-            onClick={() => setKind(value)}>{kindTitle(value)}</Button>
-        ))}
+        {HISTORY_KINDS.map((value) => {
+          const Chip = kind === value ? Button : CardButton;
+          return (
+            <Chip key={value || 'all'} size="sm" aria-pressed={kind === value}
+              onClick={() => setKind(value)}>{kindTitle(value)}</Chip>
+          );
+        })}
       </div>
       {history.isError && (
         <p className="text-sm text-muted-foreground">

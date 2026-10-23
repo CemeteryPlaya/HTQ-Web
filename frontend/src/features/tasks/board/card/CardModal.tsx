@@ -6,6 +6,8 @@
  * `can` карточки: права решает сервер.
  */
 import { useEffect, useState } from 'react';
+import { format, parseISO } from 'date-fns';
+import { enUS, ru } from 'date-fns/locale';
 import { CheckCircle2, Circle, Clock, Eye, EyeOff, Flag, Plus, Tag, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -32,6 +34,7 @@ import { useMarkSeen } from '../hooks/useBoard';
 import type { BoardColumn } from '../types';
 import { AccessRequestsBlock } from './AccessRequests';
 import { ActivityFeed } from './ActivityFeed';
+import { CardButton } from './CardButton';
 import { ChecklistBlock } from './ChecklistBlock';
 import { DatesPopover } from './DatesPopover';
 import { EditableText } from './EditableText';
@@ -64,9 +67,9 @@ function NewChecklist({ onCreate, disabled }: { onCreate: (title: string) => voi
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
-        <Button variant="secondary" size="sm"><Plus className="mr-1.5 h-4 w-4" />
+        <CardButton><Plus className="mr-1.5 h-4 w-4" />
           {t('tasks.card.add.checklist', 'Чек-лист')}
-        </Button>
+        </CardButton>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 space-y-2 p-3">
         <p className="text-center text-sm font-semibold">{t('tasks.checklist.new', 'Добавить чек-лист')}</p>
@@ -84,7 +87,13 @@ function NewChecklist({ onCreate, disabled }: { onCreate: (title: string) => voi
 }
 
 function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProps, 'columns' | 'onMove'>) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language?.startsWith('en') ? enUS : ru;
+  // Как значок срока на доске; год — только если не текущий.
+  const dateLabel = (iso: string) => {
+    const date = parseISO(iso);
+    return format(date, date.getFullYear() === new Date().getFullYear() ? 'd MMM' : 'd MMM yyyy', { locale });
+  };
   const { activeProfile } = useActiveProfile();
   const myId = Number(activeProfile?.id);
   const columnTitle = useColumnTitle();
@@ -143,17 +152,17 @@ function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProp
           <div className="flex flex-wrap gap-2">
             <LabelsPopover selected={labelIds} disabled={!full}
               onChange={(ids) => update.mutate({ label_ids: ids })}
-              trigger={<Button variant="secondary" size="sm" disabled={!full}>
-                <Tag className="mr-1.5 h-4 w-4" />{t('tasks.card.add.labels', 'Метки')}</Button>} />
+              trigger={<CardButton disabled={!full}>
+                <Tag className="mr-1.5 h-4 w-4" />{t('tasks.card.add.labels', 'Метки')}</CardButton>} />
             <DatesPopover startDate={task.start_date} dueDate={task.due_date} disabled={!full}
               onSave={(dates) => update.mutate(dates)}
-              trigger={<Button variant="secondary" size="sm" disabled={!full}>
-                <Clock className="mr-1.5 h-4 w-4" />{t('tasks.card.add.dates', 'Даты')}</Button>} />
+              trigger={<CardButton disabled={!full}>
+                <Clock className="mr-1.5 h-4 w-4" />{t('tasks.card.add.dates', 'Даты')}</CardButton>} />
             <NewChecklist disabled={!soft} onCreate={(title) => checklists.create.mutate(title)} />
             <MembersPopover assignees={task.assignees ?? []} disabled={!full}
               onChange={(crew) => people.assignees.mutate(crew)}
-              trigger={<Button variant="secondary" size="sm" disabled={!full}>
-                <Users className="mr-1.5 h-4 w-4" />{t('tasks.card.add.members', 'Участники')}</Button>} />
+              trigger={<CardButton disabled={!full}>
+                <Users className="mr-1.5 h-4 w-4" />{t('tasks.card.add.members', 'Участники')}</CardButton>} />
           </div>
         )}
 
@@ -209,7 +218,7 @@ function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProp
                         : tone === 'done' ? 'bg-board-done text-white' : 'bg-muted')}>
                   <Clock className="h-4 w-4" />
                   {task.start_date || task.due_date
-                    ? `${task.start_date ?? '…'} — ${task.due_date ?? '…'}`
+                    ? `${task.start_date ? dateLabel(task.start_date) : '…'} — ${task.due_date ? dateLabel(task.due_date) : '…'}`
                     : t('tasks.card.dates.none', 'Без дат')}
                 </button>
               )} />

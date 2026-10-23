@@ -3,7 +3,7 @@
  * новая метка. Метки общие на компанию (K-22), поэтому заводит их
  * администратор, а не каждый на своей доске.
  */
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -35,6 +35,7 @@ export function LabelsPopover({ selected, onChange, disabled = false, trigger }:
   const [query, setQuery] = useState('');
   const [name, setName] = useState('');
   const [color, setColor] = useState(NEW_LABEL_COLORS[0]);
+  const nameField = useRef<HTMLInputElement>(null);
   const { data: labels = [], isLoading } = useQuery({
     queryKey: ['hr-labels'], queryFn: fetchLabels, enabled: open,
   });
@@ -47,6 +48,9 @@ export function LabelsPopover({ selected, onChange, disabled = false, trigger }:
       void queryClient.invalidateQueries({ queryKey: ['hr-labels'] });
       setName('');
       onChange([...selected, label.id]);
+      // Кнопка гаснет вместе с пустым названием, и фокус ушёл бы в никуда:
+      // возвращаем его в поле — можно завести следующую метку или закрыть Esc.
+      nameField.current?.focus();
     },
     onError: (error) => reportApiError(error, t('tasks.card.labels.createFailed', 'Не удалось создать метку')),
   });
@@ -94,7 +98,7 @@ export function LabelsPopover({ selected, onChange, disabled = false, trigger }:
         </div>
         {canCreate && (
           <div className="space-y-2 border-t pt-3">
-            <Input value={name} maxLength={50}
+            <Input ref={nameField} value={name} maxLength={50}
               placeholder={t('tasks.card.labels.newName', 'Название новой метки')}
               onChange={(event) => setName(event.target.value)} />
             <div className="grid grid-cols-5 gap-1.5">

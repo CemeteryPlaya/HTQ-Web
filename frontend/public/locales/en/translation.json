@@ -2924,8 +2924,10 @@
     },
     "feed": {
       "accessApproved": "access request {{kind}} approved",
+      "accessApprovedFor": "access request {{kind}} from {{name}} approved",
       "accessCancelled": "access request {{kind}} withdrawn",
       "accessRejected": "access request {{kind}} rejected",
+      "accessRejectedFor": "access request {{kind}} from {{name}} rejected",
       "accessRequested": "access request {{kind}}",
       "assignee": "primary assignee — {{name}}",
       "assigneeRemoved": "primary assignee removed",

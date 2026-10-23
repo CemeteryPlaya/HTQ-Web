@@ -32,6 +32,9 @@ KEY_FIELDS = frozenset({
 #: Поля журнала, чьи значения — id пользователей и отделов.
 USER_FIELDS = frozenset({"assignee_id", "supervisor_id", "reporter_id", "claim"})
 DEPARTMENT_FIELDS = frozenset({"department_id", "transfer"})
+#: Запросы доступа: значение — «вид:id запросившего» («own:12»).
+ACCESS_FIELDS = frozenset({"access_requested", "access_approved", "access_rejected",
+                           "access_cancelled"})
 
 #: Вид записи для курсора: сортировка по убыванию ``(created_at, вид, id)``.
 COMMENT, ACTIVITY = "comment", "activity"
@@ -76,6 +79,11 @@ def _ids(value: str | None) -> int | None:
     return int(value) if value.isdigit() else None
 
 
+def _requester(value: str | None) -> int | None:
+    """Запрос доступа в журнале → id запросившего («own:12» → 12)."""
+    return _ids((value or "").partition(":")[2])
+
+
 def feed(task_id: int, request, *, details: bool, before: str | None,
          limit: int | None) -> dict:
     task_service.load_for_action(task_id, request)                   # невидимая — 404
@@ -109,6 +117,8 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
             user_ids.update((_ids(row.old_value), _ids(row.new_value)))
         if row.field_name in DEPARTMENT_FIELDS:
             department_ids.update((_ids(row.old_value), _ids(row.new_value)))
+        if row.field_name in ACCESS_FIELDS:
+            user_ids.add(_requester(row.new_value))
     users = hydration.user_briefs(user_ids)
     departments = hydration.department_briefs(department_ids)
 
@@ -124,6 +134,8 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
             return hydration.user_name(users, _ids(value))
         if field in DEPARTMENT_FIELDS:
             return hydration.department_name(departments, _ids(value))
+        if field in ACCESS_FIELDS:
+            return hydration.user_name(users, _requester(value))
         return None
 
     items = []

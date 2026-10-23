@@ -453,7 +453,7 @@ Visible(u) =
 | `POST tasks/<id>/transfer` | новая (этап 1): `{department_id, sender_department_id?}`; 403 `task_transfer_forbidden`, 409 `task_transfer_terminal`, 422 — цель неактивна или совпадает с текущей |
 | `POST tasks/<id>/seen` | новая (этап 2): 204; ставит `seen_at` строке `TaskAssignee` вызывающего (§3.3); невидимая задача — 404 |
 | `PATCH tasks/<id>/assignees`, `PATCH tasks/<id>` (`assignee_id`) | `seen_at` новым исполнителям — `NULL`, самому актёру — `now()` (§3.3); уведомления — через `notify_participants` (§3.4) |
-| `POST tasks/<id>/access-requests` | новая (этап 3, K-31): `{kind: "execute"\|"own", comment?}` → 201 запрос; 404 — задача не видна; 409 `task_access_already` (уже в этой роли), `task_access_pending` (уже ждёт) |
+| `POST tasks/<id>/access-requests` | новая (этап 3, K-31): `{kind: "execute"\|"own", comment?}` → 201 запрос; 404 — задача не видна; 409 `task_access_already` (уже в этой роли), `task_access_unneeded` (полная правка — назначить себя можно самому; живая проверка S2), `task_access_pending` (уже ждёт) |
 | `GET tasks/<id>/access-requests` | новая: решающим — все ожидающие и последние 20 решённых; остальным — только свои |
 | `POST access-requests/<id>/approve` | новая: `{mode?: "replace"\|"delegate", comment?}` — для «владения» `mode` обязателен, для «исполнения» запрещён (422 `task_access_mode`); решает любой из `deciders(task, kind)` (403 `task_access_forbidden`); уже решён другим — 409 `task_access_decided` с тем, кто и как решил |
 | `POST access-requests/<id>/reject` | новая: `{comment?}`; те же решающие и коды |

@@ -5,9 +5,12 @@
  * выбрав значение → Radix оставляет на <body> pointer-events: none, и весь
  * фронт перестаёт реагировать на клики.
  *
- * Первый тест воспроизводит саму утечку (фиксирует, что баг Radix никуда не
- * делся и сторож нужен). Второй проверяет, что сторож её снимает. Третий —
- * что сторож НЕ вмешивается, пока модалка честно открыта.
+ * Причиной были разные копии `@radix-ui/react-dismissable-layer` у Dialog и у
+ * Select: каждая помнила своё «исходное» значение блокировки и восстанавливала
+ * его вразнобой. С 23.10 копия одна (`RadixLayerStack.test.tsx` сторожит
+ * lock-файл), и первый тест фиксирует, что без сторожа утечки больше нет.
+ * Второй проверяет, что сторож снимает блокировку, если она всё же осталась.
+ * Третий — что сторож НЕ вмешивается, пока модалка честно открыта.
  */
 import { render, fireEvent, screen, act } from '@testing-library/react';
 import { describe, expect, it, afterEach, beforeAll } from 'vitest';
@@ -79,13 +82,13 @@ function openModalThenSelect(withGuard: boolean) {
 }
 
 describe('BodyPointerEventsGuard', () => {
-  it('без сторожа: закрытие формы с открытым списком оставляет <body> заблокированным', () => {
+  it('без сторожа: закрытие формы с открытым списком снимает блокировку <body>', () => {
     openModalThenSelect(false);
 
     act(() => { fireEvent.click(screen.getByTestId('cancel')); });
 
     expect(dialogInDom()).toBe(false);       // модалка закрыта…
-    expect(bodyLock()).toBe('none');          // …а клики по странице заблокированы
+    expect(bodyLock()).toBe('');              // …и клики по странице работают
   });
 
   it('сторож снимает осиротевшую блокировку после закрытия формы', async () => {

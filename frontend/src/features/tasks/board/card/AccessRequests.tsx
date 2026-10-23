@@ -18,6 +18,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import type { Task, TaskAccessKind } from '@/types/tasks';
 
+import { CardButton } from './CardButton';
 import { useAccessRequests } from './hooks';
 import type { AccessRequest } from './types';
 
@@ -140,10 +141,10 @@ function DecisionRow({ row, task }: { row: AccessRequest; task: Task }) {
                 onClick={() => approve.mutate({ id: row.id, mode: 'replace' })}>
                 {t('tasks.access.transferOwnership', 'Передать владение')}
               </Button>
-              <Button size="sm" variant="secondary" disabled={busy}
+              <CardButton disabled={busy}
                 onClick={() => approve.mutate({ id: row.id, mode: 'delegate' })}>
                 {t('tasks.access.makeDelegate', 'Сделать делегатом')}
-              </Button>
+              </CardButton>
             </>
           )}
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRejecting(true)}>
@@ -194,10 +195,10 @@ export function AccessRequestsBlock({ task, myId }: { task: Task; myId: number }
       ))}
       {kinds.length > 0 && (
         <>
-          <Button variant="secondary" size="sm" onClick={() => setDialog(true)}>
+          <CardButton onClick={() => setDialog(true)}>
             <KeyRound className="mr-1.5 h-4 w-4" />
             {t('tasks.access.request', 'Запросить доступ')}
-          </Button>
+          </CardButton>
           <RequestAccessDialog task={task} kinds={kinds} open={dialog} onOpenChange={setDialog} />
         </>
       )}

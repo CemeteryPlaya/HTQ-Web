@@ -283,6 +283,22 @@ def staff_user_ids() -> list[int]:
     )
 
 
+def elevated_user_ids() -> list[int]:
+    """Id пользователей с ДЕЙСТВУЮЩЕЙ учёткой и ``is_staff`` или
+    ``is_superuser`` — тех, чей токен несёт ``is_admin``
+    (``TokenPayload.is_elevated``), по id.
+
+    Потребитель — запросы доступа к задачам (канбан, K-31): когда решить
+    запрос по правилам некому, его решает администратор задач, и уведомление
+    о запросе должно дойти до него, а не повиснуть. Состав компании отбирает
+    вызывающий (``companies.interface.active_member_ids``).
+    """
+    require_service("users")
+    return list(User.objects
+                .filter(Q(is_staff=True) | Q(is_superuser=True), status=UserStatus.ACTIVE)
+                .order_by("id").values_list("id", flat=True))
+
+
 def is_superuser(user_id: int) -> bool:
     """Пользователь — суперпользователь с ДЕЙСТВУЮЩЕЙ учёткой.
 

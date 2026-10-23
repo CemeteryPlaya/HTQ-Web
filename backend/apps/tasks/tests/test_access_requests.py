@@ -14,11 +14,13 @@ from __future__ import annotations
 import pytest
 from django.test import Client
 
+from apps.companies import interface as companies
 from apps.notifications.models import Notification
 from apps.tasks.models import (AccessRequestStatus, Status, TaskAccessRequest, TaskActivity,
                                TaskAssignee, TaskDelegate)
+from apps.users.models import User, UserStatus
 
-from .helpers import BASE, admin_token, auth, post_json
+from .helpers import BASE, COMPANY, admin_token, auth, post_json
 from .org_fixtures import (EMP_DEV, EMP_IT, HEAD_IT, OD, OUTSIDER, TD, as_user, make_org,
                            make_task)
 
@@ -142,13 +144,47 @@ def test_viewer_without_role_cannot_decide(org):
     assert response.status_code == 403
 
 
+def test_full_editor_needs_no_request(org):
+    """С полной правкой исполнителя и руководителя назначают сами: кнопки
+    запроса нет, ручка отвечает 409 (живая проверка S2: администратору
+    показывалось «Запросить доступ»)."""
+    task = _it_task(org)
+    for who in (TD, HEAD_IT):
+        detail = Client().get(f"{BASE}/tasks/{task.pk}/", **as_user(who)).json()
+        assert detail["can"]["full_edit"] is True and detail["can"]["request_access"] == []
+    admin = Client().get(f"{BASE}/tasks/{task.pk}/", **auth(admin_token())).json()
+    assert admin["can"]["request_access"] == []
+    response = _request(task, "execute", who=HEAD_IT)
+    assert response.status_code == 409 and response.json()["code"] == "task_access_unneeded"
+    assert not TaskAccessRequest.objects.filter(task=task).exists()
+
+
+def _staff(user_id, username):
+    return User.objects.create(id=user_id, username=username, email=f"{username}@htq.test",
+                               password="x", is_staff=True, status=UserStatus.ACTIVE)
+
+
 def test_nobody_to_decide_falls_back_to_the_admin(org):
-    task = make_task(reporter_id=EMP_IT, status=Status.TODO)      # без отдела и руководителя
+    # Без отдела и руководителя; просит исполнитель — у автора полная правка,
+    # ему запрос не нужен. О запросе и решении узнают администраторы задач
+    # компании (живая проверка S2: уведомление не уходило никому).
+    as_user(EMP_IT)                                   # заводит компанию запроса
+    staff = _staff(9101, "kb-staff")
+    companies.grant_membership(COMPANY, staff.pk)
+    _staff(9102, "kb-staff-elsewhere")                # не участник компании
+    task = make_task(reporter_id=EMP_DEV, assignee_id=EMP_IT, status=Status.TODO)
+    TaskAssignee.objects.create(task=task, user_id=EMP_IT, role="primary")
     row = _request(task, "own").json()
+    requested = set(Notification.objects.filter(url__contains="event=access_requested")
+                    .values_list("recipient_id", flat=True))
+    assert requested == {staff.pk}
     assert _approve(row["id"], who=EMP_IT, mode="replace").status_code == 403
     response = post_json(Client(), f"{BASE}/access-requests/{row['id']}/approve",
                          {"mode": "replace"}, **auth(admin_token()))
     assert response.status_code == 200, response.content
+    decided = set(Notification.objects.filter(url__contains="event=access_decided")
+                  .values_list("recipient_id", flat=True))
+    assert decided == {EMP_IT, staff.pk}
 
 
 def test_card_flags_inbox_and_task_list(org):

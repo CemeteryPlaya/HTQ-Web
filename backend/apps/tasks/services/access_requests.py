@@ -5,7 +5,8 @@
 основным исполнителем) или «на владение» (стать руководителем). Решающие
 зависят от вида: «владение» — руководитель задачи и глава её отдела;
 «исполнение» — руководитель, делегаты, автор, исполнители и тот же глава.
-Нет никого (кроме самого запросившего) — решает администратор задач. Набор
+Нет никого (кроме самого запросившего) — решает администратор задач, ему же
+и уведомление. С полной правкой запрос не нужен: назначить себя можно самому. Набор
 считается на момент решения: снятый с задачи, пока запрос ждал, решить его
 уже не может. Решение и смена ролей — одной транзакцией под блокировкой
 запроса и задачи: второй решающий получает 409 с тем, кто и как решил.
@@ -21,10 +22,13 @@ from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
 
+from apps.companies import interface as companies
 from apps.core.services import ServiceDisabled
 from apps.hr import interface as hr
+from apps.users import interface as users
 from htqweb.errors import DomainError
 from htqweb.fallback import fallback
+from htqweb.tenancy.context import current_company_or_none
 
 from ..models import (AccessApproveMode, AccessRequestKind, AccessRequestStatus, AssigneeRole,
                       Task, TaskAccessRequest, TaskActivity, TaskAssignee, TaskDelegate)
@@ -68,6 +72,18 @@ def deciders(task: Task, kind: str) -> set[int]:
     return people
 
 
+def fallback_deciders() -> set[int]:
+    """Кому решать, когда по K-31 некому: администраторы задач
+    (``is_elevated`` — флаги учётки) из действующих участников компании.
+    Нужны для уведомлений: решать им позволяет ``scope.elevated``, а узнать о
+    запросе — только отсюда."""
+    people = set(users.elevated_user_ids())
+    slug = current_company_or_none()
+    if slug:
+        people &= set(companies.active_member_ids(slug))
+    return people
+
+
 def may_decide(task: Task, kind: str, requester_id: int, scope) -> bool:
     people = deciders(task, kind) - {requester_id}
     if people:
@@ -83,7 +99,13 @@ def in_role(task: Task, kind: str, user_id: int) -> bool:
 
 
 def can_request(task: Task, scope) -> list[str]:
-    """Какие запросы вызывающий может отправить сейчас (кнопки карточки)."""
+    """Какие запросы вызывающий может отправить сейчас (кнопки карточки).
+
+    С полной правкой запрашивать нечего: исполнителя и руководителя такой
+    человек назначает сам (`PATCH assignees`, `PATCH supervisor`).
+    """
+    if task_service.can_edit(task, scope):
+        return []
     pending = set(TaskAccessRequest.objects.filter(
         task=task, requester_id=scope.user_id, status=AccessRequestStatus.PENDING)
         .values_list("kind", flat=True))
@@ -142,6 +164,9 @@ def request_access(task_id: int, request, *, kind: str, comment: str = "") -> di
     task = Task.objects.select_for_update().get(pk=task_id)
     if in_role(task, kind, scope.user_id):
         raise DomainError("task_access_already", "Вы уже в этой роли", status=409)
+    if task_service.can_edit(task, scope):
+        raise DomainError("task_access_unneeded",
+                          "Запрос не нужен: вы можете назначить себя сами", status=409)
     try:
         with transaction.atomic():
             row = TaskAccessRequest.objects.create(task=task, requester_id=scope.user_id,
@@ -150,8 +175,9 @@ def request_access(task_id: int, request, *, kind: str, comment: str = "") -> di
         raise DomainError("task_access_pending", "Такой запрос уже ждёт решения",
                           status=409) from exc
     _log(task, scope.user_id, "access_requested", row)
+    people = deciders(task, kind) - {scope.user_id}
     task_notify.access_requested(task, scope.user_id, kind,
-                                 deciders(task, kind) - {scope.user_id})
+                                 people or (fallback_deciders() - {scope.user_id}))
     return _payloads([row])[0]
 
 
@@ -248,7 +274,7 @@ def decide(request_id: int, request, *, approve: bool, mode: str | None = None,
     row.save()
     _log(task, scope.user_id, "access_approved" if approve else "access_rejected", row)
     task_notify.access_decided(task, scope.user_id, row, approved=approve,
-                               other_deciders=people - {scope.user_id},
+                               other_deciders=(people or fallback_deciders()) - {scope.user_id},
                                replaced_user_id=replaced)
     return _payloads([row])[0]
 

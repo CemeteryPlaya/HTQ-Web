@@ -3378,8 +3378,10 @@
     },
     "feed": {
       "accessApproved": "запрос доступа {{kind}} одобрен",
+      "accessApprovedFor": "запрос доступа {{kind}} от {{name}} одобрен",
       "accessCancelled": "запрос доступа {{kind}} отозван",
       "accessRejected": "запрос доступа {{kind}} отклонён",
+      "accessRejectedFor": "запрос доступа {{kind}} от {{name}} отклонён",
       "accessRequested": "запрос доступа {{kind}}",
       "assignee": "основной исполнитель — {{name}}",
       "assigneeRemoved": "основной исполнитель снят",

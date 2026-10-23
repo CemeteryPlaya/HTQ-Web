@@ -3,7 +3,7 @@
  * чек-листа отмечается, лента показывает комментарии и события, тот, кто не
  * в роли, просит доступ, недоступная карточка закрывает окно с объяснением.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -53,6 +53,8 @@ const FEED = {
       actor: { id: 8, name: 'Анна Ким', avatar_url: null }, body: 'Смету проверила' },
     { kind: 'activity', id: 4, created_at: '2026-10-21T09:00:00Z', actor: null, field: 'claim',
       old: null, new: '7', old_label: null, new_label: 'Иван Петров' },
+    { kind: 'activity', id: 5, created_at: '2026-10-21T08:00:00Z', actor: { id: 9, name: 'Ирина Ли', avatar_url: null },
+      field: 'access_approved', old: null, new: 'own:12', old_label: null, new_label: 'Самат Снабженец' },
   ],
   next_before: null,
 };
@@ -104,6 +106,24 @@ describe('CardModal', () => {
     expect(tasksApi.updateTask).not.toHaveBeenCalled();
   });
 
+  it('Esc в поиске участников закрывает только окно участников', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task());
+    const { onClose } = renderModal();
+    await userEvent.click(await screen.findByRole('button', { name: 'Участники' }));
+    const search = await screen.findByPlaceholderText('Найти сотрудника');
+    act(() => search.focus());
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByPlaceholderText('Найти сотрудника')).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Название задачи' })).toBeInTheDocument();
+  });
+
+  it('даты показаны словами, а не ISO-строкой', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task({ start_date: '2031-10-23', due_date: '2031-10-30' }));
+    renderModal();
+    expect(await screen.findByText('23 окт. 2031 — 30 окт. 2031')).toBeInTheDocument();
+  });
+
   it('пункт чек-листа отмечается сразу и уходит на сервер', async () => {
     tasksApi.fetchTask.mockResolvedValue(task());
     api.patch.mockResolvedValue({ data: {
@@ -125,6 +145,8 @@ describe('CardModal', () => {
     expect(await screen.findByText('Смету проверила')).toBeInTheDocument();
     expect(screen.getByText('Анна Ким')).toBeInTheDocument();
     expect(screen.getByText('Автоматизация')).toBeInTheDocument();
+    // Решение по запросу доступа называет запросившего, а не только вид запроса.
+    expect(screen.getByText(/запрос доступа на владение от Самат Снабженец одобрен/)).toBeInTheDocument();
     expect(api.get).toHaveBeenCalledWith('tasks/v1/tasks/5/feed', { params: { details: '0' } });
     await userEvent.click(screen.getByRole('button', { name: 'Показать подробности' }));
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('tasks/v1/tasks/5/feed',

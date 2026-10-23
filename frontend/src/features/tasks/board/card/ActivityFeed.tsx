@@ -18,6 +18,7 @@ import { priorityLabel } from '@/lib/tasks/priority';
 import { TASK_STATUS } from '@/lib/tasks/status';
 import type { TaskPriority, TaskStatus } from '@/types/tasks';
 
+import { CardButton } from './CardButton';
 import { useAddComment, useTaskFeed } from './hooks';
 import type { FeedActivity, FeedEntry } from './types';
 
@@ -96,10 +97,18 @@ function useDescribe() {
         return t('tasks.feed.itemUnchecked', 'пункт «{{name}}» снова не выполнен', { name: newLabel });
       case 'access_requested':
         return t('tasks.feed.accessRequested', 'запрос доступа {{kind}}', { kind: kind(entry.new) });
+      // Решает не запросивший — его имя (new_label) называем; у записей,
+      // где имени нет, — прежняя фраза.
       case 'access_approved':
-        return t('tasks.feed.accessApproved', 'запрос доступа {{kind}} одобрен', { kind: kind(entry.new) });
+        return entry.new_label
+          ? t('tasks.feed.accessApprovedFor', 'запрос доступа {{kind}} от {{name}} одобрен',
+            { kind: kind(entry.new), name: entry.new_label })
+          : t('tasks.feed.accessApproved', 'запрос доступа {{kind}} одобрен', { kind: kind(entry.new) });
       case 'access_rejected':
-        return t('tasks.feed.accessRejected', 'запрос доступа {{kind}} отклонён', { kind: kind(entry.new) });
+        return entry.new_label
+          ? t('tasks.feed.accessRejectedFor', 'запрос доступа {{kind}} от {{name}} отклонён',
+            { kind: kind(entry.new), name: entry.new_label })
+          : t('tasks.feed.accessRejected', 'запрос доступа {{kind}} отклонён', { kind: kind(entry.new) });
       case 'access_cancelled':
         return t('tasks.feed.accessCancelled', 'запрос доступа {{kind}} отозван', { kind: kind(entry.new) });
       default:
@@ -182,10 +191,10 @@ export function ActivityFeed({ taskId, canComment }: { taskId: number; canCommen
     <section className="space-y-3" aria-label={t('tasks.feed.title', 'Комментарии и события')}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{t('tasks.feed.title', 'Комментарии и события')}</h3>
-        <Button variant="secondary" size="sm" onClick={() => setDetails((value) => !value)}>
+        <CardButton onClick={() => setDetails((value) => !value)}>
           {details ? t('tasks.feed.hideDetails', 'Скрыть подробности')
             : t('tasks.feed.showDetails', 'Показать подробности')}
-        </Button>
+        </CardButton>
       </div>
       {canComment && (
         <div className="space-y-2">

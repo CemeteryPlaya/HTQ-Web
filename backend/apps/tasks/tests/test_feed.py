@@ -109,6 +109,18 @@ def test_people_and_departments_come_with_names(org):
     assert assignee["actor"]["id"] == HEAD_IT
 
 
+def test_access_events_name_the_requester(org):
+    # «own:<id>» в журнале → имя запросившего: решает другой человек, и без
+    # имени строка «запрос одобрен» не говорит, чей.
+    requester = User.objects.create(username="feed-requester", email="feed-requester@htq.test",
+                                    password="x", first_name="Айгерим", last_name="Нурланова")
+    task = _task()
+    _event(task, 1, "access_approved", None, f"own:{requester.pk}")
+    (item,) = _feed(task).json()["items"]
+    assert item["field"] == "access_approved" and item["new"] == f"own:{requester.pk}"
+    assert item["new_label"] == "Айгерим Нурланова"
+
+
 def test_invisible_task_is_404_and_bad_cursor_is_422(org):
     task = _task()
     assert _feed(task, who=OUTSIDER).status_code == 404

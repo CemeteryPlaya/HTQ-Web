@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import type { Checklist } from '@/types/tasks';
 
+import { CardButton } from './CardButton';
 import { EditableText } from './EditableText';
 import { useChecklistActions } from './hooks';
 
@@ -41,9 +42,9 @@ function AddItem({ onAdd }: { onAdd: (text: string) => Promise<unknown> }) {
   };
   if (!open) {
     return (
-      <Button variant="secondary" size="sm" className="ml-7" onClick={() => setOpen(true)}>
+      <CardButton className="ml-7" onClick={() => setOpen(true)}>
         {t('tasks.checklist.addItem', 'Добавить элемент')}
-      </Button>
+      </CardButton>
     );
   }
   return (
@@ -86,22 +87,22 @@ export function ChecklistBlock({ taskId, checklist, canEdit, canDelete }: Checkl
             onSave={(title) => actions.rename.mutate({ id: checklist.id, title })} />
         </div>
         {checklist.done > 0 && (
-          <Button variant="secondary" size="sm" onClick={() => setHideDone((value) => !value)}>
+          <CardButton onClick={() => setHideDone((value) => !value)}>
             {hideDone
               ? t('tasks.checklist.showDone', 'Показать отмеченные ({{count}})', { count: checklist.done })
               : t('tasks.checklist.hideDone', 'Скрыть отмеченные')}
-          </Button>
+          </CardButton>
         )}
         {canDelete && (
-          <Button variant="secondary" size="sm" onClick={() => actions.remove.mutate(checklist.id)}>
+          <CardButton onClick={() => actions.remove.mutate(checklist.id)}>
             {t('tasks.checklist.delete', 'Удалить')}
-          </Button>
+          </CardButton>
         )}
       </div>
       <div className="flex items-center gap-2">
         <span className="w-9 text-right text-xs text-muted-foreground">{percent}%</span>
         <Progress value={percent}
-          className={cn('h-2 flex-1', percent === 100 && '[&>div]:bg-board-done')} />
+          className={cn('h-2 flex-1 bg-muted', percent === 100 && '[&>div]:bg-board-done')} />
       </div>
       <ul className="space-y-0.5">
         {items.map((item) => (
