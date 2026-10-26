@@ -84,7 +84,7 @@ export function BoardHeader(props: BoardHeaderProps) {
           <Button variant="ghost" size="sm" onClick={props.onOpenSettings}
             className="gap-1.5 hover:bg-black/10 dark:hover:bg-white/10">
             <Settings2 className="h-4 w-4" />
-            {t('tasks.board.settings.open', 'Колонки')}
+            {t('tasks.board.settings.open', 'Настройки')}
             {props.hiddenColumns > 0 && (
               <span className="text-xs text-muted-foreground">
                 {t('tasks.board.settings.hiddenCount', 'скрыто: {{count}}', { count: props.hiddenColumns })}

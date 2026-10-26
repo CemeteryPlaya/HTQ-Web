@@ -50,7 +50,7 @@ def personal_summary(request):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _personal_settings_get(request):
-    return {"columns": board_service.columns_settings(board_service.personal(request))}
+    return board_service.settings_payload(board_service.personal(request))
 
 
 @api_view(methods=("PUT",), body=schemas.BoardSettingsIn, module="tasks", level="write")
@@ -76,8 +76,7 @@ def department_board(request, department_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _department_settings_get(request, department_id: int):
-    board = board_service.department(request, department_id)
-    return {"columns": board_service.columns_settings(board)}
+    return board_service.settings_payload(board_service.department(request, department_id))
 
 
 @api_view(methods=("PUT",), body=schemas.BoardSettingsIn, module="tasks", level="write")
@@ -110,8 +109,7 @@ def project_board(request, project_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _project_settings_get(request, project_id: int):
-    board = board_service.project(request, project_id)
-    return {"columns": board_service.columns_settings(board)}
+    return board_service.settings_payload(board_service.project(request, project_id))
 
 
 @api_view(methods=("PUT",), body=schemas.BoardSettingsIn, module="tasks", level="write")

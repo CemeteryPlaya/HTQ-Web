@@ -52,6 +52,7 @@ from ..models import (
     TaskChecklistItem,
     TaskComment,
 )
+from . import board_fields
 from . import board_rank
 from . import board_scope
 from . import hydration
@@ -384,6 +385,7 @@ class _Ctx:
                 department_ids.add(task.department_id)
         self.users = hydration.user_briefs(user_ids)
         self.departments = hydration.department_briefs(department_ids)
+        self.fields = board_fields.card_fields(tasks)
 
 
 def _members(task: Task, ctx: _Ctx) -> list[dict]:
@@ -427,6 +429,8 @@ def card(task: Task, board: Board, scope, ctx: _Ctx) -> dict:
                         "name": hydration.department_name(ctx.departments, task.department_id)}
                        if task.department_id else None),
         "relation": _relation(task, board),
+        # Свои поля «на карточке» с домашних досок задачи (этап S3).
+        "fields": ctx.fields.get(task.id, []),
         "rank": task.board_rank,
         # «Новая» — только на своей личной доске (K-28): на досках отделов и
         # проектов не раскрываем, открыл ли задачу другой человек.
@@ -780,22 +784,40 @@ def list_boards(request) -> dict:
 
 # ── настройки доски ─────────────────────────────────────────────────────
 
+def settings_payload(board: Board) -> dict:
+    """Колонки и шаблоны чек-листов (у личной доски шаблонов нет)."""
+    return {"columns": columns_settings(board),
+            "checklist_templates": board_fields.templates_of(_settings_row(board))}
+
+
 @transaction.atomic
 def save_settings(request, board: Board, data: schemas.BoardSettingsIn) -> dict:
+    """Что прислано — заменяется целиком, чего нет (``null``) — не меняется:
+    колонки и шаблоны чек-листов правят разные вкладки настроек."""
     require_admin(request, board)
-    columns = {}
-    for status, column in data.columns.items():
-        columns[status] = {"title": (column.title or "").strip() or None,
-                           "color": column.color, "hidden": column.hidden}
-    visible = [status for status in COLUMN_ORDER
-               if not (columns.get(status) or {}).get("hidden")]
-    if not visible:
-        raise DomainError("board_columns_hidden", "Хотя бы одна колонка должна быть видна",
-                          status=422)
-    BoardSettings.objects.update_or_create(
-        board_kind=board.kind, board_id=board.id,
-        defaults={"columns": columns, "updated_by": request.token.user_id})
-    return {"columns": columns_settings(board)}
+    row = (BoardSettings.objects.select_for_update()
+           .filter(board_kind=board.kind, board_id=board.id).first())
+    defaults = {"updated_by": request.token.user_id}
+    if data.columns is not None:
+        columns = {}
+        for status, column in data.columns.items():
+            columns[status] = {"title": (column.title or "").strip() or None,
+                               "color": column.color, "hidden": column.hidden}
+        visible = [status for status in COLUMN_ORDER
+                   if not (columns.get(status) or {}).get("hidden")]
+        if not visible:
+            raise DomainError("board_columns_hidden", "Хотя бы одна колонка должна быть видна",
+                              status=422)
+        defaults["columns"] = columns
+    if data.checklist_templates is not None:
+        if board.kind == BoardKind.PERSONAL:
+            raise DomainError("board_fields_personal",
+                              "У личной доски нет своих полей и шаблонов", status=422)
+        defaults["checklist_templates"] = board_fields.normalize_templates(
+            data.checklist_templates, row.checklist_templates if row is not None else [])
+    BoardSettings.objects.update_or_create(board_kind=board.kind, board_id=board.id,
+                                           defaults=defaults)
+    return settings_payload(board)
 
 
 # ── уведомления по доске (K-30) ─────────────────────────────────────────

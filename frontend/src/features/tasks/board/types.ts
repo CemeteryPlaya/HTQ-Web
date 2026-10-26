@@ -3,7 +3,7 @@
  * этап S1). Колонка — статус задачи (K-02); доска лишь называет и красит
  * колонки по-своему (K-34).
  */
-import type { TaskPriority, TaskStatus } from '@/types/tasks';
+import type { BoardFieldType, ChecklistTemplate, TaskPriority, TaskStatus } from '@/types/tasks';
 
 export type BoardKind = 'personal' | 'department' | 'project';
 
@@ -40,6 +40,17 @@ export interface CardLabel {
   color: string;
 }
 
+/** Значок своего поля «на карточке» с домашней доски задачи (этап S3):
+ * пустые значения и снятые флажки сервер не присылает. */
+export interface CardFieldBadge {
+  id: number;
+  name: string;
+  type: BoardFieldType;
+  /** Текст, число строкой, дата ISO, `id` варианта, `true` у флажка. */
+  value: string | boolean;
+  option: { id: string; name: string; color: BoardColor | null } | null;
+}
+
 export interface BoardCard {
   id: number;
   key: string;
@@ -66,6 +77,8 @@ export interface BoardCard {
   can_move: boolean;
   /** Полная правка: метки, участники, даты в быстрой правке. */
   can_edit?: boolean;
+  /** Свои поля «на карточке» (этап S3). */
+  fields?: CardFieldBadge[];
 }
 
 export interface BoardColumn extends ColumnSetting {
@@ -88,6 +101,16 @@ export interface Board {
   columns: BoardColumn[];
   can: { admin: boolean; reorder: boolean; create: boolean };
 }
+
+/** Настройки доски: колонки (K-34) и шаблоны чек-листов (S3; у личной
+ * доски их нет). */
+export interface BoardSettingsPayload {
+  columns: ColumnsSettings;
+  checklist_templates: ChecklistTemplate[];
+}
+
+/** Доска со своими полями и шаблонами — отдела или проекта. */
+export type SharedBoardKey = Exclude<BoardKey, { kind: 'personal' }>;
 
 export interface BoardsList {
   personal: boolean;

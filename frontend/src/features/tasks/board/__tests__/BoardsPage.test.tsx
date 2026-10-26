@@ -3,7 +3,7 @@
  * доски, скрытые не показываются (K-34); «Добавить карточку» — только в
  * колонках, с которых задача может начаться у этого человека
  * (`task_status_initial`); доска отдела — по id из адреса, быстрое
- * добавление ставит задачу в отдел доски; «Колонки» — администратору доски
+ * добавление ставит задачу в отдел доски; «Настройки» — администратору доски
  * (K-39); невидимая доска — объяснение, а не пустой холст.
  */
 import { screen, waitFor, within } from '@testing-library/react';
@@ -150,17 +150,17 @@ describe('BoardsPage', () => {
     }));
   });
 
-  it('«Колонки» — только у администратора доски', async () => {
+  it('«Настройки» — только у администратора доски', async () => {
     serve(boardResponse());
     const view = renderAt('/tasks/board');
     await screen.findByText('Ожидающие исполнения');
-    expect(screen.queryByRole('button', { name: /Колонки/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Настройки/ })).not.toBeInTheDocument();
     view.unmount();
 
     serve(boardResponse({ admin: true }));
     renderAt('/tasks/board');
     await screen.findByText('Ожидающие исполнения');
-    expect(screen.getByRole('button', { name: /Колонки/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Настройки/ })).toBeInTheDocument();
   });
 
   it('невидимая доска объясняется, а не показывается пустой', async () => {

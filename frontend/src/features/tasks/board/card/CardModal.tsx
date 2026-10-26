@@ -1,9 +1,9 @@
 /**
  * Окно карточки поверх доски (решение K-19, Trello): слева — название,
  * «Добавить» (метки, даты, чек-лист, участники), участники, метки, даты,
- * приоритет, запросы доступа, описание, чек-листы; справа — «Комментарии и
- * события». Адрес — `?card=<id>`; «назад» и Esc закрывают. Кнопки — по
- * `can` карточки: права решает сервер.
+ * приоритет, поля доски (этап S3), запросы доступа, описание, чек-листы;
+ * справа — «Комментарии и события». Адрес — `?card=<id>`; «назад» и Esc
+ * закрывают. Кнопки — по `can` карточки: права решает сервер.
  */
 import { useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
@@ -20,6 +20,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { UserAvatar } from '@/components/ui/UserAvatar';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
@@ -27,7 +30,7 @@ import { errorStatus } from '@/lib/apiError';
 import { priorityHex, priorityLabel, TASK_PRIORITY_ORDER } from '@/lib/tasks/priority';
 import { canTransition } from '@/lib/tasks/transitions';
 import { cn } from '@/lib/utils';
-import type { Task, TaskStatus } from '@/types/tasks';
+import type { Task, TaskHomeBoard, TaskStatus } from '@/types/tasks';
 
 import { swatchStyle } from '../boardColors';
 import { dueTone, useColumnTitle } from '../boardUtils';
@@ -38,7 +41,9 @@ import { ActivityFeed } from './ActivityFeed';
 import { CardButton } from './CardButton';
 import { ChecklistBlock } from './ChecklistBlock';
 import { DatesPopover } from './DatesPopover';
+import type { TemplateRef } from './api';
 import { EditableText } from './EditableText';
+import { FieldsBlock } from './FieldsBlock';
 import { useCard, useCardPeople, useChecklistActions, useUpdateCard } from './hooks';
 import { LabelsPopover } from './LabelsPopover';
 import { MembersPopover } from './MembersPopover';
@@ -60,11 +65,43 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function NewChecklist({ onCreate, disabled }: { onCreate: (title: string) => void; disabled: boolean }) {
+/** Без шаблона — пустой чек-лист. */
+const NO_TEMPLATE = 'none';
+
+const templateKey = (board: TaskHomeBoard, id: string) => `${board.kind}:${board.id}:${id}`;
+
+function NewChecklist({ onCreate, disabled, boards }: {
+  onCreate: (title: string, template?: TemplateRef) => void;
+  disabled: boolean;
+  boards: TaskHomeBoard[];
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
-  useEffect(() => { if (open) setTitle(t('tasks.checklist.defaultTitle', 'Чек-лист')); }, [open, t]);
+  const [chosen, setChosen] = useState(NO_TEMPLATE);
+  useEffect(() => {
+    if (open) {
+      setTitle(t('tasks.checklist.defaultTitle', 'Чек-лист'));
+      setChosen(NO_TEMPLATE);
+    }
+  }, [open, t]);
+  // «Скопировать пункты из…» — шаблоны домашних досок задачи (этап S3).
+  const withTemplates = boards.filter((board) => board.checklist_templates.length > 0);
+  const find = (key: string) => {
+    for (const board of withTemplates) {
+      const template = board.checklist_templates.find((item) => templateKey(board, item.id) === key);
+      if (template) return { board, template };
+    }
+    return null;
+  };
+  const submit = () => {
+    if (!title.trim()) return;
+    const found = find(chosen);
+    onCreate(title.trim(), found ? {
+      board_kind: found.board.kind, board_id: found.board.id, template_id: found.template.id,
+    } : undefined);
+    setOpen(false);
+  };
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
@@ -72,14 +109,41 @@ function NewChecklist({ onCreate, disabled }: { onCreate: (title: string) => voi
           {t('tasks.card.add.checklist', 'Чек-лист')}
         </CardButton>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 space-y-2 p-3">
+      <PopoverContent align="start" className="w-72 space-y-2 p-3">
         <p className="text-center text-sm font-semibold">{t('tasks.checklist.new', 'Добавить чек-лист')}</p>
-        <Input autoFocus value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && title.trim()) { onCreate(title.trim()); setOpen(false); }
-          }} />
-        <Button size="sm" className="w-full" disabled={!title.trim()}
-          onClick={() => { onCreate(title.trim()); setOpen(false); }}>
+        <Input autoFocus value={title} maxLength={200} aria-label={t('tasks.checklist.titleLabel', 'Название')}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') submit(); }} />
+        {withTemplates.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">
+              {t('tasks.checklist.copyFrom', 'Скопировать пункты из…')}
+            </p>
+            <Select value={chosen} onValueChange={(key) => {
+              setChosen(key);
+              const found = find(key);
+              if (found) setTitle(found.template.title);
+            }}>
+              <SelectTrigger aria-label={t('tasks.checklist.copyFrom', 'Скопировать пункты из…')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_TEMPLATE}>{t('tasks.checklist.noTemplate', '(без шаблона)')}</SelectItem>
+                {withTemplates.map((board) => (
+                  <SelectGroup key={`${board.kind}:${board.id}`}>
+                    <SelectLabel>{board.title ?? t('tasks.fields.block', 'Поля доски')}</SelectLabel>
+                    {board.checklist_templates.map((template) => (
+                      <SelectItem key={template.id} value={templateKey(board, template.id)}>
+                        {template.title} · {template.items.length}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <Button size="sm" className="w-full" disabled={!title.trim()} onClick={submit}>
           {t('tasks.checklist.add', 'Добавить')}
         </Button>
       </PopoverContent>
@@ -165,7 +229,8 @@ function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProp
               onSave={(dates) => update.mutate(dates)}
               trigger={<CardButton disabled={!full}>
                 <Clock className="mr-1.5 h-4 w-4" />{t('tasks.card.add.dates', 'Даты')}</CardButton>} />
-            <NewChecklist disabled={!soft} onCreate={(title) => checklists.create.mutate(title)} />
+            <NewChecklist disabled={!soft} boards={task.home_boards ?? []}
+              onCreate={(title, template) => checklists.create.mutate({ title, template })} />
             <MembersPopover assignees={task.assignees ?? []} disabled={!full}
               onChange={(crew) => people.assignees.mutate(crew)}
               trigger={<CardButton disabled={!full}>
@@ -251,6 +316,8 @@ function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProp
             </DropdownMenu>
           </Section>
         </div>
+
+        <FieldsBlock task={task} canEdit={soft} />
 
         <AccessRequestsBlock task={task} myId={myId} />
 

@@ -898,9 +898,57 @@ export interface Task {
   checklists?: Checklist[];
   /** Сколько ждущих запросов доступа вызывающий может решить (K-31). */
   pending_access_requests?: number;
+  /** Домашние доски: поля со значениями и шаблоны чек-листов (K-35, S3). */
+  home_boards?: TaskHomeBoard[];
 
   created_at: string;
   updated_at: string;
+}
+
+/** Тип своего поля доски (K-35, канбан S3); после создания не меняется. */
+export type BoardFieldType = 'text' | 'number' | 'date' | 'checkbox' | 'list';
+
+/** Вариант поля-списка: `id` не меняется при переименовании. */
+export interface BoardFieldOption {
+  id: string;
+  name: string;
+  /** Цвет из палитры досок (`BOARD_COLORS`) или без цвета. */
+  color: string | null;
+}
+
+/** Своё поле доски отдела или проекта. */
+export interface BoardFieldDef {
+  id: number;
+  board_kind: 'department' | 'project';
+  board_id: number;
+  name: string;
+  type: BoardFieldType;
+  options: BoardFieldOption[];
+  show_on_card: boolean;
+  position: string;
+}
+
+/** Поле домашней доски задачи со значением: текст, число строкой, дата
+ * ISO, `id` варианта; флажок — всегда `boolean`; пусто — `null`. */
+export interface TaskBoardField extends BoardFieldDef {
+  value: string | boolean | null;
+}
+
+/** Шаблон чек-листа доски: кнопка «Чек-лист» копирует его пункты. */
+export interface ChecklistTemplate {
+  id: string;
+  title: string;
+  items: string[];
+}
+
+/** Домашняя доска задачи — отдела `department_id` или проекта `project_id`:
+ * поля задачи — её поля (доска вышестоящего отдела свои не применяет). */
+export interface TaskHomeBoard {
+  kind: 'department' | 'project';
+  id: number;
+  title: string | null;
+  fields: TaskBoardField[];
+  checklist_templates: ChecklistTemplate[];
 }
 
 /**

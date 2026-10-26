@@ -2733,7 +2733,8 @@
         "comments": "Comments",
         "description": "Has a description",
         "due": "Due date",
-        "priority": "Priority"
+        "priority": "Priority",
+        "field": "{{name}}: {{value}}"
       },
       "cancel": "Cancel",
       "card": {
@@ -2814,9 +2815,11 @@
         "hidden": "Hidden",
         "hiddenCount": "hidden: {{count}}",
         "hint": "A list is a task status. The board may rename, colour and hide it; the transitions between statuses stay the same.",
-        "open": "Lists",
+        "open": "Settings",
         "save": "Save",
-        "title": "Board lists"
+        "title": "Board lists",
+        "boardTitle": "Board settings",
+        "description": "Only the board admin changes these settings."
       },
       "settingsFailed": "Could not save the board settings",
       "switcher": {
@@ -2921,7 +2924,10 @@
       "new": "Add checklist",
       "rename": "Checklist title",
       "renameItem": "Item text",
-      "showDone": "Show checked items ({{count}})"
+      "showDone": "Show checked items ({{count}})",
+      "copyFrom": "Copy items from…",
+      "noTemplate": "(no template)",
+      "titleLabel": "Title"
     },
     "feed": {
       "accessApproved": "access request {{kind}} approved",
@@ -2968,7 +2974,12 @@
       "supervisor": "supervisor — {{name}}",
       "supervisorRemoved": "supervisor removed",
       "title": "Comments and activity",
-      "transfer": "moved from department “{{from}}” to “{{to}}”"
+      "transfer": "moved from department “{{from}}” to “{{to}}”",
+      "fieldDeleted": "deleted field",
+      "fieldChecked": "checkbox \"{{name}}\" checked",
+      "fieldUnchecked": "checkbox \"{{name}}\" unchecked",
+      "fieldCleared": "field \"{{name}}\" cleared (was: {{from}})",
+      "fieldSet": "field \"{{name}}\": {{from}} → {{to}}"
     },
     "access": {
       "banner": "Access requests: {{count}}",
@@ -3020,6 +3031,70 @@
       "noneToDecide": "No requests await your decision.",
       "title": "Access requests",
       "toDecide": "To decide"
+    },
+    "fields": {
+      "tab": "Fields",
+      "hint": "Fields appear in every task card of this board. Tasks of sub-departments use the fields of their own boards.",
+      "empty": "No fields yet — for example, \"Waiting reason\" or \"Stage\".",
+      "new": "New field",
+      "name": "Field name",
+      "namePlaceholder": "For example, \"Waiting reason\"",
+      "nameRequired": "Name the field",
+      "typeFixed": "type cannot change",
+      "type": {
+        "label": "Field type",
+        "text": "Text",
+        "number": "Number",
+        "date": "Date",
+        "checkbox": "Checkbox",
+        "list": "Dropdown"
+      },
+      "options": "Options",
+      "optionsEmpty": "Add the options people will pick from in the card.",
+      "optionName": "Option {{number}}",
+      "optionRemove": "Remove option {{number}}",
+      "optionAdd": "Option",
+      "optionColor": "Option colour",
+      "optionRequired": "Every option needs a name",
+      "optionDuplicate": "Options must not repeat",
+      "optionRemovedHint": "Tasks with a removed option will have the value cleared.",
+      "showOnCard": "Show on card",
+      "showOnCardOf": "Show \"{{name}}\" on the card",
+      "onCard": "On card",
+      "save": "Save",
+      "create": "Create",
+      "up": "Move up",
+      "down": "Move down",
+      "edit": "Edit \"{{name}}\"",
+      "delete": "Delete \"{{name}}\"",
+      "deleteConfirm": "Delete the field \"{{name}}\"? Its values on every task of the board are deleted too.",
+      "deleteYes": "Delete",
+      "failed": "Could not change the board field",
+      "block": "Board fields",
+      "blockOf": "Fields of \"{{name}}\"",
+      "placeholder": "Add a value…",
+      "notNumber": "Enter a number, for example 1250.5",
+      "clear": "Clear \"{{name}}\"",
+      "clearValue": "Clear",
+      "choose": "Choose…",
+      "noOptions": "The dropdown has no options — the board admin adds them in the board settings.",
+      "valueFailed": "Could not save the field value"
+    },
+    "templates": {
+      "tab": "Checklist templates",
+      "hint": "The Checklist button in a task card offers to copy a template's items.",
+      "empty": "No templates yet.",
+      "new": "New template",
+      "title": "Template name",
+      "titlePlaceholder": "For example, \"Checklist\"",
+      "titleRequired": "Name the template",
+      "items": "Items of \"{{name}}\"",
+      "itemsPlaceholder": "One item per line",
+      "count": "Items: {{count}}",
+      "tooMany": "A template holds at most {{count}} items",
+      "tooLong": "An item is at most {{count}} characters",
+      "delete": "Delete the template \"{{name}}\"",
+      "failed": "Could not save the checklist templates"
     }
   },
   "settingsPage": {

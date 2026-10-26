@@ -21,6 +21,12 @@ export function swatchStyle(color: BoardColor): CSSProperties {
   return { backgroundColor: `hsl(var(--board-color-${color}))` };
 }
 
+/** Плашка варианта поля-списка: цвет полупрозрачно, текст — цветом темы,
+ * поэтому читается и на жёлтом, и в тёмной теме. */
+export function chipStyle(color: BoardColor | null): CSSProperties | undefined {
+  return color ? { backgroundColor: `hsl(var(--board-color-${color}) / 0.35)` } : undefined;
+}
+
 /** Фон холста: у доски проекта — цвет проекта, иначе нейтральный градиент. */
 export function canvasStyle(projectColor: string | null): CSSProperties {
   if (projectColor) {

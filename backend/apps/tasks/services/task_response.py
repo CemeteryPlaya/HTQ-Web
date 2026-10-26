@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .. import schemas
 from ..models import DepartmentLinkKind, Task
+from . import board_fields
 from . import checklist_service
 from . import contractor_service
 from . import hydration
@@ -330,6 +331,7 @@ def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
     payload["subtasks"] = [s.model_dump() for s in build_list(subtasks, scope=scope)]
     payload["can"] = _can(task, scope)
     payload["checklists"] = checklist_service.for_task(task.id)
+    payload["home_boards"] = board_fields.home_boards(task)
     if scope is not None:
         from . import access_requests
 

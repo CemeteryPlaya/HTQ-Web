@@ -1256,12 +1256,15 @@ class BoardSettings(models.Model):
 
     ``columns`` — ``{status: {"title": str, "color": str | None, "hidden": bool}}``;
     статус без записи показывается с названием по умолчанию и без цвета.
+    ``checklist_templates`` (этап S3) — ``[{"id": str, "title": str,
+    "items": [str]}]``: кнопка «Чек-лист» и автоматизация копируют пункты.
     Строка заводится при первом сохранении настроек.
     """
 
     board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
     board_id = models.IntegerField()
     columns = models.JSONField(default=dict, blank=True)
+    checklist_templates = models.JSONField(default=list, blank=True)
     updated_by = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -1395,6 +1398,68 @@ class TaskAccessRequest(models.Model):
         ]
         indexes = [models.Index(fields=["status", "created_at"],
                                 name="ix_task_access_request_status")]
+
+
+class BoardFieldType(models.TextChoices):
+    TEXT = "text"
+    NUMBER = "number"
+    DATE = "date"
+    CHECKBOX = "checkbox"
+    LIST = "list"
+
+
+class BoardField(models.Model):
+    """Своё поле доски отдела или проекта (решение K-35, этап S3).
+
+    Поля задачи — поля её домашних досок: отдела ``Task.department_id`` и
+    проекта ``Task.project_id``. ``options`` — варианты списка
+    ``[{"id": str, "name": str, "color": str | None}]``; ``id`` не меняется
+    при переименовании, на него ссылаются значения и автоматизация. Тип после
+    создания не меняется. Порядок — дробный ранг ``board_rank``.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    name = models.CharField(max_length=100)
+    field_type = models.CharField(max_length=10, choices=BoardFieldType.choices)
+    options = models.JSONField(default=list, blank=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    show_on_card = models.BooleanField(default=False)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Поле доски"
+        verbose_name_plural = "Поля досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "name"],
+                                    name="uq_board_field_name"),
+        ]
+        indexes = [models.Index(fields=["board_kind", "board_id", "position"],
+                                name="ix_board_field_board")]
+
+
+class TaskFieldValue(models.Model):
+    """Значение своего поля у задачи (K-35). Заполнен один столбец — по типу
+    поля; пустое значение строкой не хранится (очистка удаляет строку)."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="field_values")
+    field = models.ForeignKey(BoardField, on_delete=models.CASCADE, related_name="values")
+    value_text = models.TextField(blank=True, default="")
+    value_number = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    value_date = models.DateField(null=True, blank=True)
+    value_bool = models.BooleanField(null=True, blank=True)
+    value_option = models.CharField(max_length=16, blank=True, default="")
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Значение поля задачи"
+        verbose_name_plural = "Значения полей задач"
+        constraints = [
+            models.UniqueConstraint(fields=["task", "field"], name="uq_task_field_value"),
+        ]
 
 
 # ─────────────────────────────────────────────────────────────────────────

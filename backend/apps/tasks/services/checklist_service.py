@@ -18,8 +18,10 @@ from django.utils import timezone
 from htqweb.errors import DomainError
 
 from ..models import Task, TaskChecklist, TaskChecklistItem
+from . import board_fields
 from . import board_rank
 from . import hydration
+from . import ranked
 from . import task_scope
 from . import task_service
 
@@ -108,47 +110,15 @@ def _actor(request) -> int:
 
 # ── порядок ─────────────────────────────────────────────────────────────
 
-def _ordered(rows: list) -> list:
-    return sorted(rows, key=lambda row: (row.position, row.id))
-
-
 def _position(rows: list, moving_id: int | None, before_id: int | None,
               after_id: int | None, model_name: str) -> str:
-    """Ранг между соседями (``before_id`` — над местом вставки, ``after_id`` —
-    под ним); без соседей — в конец. Сосед не из этого списка — 409, как у
-    карточек доски: список изменился, клиент перечитывает."""
-    rows = [row for row in _ordered(rows) if row.id != moving_id]
-    order = [row.id for row in rows]
-    ranks = {row.id: row.position for row in rows}
-    for neighbour in (before_id, after_id):
-        if neighbour is not None and neighbour not in ranks:
-            raise DomainError("checklist_order_stale",
-                              f"Список изменился — обновите {model_name} и повторите",
-                              status=409)
-    if before_id is None and after_id is None:
-        return board_rank.between(rows[-1].position if rows else None, None)
-    if before_id is not None and after_id is not None:
-        if order.index(after_id) != order.index(before_id) + 1:
-            raise DomainError("checklist_order_stale",
-                              f"Список изменился — обновите {model_name} и повторите",
-                              status=409)
-        return board_rank.between(ranks[before_id], ranks[after_id])
-    if before_id is not None:
-        index = order.index(before_id)
-        nxt = ranks[order[index + 1]] if index + 1 < len(order) else None
-        return board_rank.between(ranks[before_id], nxt)
-    index = order.index(after_id)
-    prev = ranks[order[index - 1]] if index > 0 else None
-    return board_rank.between(prev, ranks[after_id])
+    """Ранг между соседями; сосед не из этого списка — 409, как у карточек
+    доски: список изменился, клиент перечитывает."""
+    return ranked.position_between(rows, moving_id, before_id, after_id,
+                                   code="checklist_order_stale", what=model_name)
 
 
-def _respread(rows: list) -> None:
-    """Слишком длинный ранг — список раскладывается заново в текущем порядке."""
-    rows = _ordered(rows)
-    for row, rank in zip(rows, board_rank.spread(len(rows))):
-        if row.position != rank:
-            row.position = rank
-            row.save(update_fields=["position", "updated_at"])
+_respread = ranked.respread
 
 
 # ── чек-листы ───────────────────────────────────────────────────────────
@@ -159,15 +129,27 @@ def list_checklists(task_id: int, request) -> list[dict]:
 
 
 @transaction.atomic
-def create_checklist(task_id: int, request, title: str) -> dict:
+def create_checklist(task_id: int, request, title: str, template=None) -> dict:
+    """``template`` — ``schemas.ChecklistTemplateRef``: пункты копируются из
+    шаблона домашней доски задачи (этап S3); журнал — одна строка
+    ``checklist_added``, как у пустого чек-листа."""
     task = _lock_task(task_id, request)
     existing = list(TaskChecklist.objects.filter(task=task))
     if len(existing) >= CHECKLIST_LIMIT:
         raise DomainError("checklist_limit",
                           f"У задачи не больше {CHECKLIST_LIMIT} чек-листов", status=422)
+    items = []
+    if template is not None:
+        items = board_fields.template_for(task, template.board_kind, template.board_id,
+                                          template.template_id)["items"]
     checklist = TaskChecklist.objects.create(
         task=task, title=title, position=_position(existing, None, None, None, "чек-листы"),
         created_by_id=_actor(request))
+    if items:
+        TaskChecklistItem.objects.bulk_create([
+            TaskChecklistItem(checklist=checklist, text=text, position=rank,
+                              created_by_id=_actor(request))
+            for text, rank in zip(items, board_rank.spread(len(items)))])
     task_service._log(task, _actor(request), "checklist_added", None, title)
     return _one(checklist)
 

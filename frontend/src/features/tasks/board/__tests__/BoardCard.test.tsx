@@ -52,6 +52,21 @@ describe('BoardCard', () => {
     expect(screen.queryByRole('button', { name: 'Отметить выполненной' })).not.toBeInTheDocument();
   });
 
+  it('свои поля «на карточке» — значками: вариант, флажок, дата, число, текст', () => {
+    renderCard({ fields: [
+      { id: 1, name: 'Этап', type: 'list', value: 'b2', option: { id: 'b2', name: 'Стройка', color: 'orange' } },
+      { id: 2, name: 'Срочно', type: 'checkbox', value: true, option: null },
+      { id: 3, name: 'Взята в работу', type: 'date', value: '2031-10-26', option: null },
+      { id: 4, name: 'Объём', type: 'number', value: '1234.5', option: null },
+      { id: 5, name: 'Причина', type: 'text', value: 'Ждём смету', option: null },
+    ] });
+    expect(screen.getByText('Стройка')).toBeInTheDocument();
+    expect(screen.getByText('Срочно')).toBeInTheDocument();
+    expect(screen.getByText('Взята в работу: 26 окт. 2031')).toBeInTheDocument();
+    expect(screen.getByText(/^Объём: 1\s234,5$/)).toBeInTheDocument();
+    expect(screen.getByText('Причина: Ждём смету')).toBeInTheDocument();
+  });
+
   it('карандаш открывает быструю правку, а не карточку', async () => {
     const { onQuickEdit, onOpen } = renderCard();
     await userEvent.click(screen.getByRole('button', { name: 'Быстрая правка' }));

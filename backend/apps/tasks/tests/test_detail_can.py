@@ -84,7 +84,7 @@ def test_comment_flag_is_true_for_viewers(org):
 def test_can_present_in_create_patch_and_transition_responses(org):
     created = post_json(Client(), f"{BASE}/tasks/", {"summary": "C"}, **as_user(EMP_IT))
     assert set(created.json()["can"]) == {"full_edit", "soft_edit", "comment", "transfer",
-                                          "claim", "delete"}
+                                          "claim", "delete", "request_access", "decide_access"}
     task_id = created.json()["id"]
     patched = patch_json(Client(), f"{BASE}/tasks/{task_id}/", {"status": "in_progress"},
                          **as_user(EMP_IT))

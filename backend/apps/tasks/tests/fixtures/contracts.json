@@ -173,7 +173,8 @@
         "can": "dict",
         "department_links": "list",
         "checklists": "list",
-        "pending_access_requests": "int"
+        "pending_access_requests": "int",
+        "home_boards": "list"
       }
     },
     "TaskStats": {

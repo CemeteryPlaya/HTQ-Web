@@ -230,6 +230,7 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
         <BoardSettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
+          boardKey={boardKey}
           columns={board.board.settings.columns}
           saving={saveColumns.isPending}
           onSave={(columns) => saveColumns.mutateAsync(columns)}

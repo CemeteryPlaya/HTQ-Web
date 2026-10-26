@@ -95,7 +95,7 @@ export function useSaveColumns(key: BoardKey) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (columns: Partial<ColumnsSettings>) => boardsApi.saveSettings(key, columns),
+    mutationFn: (columns: Partial<ColumnsSettings>) => boardsApi.saveSettings(key, { columns }),
     onError: (error) => reportApiError(error, t('tasks.board.settingsFailed', 'Не удалось сохранить настройки доски')),
     onSettled: () => queryClient.invalidateQueries({ queryKey: boardKeys.boardPrefix(key) }),
   });

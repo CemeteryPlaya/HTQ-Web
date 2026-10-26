@@ -2,7 +2,7 @@
  * Окно карточки — типы ленты, запросов доступа и панели «Запросы»
  * (мастер-план §6.2–6.4, этап S2). Сама карточка — `Task` из `@/types/tasks`.
  */
-import type { TaskAccessKind } from '@/types/tasks';
+import type { BoardFieldType, TaskAccessKind } from '@/types/tasks';
 
 export interface FeedPerson {
   id: number;
@@ -31,6 +31,9 @@ export interface FeedActivity {
   /** Имена за id людей и отделов; остальное фронт показывает сам. */
   old_label: string | null;
   new_label: string | null;
+  /** Строка своего поля доски (`field:<id>`, этап S3): название и тип; у
+   * удалённого поля — `null`. */
+  board_field?: { id: number; name: string | null; type: BoardFieldType | null } | null;
 }
 
 export type FeedEntry = FeedComment | FeedActivity;

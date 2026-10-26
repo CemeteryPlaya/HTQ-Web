@@ -18,6 +18,7 @@ import { priorityLabel } from '@/lib/tasks/priority';
 import { TASK_STATUS } from '@/lib/tasks/status';
 import type { TaskPriority, TaskStatus } from '@/types/tasks';
 
+import { fieldDate, fieldNumber } from '../fields/fieldFormat';
 import { CardButton } from './CardButton';
 import { useAddComment, useTaskFeed } from './hooks';
 import type { FeedActivity, FeedEntry } from './types';
@@ -28,16 +29,39 @@ const KIND_KEYS: Record<string, [string, string]> = {
 };
 
 function useDescribe() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const status = (value: string | null) => (value && value in TASK_STATUS
     ? t(TASK_STATUS[value as TaskStatus].labelKey, value) : value ?? '—');
   const kind = (value: string | null) => {
     const [key, fallback] = KIND_KEYS[(value ?? '').split(':')[0]] ?? [];
     return key ? t(key, fallback) : value ?? '';
   };
+  /** Своё поле доски: значение по типу поля; список и текст — как есть. */
+  const fieldValue = (entry: FeedActivity, value: string | null) => {
+    if (value === null) return '—';
+    const type = entry.board_field?.type;
+    if (type === 'date') return fieldDate(value, i18n.language);
+    if (type === 'number') return fieldNumber(value, i18n.language);
+    return value;
+  };
+  const describeField = (entry: FeedActivity): string => {
+    const name = entry.board_field?.name ?? t('tasks.feed.fieldDeleted', 'удалённое поле');
+    if (entry.board_field?.type === 'checkbox') {
+      return entry.new
+        ? t('tasks.feed.fieldChecked', 'флажок «{{name}}» отмечен', { name })
+        : t('tasks.feed.fieldUnchecked', 'флажок «{{name}}» снят', { name });
+    }
+    if (entry.new === null) {
+      return t('tasks.feed.fieldCleared', 'поле «{{name}}» очищено (было: {{from}})',
+        { name, from: fieldValue(entry, entry.old) });
+    }
+    return t('tasks.feed.fieldSet', 'поле «{{name}}»: {{from}} → {{to}}',
+      { name, from: fieldValue(entry, entry.old), to: fieldValue(entry, entry.new) });
+  };
   return (entry: FeedActivity): string => {
     const oldLabel = entry.old_label ?? entry.old ?? '—';
     const newLabel = entry.new_label ?? entry.new ?? '—';
+    if (entry.field.startsWith('field:')) return describeField(entry);
     switch (entry.field) {
       case 'status':
         return t('tasks.feed.status', 'статус: {{from}} → {{to}}',
@@ -68,10 +92,10 @@ function useDescribe() {
       case 'description':
         return t('tasks.feed.description', 'описание изменено');
       case 'due_date':
-        return entry.new ? t('tasks.feed.due', 'срок — {{date}}', { date: entry.new })
+        return entry.new ? t('tasks.feed.due', 'срок — {{date}}', { date: fieldDate(entry.new, i18n.language) })
           : t('tasks.feed.dueRemoved', 'срок снят');
       case 'start_date':
-        return entry.new ? t('tasks.feed.start', 'начало — {{date}}', { date: entry.new })
+        return entry.new ? t('tasks.feed.start', 'начало — {{date}}', { date: fieldDate(entry.new, i18n.language) })
           : t('tasks.feed.startRemoved', 'дата начала снята');
       case 'priority':
         return t('tasks.feed.priority', 'приоритет: {{to}}',

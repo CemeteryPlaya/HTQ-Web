@@ -24,7 +24,7 @@ def _task_checklists_get(request, task_id: int):
 
 @api_view(methods=("POST",), body=schemas.ChecklistIn, status=201, module="tasks", level="write")
 def _task_checklists_post(request, task_id: int, data: schemas.ChecklistIn):
-    return checklist_service.create_checklist(task_id, request, data.title)
+    return checklist_service.create_checklist(task_id, request, data.title, data.template)
 
 
 def task_checklists(request, task_id: int):

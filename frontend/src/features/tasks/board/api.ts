@@ -4,9 +4,12 @@
  */
 import api from '@/api/client';
 import { apiPath } from '@/api/endpoints';
-import type { TaskStatus } from '@/types/tasks';
+import type { BoardFieldDef, BoardFieldType, TaskHomeBoard, TaskStatus } from '@/types/tasks';
 
-import type { Board, BoardCard, BoardFilters, BoardKey, BoardsList, ColumnsSettings } from './types';
+import type {
+  Board, BoardCard, BoardColor, BoardFilters, BoardKey, BoardSettingsPayload, BoardsList,
+  ColumnsSettings, SharedBoardKey,
+} from './types';
 
 const path = (suffix: string) => apiPath('tasks', suffix);
 
@@ -72,8 +75,65 @@ export const boardsApi = {
     await api.post(path(`tasks/${taskId}/seen`));
   },
 
-  saveSettings: async (key: BoardKey, columns: Partial<ColumnsSettings>): Promise<{ columns: ColumnsSettings }> =>
-    (await api.put<{ columns: ColumnsSettings }>(path(`${boardPath(key)}/settings`), { columns })).data,
+  settings: async (key: BoardKey): Promise<BoardSettingsPayload> =>
+    (await api.get<BoardSettingsPayload>(path(`${boardPath(key)}/settings`))).data,
+
+  /** Что прислано — заменяется целиком, чего нет — не меняется. */
+  saveSettings: async (key: BoardKey, body: {
+    columns?: Partial<ColumnsSettings>;
+    checklist_templates?: TemplateDraft[];
+  }): Promise<BoardSettingsPayload> =>
+    (await api.put<BoardSettingsPayload>(path(`${boardPath(key)}/settings`), body)).data,
+};
+
+/** Вариант списка в правке: с `id` — прежний, без — новый. */
+export interface OptionDraft {
+  id?: string;
+  name: string;
+  color: BoardColor | null;
+}
+
+/** Шаблон чек-листа в правке: с `id` — прежний, без — новый. */
+export interface TemplateDraft {
+  id?: string;
+  title: string;
+  items: string[];
+}
+
+export interface FieldPatch {
+  name?: string;
+  options?: OptionDraft[];
+  show_on_card?: boolean;
+  before_id?: number | null;
+  after_id?: number | null;
+}
+
+/** Свои поля досок отделов и проектов (решение K-35, этап S3). */
+export const fieldsApi = {
+  list: async (key: SharedBoardKey): Promise<BoardFieldDef[]> =>
+    (await api.get<BoardFieldDef[]>(path(`${boardPath(key)}/fields`))).data,
+
+  create: async (key: SharedBoardKey, body: {
+    name: string;
+    type: BoardFieldType;
+    options: OptionDraft[];
+    show_on_card: boolean;
+  }): Promise<BoardFieldDef> =>
+    (await api.post<BoardFieldDef>(path(`${boardPath(key)}/fields`), body)).data,
+
+  update: async (fieldId: number, body: FieldPatch): Promise<BoardFieldDef> =>
+    (await api.patch<BoardFieldDef>(path(`boards/fields/${fieldId}`), body)).data,
+
+  remove: async (fieldId: number): Promise<void> => {
+    await api.delete(path(`boards/fields/${fieldId}`));
+  },
+
+  /** Значение поля задачи; `null` — очистить. Ответ — домашние доски
+   * карточки целиком. */
+  setValue: async (taskId: number, fieldId: number, value: string | boolean | null):
+    Promise<{ home_boards: TaskHomeBoard[] }> =>
+    (await api.put<{ home_boards: TaskHomeBoard[] }>(path(`tasks/${taskId}/fields/${fieldId}`),
+      { value })).data,
 };
 
 /** Ключи запросов (мастер-план §7.2). */
@@ -85,4 +145,7 @@ export const boardKeys = {
       filterParams(filters)] as const,
   boardPrefix: (key: BoardKey) =>
     ['tasks', 'board', key.kind, key.kind === 'personal' ? null : key.id] as const,
+  settings: (key: BoardKey) =>
+    ['tasks', 'board-settings', key.kind, key.kind === 'personal' ? null : key.id] as const,
+  fields: (key: SharedBoardKey) => ['tasks', 'board-fields', key.kind, key.id] as const,
 };

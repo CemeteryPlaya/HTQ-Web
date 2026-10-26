@@ -278,4 +278,6 @@ urlpatterns = [
     path("", include("apps.tasks.urls_checklists")),
     # ── запросы доступа (§6.2, K-31, K-32) ───────────────────────────────────
     path("", include("apps.tasks.urls_access")),
+    # ── свои поля досок (K-35, этап S3) ──────────────────────────────────────
+    path("", include("apps.tasks.urls_fields")),
 ]

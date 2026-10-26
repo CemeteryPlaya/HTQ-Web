@@ -1,18 +1,21 @@
 /**
  * Значки карточки (Trello): срок (красный — просрочен, жёлтый — ≤ 2 дней,
  * зелёный — выполнено), описание, комментарии, вложения, чек-лист «3/7»
- * (зелёный при полном) и приоритет.
+ * (зелёный при полном), приоритет и свои поля «на карточке» (этап S3).
  */
 import { format, parseISO } from 'date-fns';
 import { enUS, ru } from 'date-fns/locale';
 import { AlignLeft, CheckSquare, Clock, MessageSquare, Paperclip } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import { priorityHex, priorityLabel } from '@/lib/tasks/priority';
 import { cn } from '@/lib/utils';
 
+import { chipStyle } from './boardColors';
 import { dueTone, type DueTone } from './boardUtils';
-import type { BoardCard } from './types';
+import { fieldDate, fieldNumber } from './fields/fieldFormat';
+import type { BoardCard, CardFieldBadge } from './types';
 
 const DUE_CLASS: Record<DueTone, string> = {
   overdue: 'bg-board-overdue text-white',
@@ -20,6 +23,17 @@ const DUE_CLASS: Record<DueTone, string> = {
   done: 'bg-board-done text-white',
   normal: 'text-muted-foreground',
 };
+
+/** Подпись значка поля: у списка — вариант, у флажка — само название. */
+function fieldText(badge: CardFieldBadge, t: TFunction, language: string | undefined): string {
+  if (badge.type === 'list') return badge.option?.name ?? '';
+  if (badge.type === 'checkbox') return badge.name;
+  const value = String(badge.value);
+  const shown = badge.type === 'date' ? fieldDate(value, language)
+    : badge.type === 'number' ? fieldNumber(value, language)
+      : value.length > 40 ? `${value.slice(0, 40)}…` : value;
+  return t('tasks.board.badge.field', '{{name}}: {{value}}', { name: badge.name, value: shown });
+}
 
 export function CardBadges({ card }: { card: BoardCard }) {
   const { t, i18n } = useTranslation();
@@ -29,7 +43,9 @@ export function CardBadges({ card }: { card: BoardCard }) {
   // Обычный приоритет на карточке не пишем: значок на каждой карточке —
   // шум, который глушит срочные.
   const showPriority = card.priority !== 'medium';
-  if (!tone && !card.has_description && !comments && !attachments && !total && !showPriority) {
+  const fields = card.fields ?? [];
+  if (!tone && !card.has_description && !comments && !attachments && !total && !showPriority
+      && fields.length === 0) {
     return null;
   }
 
@@ -77,6 +93,16 @@ export function CardBadges({ card }: { card: BoardCard }) {
           {t('tasks.board.badge.priority', 'Приоритет')}: {priorityLabel(card.priority, t)}
         </span>
       )}
+      {fields.map((badge) => (
+        <span key={badge.id} title={badge.name}
+          className={cn('inline-flex max-w-full items-center gap-1 truncate rounded px-1.5 py-0.5',
+            badge.type === 'list' && !badge.option?.color ? 'bg-muted' : 'text-muted-foreground',
+            badge.type === 'list' && 'text-foreground')}
+          style={badge.type === 'list' ? chipStyle(badge.option?.color ?? null) : undefined}>
+          {badge.type === 'checkbox' && <CheckSquare className="h-3.5 w-3.5 shrink-0" />}
+          {fieldText(badge, t, i18n.language)}
+        </span>
+      ))}
     </div>
   );
 }

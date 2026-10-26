@@ -5,7 +5,9 @@
 смещение не годится — новая запись между страницами сдвинула бы его.
 ``details=0`` — комментарии и ключевые события, ``details=1`` — весь журнал.
 Значения журнала гидрируются: id людей и отделов → имена; статусы фронт
-переводит сам. Права — видимость задачи (``load_for_action``, 404).
+переводит сам. Строка своего поля доски (``field:<id>``, этап S3) несёт
+``board_field`` — название и тип поля (удалённое — без них). Права —
+видимость задачи (``load_for_action``, 404).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from django.db.models import Q
 from htqweb.errors import DomainError
 
 from ..models import TaskActivity, TaskComment
+from . import board_fields
 from . import hydration
 from . import task_service
 
@@ -121,6 +124,8 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
             user_ids.add(_requester(row.new_value))
     users = hydration.user_briefs(user_ids)
     departments = hydration.department_briefs(department_ids)
+    fields = board_fields.journal_fields(entry["row"].field_name for entry in page
+                                         if entry["kind"] == ACTIVITY)
 
     def person(user_id):
         if user_id is None:
@@ -138,6 +143,14 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
             return hydration.user_name(users, _requester(value))
         return None
 
+    def board_field(name: str) -> dict | None:
+        if not name.startswith(board_fields.FIELD_PREFIX):
+            return None
+        field_id = _ids(name[len(board_fields.FIELD_PREFIX):])
+        found = fields.get(field_id)
+        return {"id": field_id, "name": found.name if found else None,
+                "type": found.field_type if found else None}
+
     items = []
     for entry in page:
         row = entry["row"]
@@ -150,5 +163,6 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
                           "actor": person(row.actor_id), "field": row.field_name,
                           "old": row.old_value, "new": row.new_value,
                           "old_label": label(row.field_name, row.old_value),
-                          "new_label": label(row.field_name, row.new_value)})
+                          "new_label": label(row.field_name, row.new_value),
+                          "board_field": board_field(row.field_name)})
     return {"items": items, "next_before": _cursor(page[-1]) if more else None}

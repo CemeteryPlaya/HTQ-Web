@@ -18,9 +18,17 @@ export interface PlaceBody {
   after_id?: number | null;
 }
 
+/** Шаблон домашней доски задачи, из которого копируются пункты (S3). */
+export interface TemplateRef {
+  board_kind: 'department' | 'project';
+  board_id: number;
+  template_id: string;
+}
+
 export const checklistsApi = {
-  create: async (taskId: number, title: string): Promise<Checklist> =>
-    (await api.post<Checklist>(path(`tasks/${taskId}/checklists`), { title })).data,
+  create: async (taskId: number, title: string, template?: TemplateRef): Promise<Checklist> =>
+    (await api.post<Checklist>(path(`tasks/${taskId}/checklists`),
+      template ? { title, template } : { title })).data,
 
   update: async (checklistId: number, body: { title?: string } & PlaceBody): Promise<Checklist> =>
     (await api.patch<Checklist>(path(`checklists/${checklistId}`), body)).data,

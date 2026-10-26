@@ -17,9 +17,12 @@ import {
 import { reportApiError } from '@/lib/apiError';
 import type { AssigneeRole, Checklist, Task, TaskAccessKind, TaskStatus } from '@/types/tasks';
 
-import { boardKeys } from '../api';
+import { boardKeys, fieldsApi } from '../api';
 import type { Board, BoardKey } from '../types';
-import { accessApi, boardNotificationsApi, cardKeys, checklistsApi, feedApi, type PlaceBody } from './api';
+import {
+  accessApi, boardNotificationsApi, cardKeys, checklistsApi, feedApi, type PlaceBody,
+  type TemplateRef,
+} from './api';
 import type { FeedPage } from './types';
 
 /** Списки, где видна карточка: доски и старый реестр «Задачи» — `HRTasks` и
@@ -192,7 +195,8 @@ export function useChecklistActions(taskId: number) {
     reportApiError(error, t('tasks.checklist.failed', 'Не удалось изменить чек-лист'));
 
   const create = useMutation({
-    mutationFn: (title: string) => checklistsApi.create(taskId, title),
+    mutationFn: ({ title, template }: { title: string; template?: TemplateRef }) =>
+      checklistsApi.create(taskId, title, template),
     onSuccess: (checklist) => put(checklist), onError: failed,
   });
   const rename = useMutation({
@@ -237,6 +241,29 @@ export function useChecklistActions(taskId: number) {
     onSuccess: (checklist) => put(checklist), onError: failed,
   });
   return { create, rename, remove, addItem, updateItem, removeItem };
+}
+
+// ── свои поля доски (этап S3) ────────────────────────────────────────────
+
+/** Значение поля задачи: ответ — домашние доски карточки целиком; значки на
+ * досках и лента перечитываются. */
+export function useFieldValue(taskId: number) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ fieldId, value }: { fieldId: number; value: string | boolean | null }) =>
+      fieldsApi.setValue(taskId, fieldId, value),
+    onSuccess: ({ home_boards }) => {
+      queryClient.setQueryData<Task>(cardKeys.card(taskId), (task) => task && { ...task, home_boards });
+      invalidateTaskLists(queryClient);
+      void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
+    },
+    onError: (error) => {
+      // Поле на экране вернётся к значению с сервера.
+      void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
+      reportApiError(error, t('tasks.fields.valueFailed', 'Не удалось сохранить значение поля'));
+    },
+  });
 }
 
 // ── лента и комментарии ─────────────────────────────────────────────────
