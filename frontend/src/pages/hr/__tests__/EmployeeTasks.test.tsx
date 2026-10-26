@@ -20,6 +20,16 @@ vi.mock('@/components/tasks/TasksLayout', () => ({
   TasksLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock('@/components/tasks/KanbanBoard', () => ({ KanbanBoard: () => null }));
+// Окно карточки — своё, с тестами; здесь важен только адрес, который его открывает.
+vi.mock('@/features/tasks/board/card/StandaloneCardModal', async () => {
+  const { useLocation } = await import('react-router-dom');
+  return {
+    StandaloneCardModal: () => {
+      const location = useLocation();
+      return <output aria-label="адрес">{location.pathname + location.search}</output>;
+    },
+  };
+});
 
 const toastError = vi.fn();
 vi.mock('sonner', () => ({
@@ -99,6 +109,13 @@ describe('EmployeeTasks', () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['employee-tasks'] });
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['hr-tasks'] });
     });
+  });
+
+  it('строка таблицы открывает окно карточки поверх страницы', async () => {
+    fetchTasks.mockResolvedValue([task({ id: 5, key: 'T-5', summary: 'Сверить акты' })]);
+    renderWithProviders(<EmployeeTasks profile={PROFILE} />, { route: '/tasks' });
+    await userEvent.click(await screen.findByText('Сверить акты'));
+    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks?card=5');
   });
 
   it('отказ claim показывает текст по коду ошибки', async () => {

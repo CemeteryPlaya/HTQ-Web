@@ -15,6 +15,11 @@
  * Each control is optimistic: it mutates the local cache copy of the
  * task while the server confirms, so the UX feels instant. On error the
  * TanStack Query invalidation in the parent page restores the truth.
+ *
+ * With `onOpen` a click on the card itself (or Enter on the focused card,
+ * or a plain click on its key) opens the card window over the page — the
+ * same one the new boards use; Ctrl/Cmd/Shift on the key still opens the
+ * /tasks/{id} page.
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
@@ -63,6 +68,8 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
 interface KanbanBoardProps {
     tasks: Task[];
     onStatusChange: (taskId: number, newStatus: TaskStatus) => void;
+    /** Open the card window; without it only the key link opens the task page. */
+    onOpen?: (task: Task) => void;
 }
 
 function initials(name?: string | null): string {
@@ -79,7 +86,7 @@ function displayName(u: any): string {
 // 7 columns visible across the page width without a tall scroll.
 const CARDS_PER_PAGE = 6;
 
-export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange }) => {
+export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange, onOpen }) => {
     const { t } = useTranslation();
     const queryClient = useQueryClient();
 
@@ -231,10 +238,16 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                                                     {...provided.dragHandleProps}
                                                     className="focus:outline-none"
                                                     style={provided.draggableProps.style}
+                                                    onKeyDown={(e) => {
+                                                        // Space is the drag key; Enter on the card itself opens it.
+                                                        if (onOpen && e.key === 'Enter' && e.target === e.currentTarget) onOpen(task);
+                                                    }}
                                                 >
                                                     <Card
-                                                        className={`hover:border-primary/50 transition-all shadow-sm ${snapshot.isDragging ? 'rotate-2 scale-105 shadow-md border-primary' : ''}`}
+                                                        className={`hover:border-primary/50 transition-all shadow-sm ${onOpen ? 'cursor-pointer' : ''} ${snapshot.isDragging ? 'rotate-2 scale-105 shadow-md border-primary' : ''}`}
                                                         style={task.project ? { borderLeftWidth: 3, borderLeftColor: task.project_color || '#3b82f6' } : undefined}
+                                                        onClick={onOpen ? () => onOpen(task) : undefined}
+                                                        data-testid={`kanban-card-${task.id}`}
                                                     >
                                                         <CardContent className="p-3 space-y-2">
                                                             {/* Project chip — only for project-attached tasks, so
@@ -259,6 +272,13 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onStatusChange 
                                                                 <Link
                                                                     to={`/tasks/${task.id}`}
                                                                     className="font-mono text-xs font-bold text-primary hover:underline"
+                                                                    onClick={(e) => {
+                                                                        if (!onOpen) return;
+                                                                        // A plain click bubbles to the card and opens the
+                                                                        // window; with a modifier the browser opens the page.
+                                                                        if (e.ctrlKey || e.metaKey || e.shiftKey) e.stopPropagation();
+                                                                        else e.preventDefault();
+                                                                    }}
                                                                 >
                                                                     {task.key}
                                                                 </Link>

@@ -8,8 +8,9 @@
 import { useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import { enUS, ru } from 'date-fns/locale';
-import { CheckCircle2, Circle, Clock, Eye, EyeOff, Flag, Plus, Tag, Users } from 'lucide-react';
+import { CheckCircle2, Circle, Clock, Eye, EyeOff, Flag, Maximize2, Plus, Tag, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -125,7 +126,13 @@ function CardBody({ task, columns, onMove }: { task: Task } & Pick<CardModalProp
               </button>
             )} />
           <span className="text-xs text-muted-foreground">{task.key}</span>
-          <Button variant="ghost" size="sm" className="ml-auto h-7"
+          {/* Проект, объект, тип и вложения пока правятся только на странице задачи. */}
+          <Button variant="ghost" size="sm" className="ml-auto h-7" asChild>
+            <Link to={`/tasks/${task.id}`}>
+              <Maximize2 className="mr-1.5 h-4 w-4" />{t('tasks.card.openPage', 'Открыть страницей')}
+            </Link>
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7"
             onClick={() => people.watch.mutate(!watching)} disabled={people.watch.isPending}>
             {watching ? <EyeOff className="mr-1.5 h-4 w-4" /> : <Eye className="mr-1.5 h-4 w-4" />}
             {watching ? t('tasks.card.unwatch', 'Не наблюдать') : t('tasks.card.watch', 'Наблюдать')}

@@ -26,6 +26,8 @@ import { fetchDepartments, fetchEmployeeUsers } from '@/api/hr';
 import api from '@/api/client';
 import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
+import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import {
   TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
 } from '@/lib/tasks/status';
@@ -51,6 +53,9 @@ const HRTasks: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Карточка открывается окном поверх страницы (как на досках, `?card=<id>`);
+  // полная страница задачи — карандашом в таблице.
+  const { open: openCard } = useCardParam();
 
   /* filters */
   const [search, setSearch] = useState('');
@@ -348,6 +353,7 @@ const HRTasks: React.FC = () => {
             <KanbanBoard
               tasks={tasks}
               onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
+              onOpen={(task) => openCard(task.id)}
             />
           </div>
         ) : (
@@ -371,7 +377,7 @@ const HRTasks: React.FC = () => {
                   <TableRow
                     key={task.id}
                     className="cursor-pointer hover:bg-muted/40"
-                    onClick={() => navigate(`/tasks/${task.id}`)}
+                    onClick={() => openCard(task.id)}
                   >
                     <TableCell className="py-2.5">
                       <div className="flex items-center gap-1.5">
@@ -486,6 +492,7 @@ const HRTasks: React.FC = () => {
 
       {/* Create Task Dialog */}
       <CreateTaskModal open={createOpen} onOpenChange={setCreateOpen} />
+      <StandaloneCardModal />
     </TasksLayout>
   );
 };

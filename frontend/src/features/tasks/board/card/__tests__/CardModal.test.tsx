@@ -71,10 +71,10 @@ function serve() {
 function renderModal() {
   const onClose = vi.fn();
   const onMove = vi.fn();
-  renderWithProviders(
+  const { queryClient } = renderWithProviders(
     <CardModal taskId={5} columns={[]} onClose={onClose} onMove={onMove} />,
   );
-  return { onClose, onMove };
+  return { onClose, onMove, queryClient };
 }
 
 beforeEach(() => {
@@ -93,6 +93,26 @@ describe('CardModal', () => {
     await userEvent.clear(field);
     await userEvent.type(field, 'Смета по объекту{Enter}');
     await waitFor(() => expect(tasksApi.updateTask).toHaveBeenCalledWith(5, { summary: 'Смета по объекту' }));
+  });
+
+  it('правка в окне перечитывает и старый реестр задач', async () => {
+    // Окно открывается и со старой страницы «Задачи» — её список должен
+    // показать правку после закрытия окна.
+    tasksApi.fetchTask.mockResolvedValue(task());
+    tasksApi.updateTask.mockResolvedValue(task({ summary: 'Смета по объекту' }));
+    const { queryClient } = renderModal();
+    queryClient.setQueryData(['hr-tasks', {}], []);
+    queryClient.setQueryData(['employee-tasks', 'my-tasks'], []);
+    await userEvent.click(await screen.findByRole('button', { name: 'Название задачи' }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Название задачи' }), '!{Enter}');
+    await waitFor(() => expect(queryClient.getQueryState(['hr-tasks', {}])?.isInvalidated).toBe(true));
+    expect(queryClient.getQueryState(['employee-tasks', 'my-tasks'])?.isInvalidated).toBe(true);
+  });
+
+  it('ведёт на полную страницу задачи', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task());
+    renderModal();
+    expect(await screen.findByRole('link', { name: 'Открыть страницей' })).toHaveAttribute('href', '/tasks/5');
   });
 
   it('Esc в поле названия отменяет правку, а окно остаётся', async () => {

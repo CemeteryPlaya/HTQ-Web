@@ -2897,6 +2897,7 @@
         "title": "Move to list"
       },
       "noDescription": "No description",
+      "openPage": "Open as a page",
       "peopleFailed": "Could not change the members",
       "priority": "Priority",
       "save": "Save",

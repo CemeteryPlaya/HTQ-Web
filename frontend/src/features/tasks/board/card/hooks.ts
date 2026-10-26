@@ -1,11 +1,11 @@
 /**
  * Хуки окна карточки (мастер-план §7.2–7.3, этап S2). Любая правка обновляет
- * карточку в кэше и перечитывает доски и ленту: значки на карточке доски и
- * события в ленте должны совпадать с окном.
+ * карточку в кэше и перечитывает списки задач и ленту: значки на карточке
+ * доски и события в ленте должны совпадать с окном.
  */
 import { useCallback } from 'react';
 import {
-  type InfiniteData, useInfiniteQuery, useMutation, useQuery, useQueryClient,
+  type InfiniteData, type QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient,
 } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -21,6 +21,14 @@ import { boardKeys } from '../api';
 import type { Board, BoardKey } from '../types';
 import { accessApi, boardNotificationsApi, cardKeys, checklistsApi, feedApi, type PlaceBody } from './api';
 import type { FeedPage } from './types';
+
+/** Списки, где видна карточка: доски и старый реестр «Задачи» — `HRTasks` и
+ * `EmployeeTasks` открывают то же окно, пока не уступят место доскам (S6). */
+const TASK_LISTS = [['tasks', 'board'], ['hr-tasks'], ['employee-tasks']];
+
+function invalidateTaskLists(queryClient: QueryClient) {
+  for (const queryKey of TASK_LISTS) void queryClient.invalidateQueries({ queryKey });
+}
 
 // ── адрес ───────────────────────────────────────────────────────────────
 
@@ -84,7 +92,7 @@ function useCardRefresh(taskId: number) {
   return useCallback((task?: Task) => {
     if (task) queryClient.setQueryData(cardKeys.card(taskId), task);
     else void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
-    void queryClient.invalidateQueries({ queryKey: ['tasks', 'board'] });
+    invalidateTaskLists(queryClient);
     void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
   }, [queryClient, taskId]);
 }
@@ -129,7 +137,7 @@ export function useQuickCardEdit() {
   const queryClient = useQueryClient();
   const refresh = (taskId: number) => {
     void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
-    void queryClient.invalidateQueries({ queryKey: ['tasks', 'board'] });
+    invalidateTaskLists(queryClient);
     void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
   };
   const failed = (error: unknown) =>
@@ -177,7 +185,7 @@ export function useChecklistActions(taskId: number) {
         (item.id === checklist.id ? checklist : item));
       return { ...task, checklists: next.sort((a, b) => (a.position < b.position ? -1 : 1)) };
     });
-    void queryClient.invalidateQueries({ queryKey: ['tasks', 'board'] });
+    invalidateTaskLists(queryClient);
     void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
   };
   const failed = (error: unknown) =>
@@ -249,7 +257,7 @@ export function useAddComment(taskId: number) {
     mutationFn: (body: string) => addTaskComment(taskId, body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
-      void queryClient.invalidateQueries({ queryKey: ['tasks', 'board'] });
+      invalidateTaskLists(queryClient);
     },
     onError: (error) => reportApiError(error, t('tasks.feed.commentFailed', 'Не удалось отправить комментарий')),
   });
@@ -267,7 +275,7 @@ export function useAccessRequests(taskId: number, enabled = true) {
     void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
     void queryClient.invalidateQueries({ queryKey: ['tasks', 'requests'] });
     void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
-    void queryClient.invalidateQueries({ queryKey: ['tasks', 'board'] });
+    invalidateTaskLists(queryClient);
   };
   const failed = (error: unknown) =>
     reportApiError(error, t('tasks.access.failed', 'Не удалось выполнить действие с запросом'));

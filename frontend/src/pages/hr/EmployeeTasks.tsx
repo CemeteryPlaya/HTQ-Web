@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { Button } from '@/components/ui/button';
@@ -20,6 +19,8 @@ import { claimTask, fetchTasks, updateTask } from '@/api/tasks';
 import type { TaskListScope, TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
 import { reportApiError } from '@/lib/apiError';
+import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import { reportTaskError } from '@/features/tasks/errors';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
@@ -54,8 +55,9 @@ const TAB_SCOPE: Record<string, TaskListScope> = {
 /* `profile` передаёт маршрут; вкладки и права теперь считает сервер. */
 const EmployeeTasks: React.FC<Props> = () => {
     const { t } = useTranslation();
-    const navigate = useNavigate();
     const queryClient = useQueryClient();
+    // Карточка открывается окном поверх страницы, как на досках (`?card=<id>`).
+    const { open: openCard } = useCardParam();
     const [search, setSearch] = useState('');
     const [activeTab, setActiveTab] = useState('my-tasks');
     const [viewMode, setViewMode] = useState<'table' | 'board'>('table');
@@ -114,7 +116,7 @@ const EmployeeTasks: React.FC<Props> = () => {
                         <TableRow
                             key={task.id}
                             className="cursor-pointer hover:bg-muted/50"
-                            onClick={() => navigate(`/tasks/${task.id}`)}
+                            onClick={() => openCard(task.id)}
                         >
                             <TableCell>
                                 <div className="flex items-center gap-1.5">
@@ -244,6 +246,7 @@ const EmployeeTasks: React.FC<Props> = () => {
                                         <KanbanBoard
                                             tasks={filteredTasks}
                                             onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
+                                            onOpen={(task) => openCard(task.id)}
                                         />
                                     </div>
                                 ) : (
@@ -261,6 +264,7 @@ const EmployeeTasks: React.FC<Props> = () => {
                                         <KanbanBoard
                                             tasks={filteredTasks}
                                             onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
+                                            onOpen={(task) => openCard(task.id)}
                                         />
                                     </div>
                                 ) : (
@@ -271,6 +275,7 @@ const EmployeeTasks: React.FC<Props> = () => {
                     </Tabs>
                 </CardContent>
             </Card>
+            <StandaloneCardModal />
         </TasksLayout>
     );
 };
