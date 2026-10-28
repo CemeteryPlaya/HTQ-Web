@@ -39,6 +39,8 @@ from . import hydration
 from . import ranked
 from . import task_scope
 from . import task_service
+from .automation import events as automation
+from .automation.context import Event
 
 FIELD_LIMIT = 50
 TEXT_LIMIT = 500
@@ -291,8 +293,9 @@ def _invalid(message: str) -> DomainError:
     return DomainError("board_field_value_invalid", message, status=422)
 
 
-def _parse(field: BoardField, raw):
-    """Присланное значение → значение столбца; ``None`` — очистить."""
+def parse_value(field: BoardField, raw):
+    """Присланное значение → значение столбца; ``None`` — очистить. Им же
+    каталог автоматизации проверяет значения полей в правилах."""
     if raw is None:
         return None
     kind = field.field_type
@@ -360,10 +363,16 @@ def set_value(request, task_id: int, field_id: int, raw) -> dict:
     field = BoardField.objects.filter(pk=field_id).first()
     if field is None or (field.board_kind, field.board_id) not in home_board_keys(task):
         raise Http404("Field not found")
-    value = _parse(field, raw)
-    actor = task_scope.for_request(request).user_id
+    store_value(task, field, parse_value(field, raw), task_scope.for_request(request).user_id)
+    return {"home_boards": home_boards(task)}
+
+
+def store_value(task: Task, field: BoardField, value, actor: int | None) -> None:
+    """Записать разобранное значение (``parse_value``) или очистить (``None``)
+    — без проверки прав: её сделал вызывающий (ручка или автоматизация, S4).
+    Смена — строка журнала и событие автоматизации ``field_changed``."""
     row = TaskFieldValue.objects.filter(task=task, field=field).first()
-    before = _journal_text(field, row)
+    before, before_json = _journal_text(field, row), value_json(field, row)
     if value is None:
         if row is not None:
             row.delete()
@@ -374,9 +383,12 @@ def set_value(request, task_id: int, field_id: int, raw) -> dict:
         row.updated_by = actor
         row.save()
     after = _journal_text(field, row)
-    if before != after:
-        task_service._log(task, actor, journal_key(field.id), before, after)
-    return {"home_boards": home_boards(task)}
+    if before == after:
+        return
+    task_service._log(task, actor, journal_key(field.id), before, after)
+    automation.emit(Event("field_changed", task.pk, actor, {
+        "field_id": field.pk, "field_type": field.field_type, "board_kind": field.board_kind,
+        "board_id": field.board_id, "old": before_json, "new": value_json(field, row)}))
 
 
 # ── шаблоны чек-листов ──────────────────────────────────────────────────
@@ -418,11 +430,14 @@ def template_for(task: Task, board_kind: str, board_id: int, template_id: str) -
 # ── ответы ──────────────────────────────────────────────────────────────
 
 def home_boards(task: Task) -> list[dict]:
-    """Домашние доски карточки задачи: поля со значениями и шаблоны
-    чек-листов (поле ``home_boards`` карточки)."""
+    """Домашние доски карточки задачи: поля со значениями, шаблоны
+    чек-листов и кнопки автоматизации (поле ``home_boards`` карточки)."""
+    from .automation import buttons
+
     keys = home_board_keys(task)
     if not keys:
         return []
+    card_buttons = buttons.card_buttons(task)
     fields = list(BoardField.objects.filter(_keys_q(keys)).order_by("position", "id"))
     values = ({row.field_id: row for row in TaskFieldValue.objects.filter(
         task=task, field_id__in=[field.id for field in fields])} if fields else {})
@@ -442,6 +457,7 @@ def home_boards(task: Task) -> list[dict]:
         "fields": [field_payload(field) | {"value": value_json(field, values.get(field.id))}
                    for field in fields if (field.board_kind, field.board_id) == (kind, board_id)],
         "checklist_templates": templates_of(settings.get((kind, board_id))),
+        "buttons": card_buttons.get((kind, board_id), []),
     } for kind, board_id in keys]
 
 

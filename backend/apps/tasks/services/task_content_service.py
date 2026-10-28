@@ -27,6 +27,8 @@ from . import block_service
 from . import daily_report_service
 from . import hydration
 from . import task_notify
+from .automation import events as automation
+from .automation.context import Event
 
 
 def _require_task(task_id: int) -> Task:
@@ -56,6 +58,8 @@ def create_comment(task_id: int, body: str,
                                      body=body)
     # Новый комментарий — событие для участников задачи (K-30).
     task_notify.commented(task, author_id, body)
+    automation.emit(Event("comment_added", task.pk, author_id,
+                          {"comment_id": row.pk, "body": body}))
     users = hydration.user_briefs([author_id])
     return schemas.CommentResponse.model_validate({
         "id": row.id, "task_id": row.task_id, "author_id": row.author_id,
@@ -91,6 +95,8 @@ def create_attachment(task_id: int, *, file_path: str, filename: str,
     row = TaskAttachment.objects.create(task_id=task_id, file_path=file_path,
                                         filename=filename,
                                         uploaded_by_id=uploaded_by_id)
+    automation.emit(Event("attachment_added", task_id, uploaded_by_id,
+                          {"attachment_id": row.pk, "filename": filename}))
     users = hydration.user_briefs([uploaded_by_id])
     return schemas.AttachmentResponse.model_validate({
         "id": row.id, "task_id": row.task_id, "file_path": row.file_path,

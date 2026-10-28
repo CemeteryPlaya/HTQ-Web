@@ -280,4 +280,6 @@ urlpatterns = [
     path("", include("apps.tasks.urls_access")),
     # ── свои поля досок (K-35, этап S3) ──────────────────────────────────────
     path("", include("apps.tasks.urls_fields")),
+    # ── автоматизация досок (K-36…K-40, этап S4) ─────────────────────────────
+    path("", include("apps.tasks.urls_automation")),
 ]

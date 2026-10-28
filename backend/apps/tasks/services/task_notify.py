@@ -6,7 +6,9 @@
 убираются автор события и те, кто выключил уведомления хотя бы одной доски,
 где лежит задача (доска отдела действует на поддерево). Адресные события —
 «вас назначили», «вам делегировали», запросы доступа и решения по ним —
-доходят всегда, выключатель их не гасит.
+доходят всегда, выключатель их не гасит. Правку автоматизации доски (этап
+S4) «сделал» и зачинщик её цепочки — человек, чьё действие её запустило, или
+нажавший кнопку: ему о ней не сообщают, результат у него на экране.
 
 Заголовок — готовая фраза: колокольчик показывает его как есть. Код события
 (``event=…``) лежит в ссылке — по нему различит события будущий
@@ -30,6 +32,7 @@ from htqweb.tenancy.context import current_company_or_none
 
 from ..models import BoardKind, BoardNotificationMute, DepartmentLinkKind, Task, TaskAssignee
 from . import hydration
+from .automation import context as automation_context
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +108,15 @@ def _url(task: Task, event: str, *, panel: bool = False) -> str:
     return f"{url}&panel=requests" if panel else url
 
 
+def _authors(actor_id: int | None) -> set:
+    """Кому о событии не сообщать: его автору и зачинщику цепочки автоматизации."""
+    return {actor_id, automation_context.initiator()}
+
+
 def _send(task: Task, event: str, actor_id: int | None, recipients, title: str, *,
           text: str = "", panel: bool = False) -> None:
-    recipients = sorted({uid for uid in recipients if uid and uid != actor_id})
+    authors = _authors(actor_id)
+    recipients = sorted({uid for uid in recipients if uid and uid not in authors})
     if not recipients:
         return
     try:
@@ -137,6 +146,35 @@ def to_people(task: Task, event: str, actor_id: int | None, recipients, title: s
               panel: bool = False) -> None:
     """Адресное событие — доходит всегда."""
     _send(task, event, actor_id, recipients, title, panel=panel)
+
+
+def automation_notice(task: Task, actor_id: int | None, recipients, text: str) -> None:
+    """«Уведомить сотрудников» из автоматизации доски (этап S4) — адресно."""
+    to_people(task, "automation", actor_id, recipients, f"{text}: {_ref(task)}")
+
+
+def board_notice(board_kind: str, board_id: int, actor_id: int | None, recipients,
+                 text: str) -> None:
+    """То же для автоматизации уровня доски (кнопка доски, расписание): ссылка
+    — на доску, а не на карточку."""
+    authors = _authors(actor_id)
+    recipients = sorted({uid for uid in recipients if uid and uid not in authors})
+    if not recipients:
+        return
+    path = "department" if board_kind == BoardKind.DEPARTMENT else "project"
+    try:
+        with transaction.atomic():
+            notifications.notify(
+                recipients=recipients, event="tasks.task", title=text,
+                url=f"/tasks/board/{path}/{board_id}", company_slug=current_company_or_none(),
+                target_type="board", target_id=f"{board_kind}:{board_id}", actor_id=actor_id,
+                deliver=DELIVER, dedupe_window_seconds=60)
+    except ServiceDisabled as exc:
+        fallback("tasks.task_notify.center_disabled", None,
+                 reason="центр уведомлений выключен — уведомление о задаче не записано",
+                 expected=True, exc=exc)
+    except Exception:  # noqa: BLE001 — уведомление не должно ломать автоматизацию
+        logger.exception("tasks: board notification for %s:%s failed", board_kind, board_id)
 
 
 # ── события ─────────────────────────────────────────────────────────────

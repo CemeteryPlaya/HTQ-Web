@@ -154,8 +154,17 @@ function Stamp({ value }: { value: string }) {
 
 function Entry({ entry, describe }: { entry: FeedEntry; describe: (entry: FeedActivity) => string }) {
   const { t } = useTranslation();
-  const name = entry.actor?.name
-    ?? (entry.actor ? `#${entry.actor.id}` : t('tasks.feed.automation', 'Автоматизация'));
+  // Правку сделала автоматизация доски (этап S4): у правила автора нет, у
+  // кнопки — нажавший, и рядом — какая автоматизация.
+  const rule = entry.kind === 'activity' ? entry.automation ?? null : null;
+  const automationName = rule?.name
+    ? t('tasks.feed.automationNamed', 'Автоматизация «{{name}}»', { name: rule.name })
+    : t('tasks.feed.automation', 'Автоматизация');
+  const name = entry.actor ? (entry.actor.name ?? `#${entry.actor.id}`) : automationName;
+  const via = entry.actor && rule
+    ? (rule.name ? t('tasks.feed.viaRule', 'через автоматизацию «{{name}}»', { name: rule.name })
+      : t('tasks.feed.viaAutomation', 'через автоматизацию'))
+    : null;
   return (
     <li className="flex gap-2">
       {entry.actor ? (
@@ -180,6 +189,7 @@ function Entry({ entry, describe }: { entry: FeedEntry; describe: (entry: FeedAc
           <>
             <p className="text-sm">
               <span className="font-semibold">{name}</span>
+              {via && <span className="text-muted-foreground"> ({via})</span>}
               {' · '}
               {describe(entry)}
             </p>

@@ -25,6 +25,8 @@ from . import hydration
 from . import task_notify
 from . import task_scope
 from . import task_service
+from .automation import events as automation
+from .automation.context import Event
 
 
 def can_transfer(task: Task, scope) -> bool:
@@ -115,4 +117,8 @@ def transfer(task_id: int, target_department_id: int, request, *,
     board_service.forget_department_ranks(task.id)
     board_service.place_on_department(target_department_id, task)
     _notify_transfer(task, target_department_id, actor)
+    # Для доски нового отдела задача пришла на доску — как «создана» в Trello
+    # («added to board»): срабатывают правила этой доски (этап S4).
+    automation.emit(Event("card_created", task.pk, actor,
+                          {"status": task.status, "transferred": True}))
     return task

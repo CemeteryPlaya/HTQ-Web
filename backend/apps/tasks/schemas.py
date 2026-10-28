@@ -1138,15 +1138,72 @@ class ChecklistTemplateOut(BaseModel):
     items: list[str] = []
 
 
+class CardButtonOut(BaseModel):
+    """Кнопка автоматизации на карточке (этап S4)."""
+
+    id: int
+    name: str
+    icon: str | None = None
+
+
 class HomeBoardOut(BaseModel):
     """Домашняя доска задачи — отдела ``department_id`` или проекта
-    ``project_id``: её поля и шаблоны чек-листов."""
+    ``project_id``: её поля, шаблоны чек-листов и кнопки автоматизации."""
 
     kind: str
     id: int
     title: str | None = None
     fields: list[TaskFieldOut] = []
     checklist_templates: list[ChecklistTemplateOut] = []
+    buttons: list[CardButtonOut] = []
+
+
+# ── автоматизация досок (решения K-36…K-40, этап S4) ───────────────────
+
+AutomationKindKey = Literal["rule", "card_button", "board_button", "due", "schedule"]
+
+
+class AutomationIn(BaseModel):
+    """Автоматизация доски: вид, триггер, условия и действия — по каталогу
+    ``services/automation/catalog.py`` (его же проверка при сохранении)."""
+
+    kind: AutomationKindKey
+    name: str = Field(default="", max_length=200)
+    icon: str = Field(default="", max_length=32)
+    trigger: dict = Field(default_factory=dict)
+    conditions: list[dict] = Field(default_factory=list)
+    actions: list[dict] = Field(default_factory=list)
+    enabled: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class AutomationPatch(BaseModel):
+    """Правка: присланное заменяется; триггер, условия и действия
+    проверяются вместе. Место — ``before_id``/``after_id``, как у полей."""
+
+    name: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=32)
+    trigger: dict | None = None
+    conditions: list[dict] | None = None
+    actions: list[dict] | None = None
+    enabled: bool | None = None
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+class BoardPresetIn(BaseModel):
+    """Шаблон процесса доски (K-40)."""
+
+    preset: Literal["htq_process"]
+
+    model_config = {"extra": "forbid"}
 
 
 class BoardNotificationsIn(BaseModel):

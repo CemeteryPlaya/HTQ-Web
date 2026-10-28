@@ -949,6 +949,8 @@ export interface TaskHomeBoard {
   title: string | null;
   fields: TaskBoardField[];
   checklist_templates: ChecklistTemplate[];
+  /** Кнопки автоматизации доски на карточке (этап S4; интерфейс — S5). */
+  buttons?: Array<{ id: number; name: string; icon: string | null }>;
 }
 
 /**

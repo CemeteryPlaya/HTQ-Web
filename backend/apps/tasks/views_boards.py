@@ -16,6 +16,7 @@ from . import schemas
 from .services import board_service
 from .services import feed_service
 from .services import people
+from .services.automation.events import records_blocks
 
 
 def _method_not_allowed(request):
@@ -135,6 +136,7 @@ def project_settings(request, project_id: int):
 # ── карточка на доске ───────────────────────────────────────────────────
 
 @api_view(methods=("POST",), body=schemas.CardMove, module="tasks", level="write")
+@records_blocks
 def task_move(request, task_id: int, data: schemas.CardMove):
     return board_service.move(request, task_id, data)
 

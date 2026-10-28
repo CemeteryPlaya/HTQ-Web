@@ -1,7 +1,10 @@
 /**
  * Хуки окна карточки (мастер-план §7.2–7.3, этап S2). Любая правка обновляет
  * карточку в кэше и перечитывает списки задач и ленту: значки на карточке
- * доски и события в ленте должны совпадать с окном.
+ * доски и события в ленте должны совпадать с окном. С автоматизацией досок
+ * (этап S4) правка меняет задачу не только тем, что правили: отметка пункта,
+ * значение поля или комментарий переносят карточку, ставят поля и пишут в
+ * ленту. Поэтому правка, чей ответ — не задача целиком, перечитывает карточку.
  */
 import { useCallback } from 'react';
 import {
@@ -31,6 +34,13 @@ const TASK_LISTS = [['tasks', 'board'], ['hr-tasks'], ['employee-tasks']];
 
 function invalidateTaskLists(queryClient: QueryClient) {
   for (const queryKey of TASK_LISTS) void queryClient.invalidateQueries({ queryKey });
+}
+
+/** Карточка, списки и лента — перечитать: правка могла запустить автоматизацию. */
+export function invalidateCard(queryClient: QueryClient, taskId: number) {
+  void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
+  invalidateTaskLists(queryClient);
+  void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
 }
 
 // ── адрес ───────────────────────────────────────────────────────────────
@@ -89,12 +99,16 @@ export function useCard(taskId: number | null) {
   });
 }
 
-/** После правки: карточка — из ответа, доски и лента — перечитать. */
+/** После правки: карточка — из ответа (сервер перечитывает задачу после
+ * автоматизации), доски и лента — перечитать. */
 function useCardRefresh(taskId: number) {
   const queryClient = useQueryClient();
   return useCallback((task?: Task) => {
-    if (task) queryClient.setQueryData(cardKeys.card(taskId), task);
-    else void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
+    if (!task) {
+      invalidateCard(queryClient, taskId);
+      return;
+    }
+    queryClient.setQueryData(cardKeys.card(taskId), task);
     invalidateTaskLists(queryClient);
     void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
   }, [queryClient, taskId]);
@@ -138,11 +152,7 @@ export function useCardPeople(taskId: number) {
 export function useQuickCardEdit() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const refresh = (taskId: number) => {
-    void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
-    invalidateTaskLists(queryClient);
-    void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
-  };
+  const refresh = (taskId: number) => invalidateCard(queryClient, taskId);
   const failed = (error: unknown) =>
     reportApiError(error, t('tasks.card.saveFailed', 'Не удалось сохранить задачу'));
   const labels = useMutation({
@@ -177,7 +187,8 @@ export function useChecklistActions(taskId: number) {
   const queryClient = useQueryClient();
   const key = cardKeys.card(taskId);
 
-  /** Чек-лист из ответа — на своё место в карточке; удалённый — вон. */
+  /** Чек-лист из ответа — на своё место в карточке; удалённый — вон. Затем
+   * карточка перечитывается: отметка пункта переносит её правилами доски. */
   const put = (checklist: Checklist | null, removedId?: number) => {
     queryClient.setQueryData<Task>(key, (task) => {
       if (!task) return task;
@@ -188,8 +199,7 @@ export function useChecklistActions(taskId: number) {
         (item.id === checklist.id ? checklist : item));
       return { ...task, checklists: next.sort((a, b) => (a.position < b.position ? -1 : 1)) };
     });
-    invalidateTaskLists(queryClient);
-    void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
+    invalidateCard(queryClient, taskId);
   };
   const failed = (error: unknown) =>
     reportApiError(error, t('tasks.checklist.failed', 'Не удалось изменить чек-лист'));
@@ -245,8 +255,9 @@ export function useChecklistActions(taskId: number) {
 
 // ── свои поля доски (этап S3) ────────────────────────────────────────────
 
-/** Значение поля задачи: ответ — домашние доски карточки целиком; значки на
- * досках и лента перечитываются. */
+/** Значение поля задачи: ответ — домашние доски карточки целиком; карточка
+ * (правила доски переносят её по полю), значки на досках и лента
+ * перечитываются. */
 export function useFieldValue(taskId: number) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -255,8 +266,7 @@ export function useFieldValue(taskId: number) {
       fieldsApi.setValue(taskId, fieldId, value),
     onSuccess: ({ home_boards }) => {
       queryClient.setQueryData<Task>(cardKeys.card(taskId), (task) => task && { ...task, home_boards });
-      invalidateTaskLists(queryClient);
-      void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
+      invalidateCard(queryClient, taskId);
     },
     onError: (error) => {
       // Поле на экране вернётся к значению с сервера.
@@ -282,10 +292,8 @@ export function useAddComment(taskId: number) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: string) => addTaskComment(taskId, body),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
-      invalidateTaskLists(queryClient);
-    },
+    // Комментарий тоже событие правил доски («На доработку…» переносит карточку).
+    onSuccess: () => invalidateCard(queryClient, taskId),
     onError: (error) => reportApiError(error, t('tasks.feed.commentFailed', 'Не удалось отправить комментарий')),
   });
 }
@@ -299,10 +307,8 @@ export function useAccessRequests(taskId: number, enabled = true) {
     queryKey: cardKeys.access(taskId), queryFn: () => accessApi.forTask(taskId), enabled,
   });
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });
+    invalidateCard(queryClient, taskId);
     void queryClient.invalidateQueries({ queryKey: ['tasks', 'requests'] });
-    void queryClient.invalidateQueries({ queryKey: cardKeys.feedPrefix(taskId) });
-    invalidateTaskLists(queryClient);
   };
   const failed = (error: unknown) =>
     reportApiError(error, t('tasks.access.failed', 'Не удалось выполнить действие с запросом'));

@@ -676,23 +676,54 @@ def move(request, task_id: int, data: schemas.CardMove) -> dict:
 
 def place_new(board: Board, task: Task) -> None:
     """Быстрое добавление: новая задача — в конец своей колонки на доске."""
+    place(board, task, "bottom")
+
+
+def place(board: Board, task: Task, position: str) -> None:
+    """Карточка — вверх (``top``) или вниз (``bottom``) своей колонки на доске
+    (автоматизация, этап S4)."""
     _lock(board)
     column = _ranked_column(board, task.status, exclude=task.id)
-    rank = board_rank.between(column[-1][1] if column else None, None)
+    if position == "top":
+        rank = board_rank.between(None, column[0][1] if column else None)
+    else:
+        rank = board_rank.between(column[-1][1] if column else None, None)
     _store_rank(board, task.status, task.id, rank)
+
+
+def sort_column(board: Board, status: str, key, *, reverse: bool = False) -> int:
+    """Разложить колонку доски заново по ``key(task)`` (автоматизация: кнопка
+    доски и расписание). Возвращает число карточек колонки."""
+    _lock(board)
+    tasks = sorted(board_tasks(board).filter(status=status).select_related("project")
+                   .prefetch_related("field_values"), key=key, reverse=reverse)
+    _write_ranks(board, dict(zip([task.pk for task in tasks], board_rank.spread(len(tasks)))))
+    return len(tasks)
+
+
+def board_for(kind: str, board_id: int) -> Board:
+    """Доска по ключу без запроса и без проверки прав — для автоматизации и
+    команд. У доски отдела — поддерево (``hr`` выключен — только сам отдел)."""
+    if kind == BoardKind.DEPARTMENT:
+        try:
+            subtree = hr.department_subtree_ids([board_id]).get(board_id)
+        except ServiceDisabled as exc:
+            subtree = fallback("tasks.board_service.subtree_unavailable", None,
+                               reason="hr выключен — доска только по самому отделу",
+                               expected=True, exc=exc)
+        return Board(kind=BoardKind.DEPARTMENT, id=board_id,
+                     department_ids=tuple(subtree or [board_id]))
+    if kind == BoardKind.PROJECT:
+        found = Project.objects.filter(pk=board_id).first()
+        return Board(kind=BoardKind.PROJECT, id=board_id,
+                     title=found.name if found else None, project=found)
+    return Board(kind=BoardKind.PERSONAL, id=board_id)
 
 
 def place_on_department(department_id: int, task: Task) -> None:
     """Задача пришла в отдел — в конец её колонки на доске этого отдела (с
-    поддеревом: так её видит доска). ``hr`` выключен — только сам отдел."""
-    try:
-        subtree = hr.department_subtree_ids([department_id]).get(department_id)
-    except ServiceDisabled as exc:
-        subtree = fallback("tasks.board_service.subtree_unavailable", None,
-                           reason="hr выключен — место на доске только по самому отделу",
-                           expected=True, exc=exc)
-    place_new(Board(kind=BoardKind.DEPARTMENT, id=department_id,
-                    department_ids=tuple(subtree or [department_id])), task)
+    поддеревом: так её видит доска)."""
+    place_new(board_for(BoardKind.DEPARTMENT, department_id), task)
 
 
 def forget_department_ranks(task_id: int) -> None:

@@ -2979,7 +2979,10 @@
       "fieldChecked": "checkbox \"{{name}}\" checked",
       "fieldUnchecked": "checkbox \"{{name}}\" unchecked",
       "fieldCleared": "field \"{{name}}\" cleared (was: {{from}})",
-      "fieldSet": "field \"{{name}}\": {{from}} → {{to}}"
+      "fieldSet": "field \"{{name}}\": {{from}} → {{to}}",
+      "automationNamed": "Automation \"{{name}}\"",
+      "viaRule": "via automation \"{{name}}\"",
+      "viaAutomation": "via automation"
     },
     "access": {
       "banner": "Access requests: {{count}}",

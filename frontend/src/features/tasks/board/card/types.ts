@@ -34,6 +34,8 @@ export interface FeedActivity {
   /** Строка своего поля доски (`field:<id>`, этап S3): название и тип; у
    * удалённого поля — `null`. */
   board_field?: { id: number; name: string | null; type: BoardFieldType | null } | null;
+  /** Правку сделала автоматизация доски (этап S4): правило и его название. */
+  automation?: { id: number; name: string | null } | null;
 }
 
 export type FeedEntry = FeedComment | FeedActivity;

@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/renderWithProviders';
 import type { Task } from '@/types/tasks';
 
+import type { BoardColumn } from '../../types';
+
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), info: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 
@@ -68,14 +70,23 @@ function serve() {
   api.post.mockResolvedValue({ data: {} });
 }
 
-function renderModal() {
+type Column = Pick<BoardColumn, 'status' | 'title' | 'color' | 'hidden'>;
+
+function renderModal(columns: Column[] = []) {
   const onClose = vi.fn();
   const onMove = vi.fn();
   const { queryClient } = renderWithProviders(
-    <CardModal taskId={5} columns={[]} onClose={onClose} onMove={onMove} />,
+    <CardModal taskId={5} columns={columns} onClose={onClose} onMove={onMove} />,
   );
   return { onClose, onMove, queryClient };
 }
+
+/** «Приёмка» после отметки единственного пункта — ответ сервера. */
+const CHECKED = {
+  id: 1, title: 'Приёмка', position: 'V', done: 1, total: 1,
+  items: [{ id: 10, text: 'Проверить акт', is_done: true, done_by: { id: 7, name: 'Иван Петров' },
+    done_at: '2026-10-21T10:00:00Z', position: 'V' }],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -146,17 +157,48 @@ describe('CardModal', () => {
 
   it('пункт чек-листа отмечается сразу и уходит на сервер', async () => {
     tasksApi.fetchTask.mockResolvedValue(task());
-    api.patch.mockResolvedValue({ data: {
-      id: 1, title: 'Приёмка', position: 'V', done: 1, total: 1,
-      items: [{ id: 10, text: 'Проверить акт', is_done: true, done_by: { id: 7, name: 'Иван Петров' },
-        done_at: '2026-10-21T10:00:00Z', position: 'V' }],
-    } });
+    api.patch.mockImplementation(() => {
+      // Сервер запомнил отметку: перечитанная карточка несёт её.
+      tasksApi.fetchTask.mockResolvedValue(task({ checklists: [CHECKED] } as Partial<Task>));
+      return Promise.resolve({ data: CHECKED });
+    });
     renderModal();
     const section = await screen.findByRole('region', { name: 'Приёмка' });
     expect(within(section).getByText('0%')).toBeInTheDocument();
     await userEvent.click(within(section).getByRole('checkbox', { name: 'Проверить акт' }));
     await waitFor(() => expect(api.patch).toHaveBeenCalledWith('tasks/v1/checklist-items/10', { is_done: true }));
     expect(await within(section).findByText('100%')).toBeInTheDocument();
+  });
+
+  it('отметка пункта перечитывает карточку: правило доски перенесло её (S4)', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task());
+    api.patch.mockImplementation(() => {
+      // На сервере сработало правило «Все пункты отмечены — в «Готово»».
+      tasksApi.fetchTask.mockResolvedValue(task({ status: 'done', checklists: [CHECKED] } as Partial<Task>));
+      return Promise.resolve({ data: CHECKED });
+    });
+    renderModal([
+      { status: 'in_progress', title: 'Исполнение', color: null, hidden: false },
+      { status: 'done', title: 'Готово', color: null, hidden: false },
+    ]);
+    expect(await screen.findByRole('button', { name: 'Исполнение' })).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Приёмка' });
+    await userEvent.click(within(section).getByRole('checkbox', { name: 'Проверить акт' }));
+    expect(await screen.findByRole('button', { name: 'Готово' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Исполнение' })).not.toBeInTheDocument();
+  });
+
+  it('комментарий перечитывает карточку: правило доски могло её перенести (S4)', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task());
+    tasksApi.addTaskComment.mockResolvedValue({ id: 30, body: 'На доработку: смета' });
+    renderModal();
+    await screen.findByRole('button', { name: 'Название задачи' });
+    const before = tasksApi.fetchTask.mock.calls.length;
+    const feed = screen.getByRole('region', { name: 'Комментарии и события' });
+    await userEvent.type(within(feed).getByPlaceholderText('Напишите комментарий…'), 'На доработку: смета');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => expect(tasksApi.addTaskComment).toHaveBeenCalledWith(5, 'На доработку: смета'));
+    await waitFor(() => expect(tasksApi.fetchTask.mock.calls.length).toBeGreaterThan(before));
   });
 
   it('лента показывает комментарии и события, событие без автора — автоматизация', async () => {

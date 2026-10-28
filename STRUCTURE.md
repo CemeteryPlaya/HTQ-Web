@@ -669,6 +669,32 @@ services/ranked.py         место между соседями по дроб�
 views_fields.py / urls_fields.py   boards/{departments|projects}/{id}/fields, boards/fields/{id},
                                    tasks/{id}/fields/{field_id}
 ```
+**Автоматизация досок (этап S4, 27.10, K-36…K-40; план [docs/plans/2026-10-26-kanban-s4-automation-plan.md](docs/plans/2026-10-26-kanban-s4-automation-plan.md), разбор Trello — [2026-10-26-kanban-automation-trello-study.md](docs/plans/2026-10-26-kanban-automation-trello-study.md)):**
+```
+models.py        AutomationRule(board, kind: rule|card_button|board_button|due|schedule, trigger,
+                                conditions, actions, enabled, position, preset_key, next_run_at, state)
+                 AutomationRun                              # журнал запусков, 90 дней
+                 AutomationDueMark                          # команда по сроку — раз на «задачу + срок»
+                 TaskActivity.via_rule_id                   # правку сделала автоматизация
+services/automation/catalog.py   триггеры, условия, действия — Pydantic-схемы, проверка при сохранении
+                                 (ссылки этой доски), описание для конструктора
+services/automation/context.py   цепочка: очередь событий, пределы (глубина 5, правило — раз на
+                                 задачу, 50 действий), кто действует и кто начал цепочку
+                                 (ему уведомлений о правках нет); «сегодня» — по Алматы
+services/automation/events.py    emit (сервисы задач — в конце правки), запрет ручного переноса
+                                 (precheck_move → 409 automation_blocked), records_blocks у ручек
+services/automation/engine.py    правила домашних досок, триггер, условия, точка сохранения на
+                                 правило, журнал
+services/automation/actions.py   действия поверх сервисов задач (внутренний путь, без прав)
+services/automation/rules.py     автоматизации доски: CRUD, порядок, копия, журнал запусков
+services/automation/buttons.py   кнопки на карточке и на доске
+services/automation/scheduled.py команды по сроку и по расписанию, уборка журнала (Celery — tasks.py)
+services/automation/presets.py   шаблон «Процесс задач HTQ»; команда tasks_apply_board_preset
+views_automation.py / urls_automation.py   automation/catalog, boards/*/automation[/runs],
+                                           boards/automation/{id}[/copy], tasks/{id}/buttons/{id},
+                                           boards/*/buttons/{id}, boards/*/preset
+```
+Источники событий — сервисы задач (`task_service`, `checklist_service`, `board_fields.store_value`, `task_content_service`, `transfer`): событие отдаётся в конце правки; правки автоматизации — тоже события (цепочки, как в Trello). Расписания — `tasks.automation_due` (15 мин), `tasks.automation_schedule` (5 мин), `tasks.automation_runs_purge` (03:10 по Алматы): миграция `tasks/0036`, реестр `apps/core/periodic_tasks.py`.
 Фронт — [frontend/src/features/tasks/board/](frontend/src/features/tasks/board/): `BoardsPage` (маршруты `/tasks/board`, `/tasks/board/department/:id`, `/tasks/board/project/:id`; пункта меню до этапа S6 нет), `BoardHeader`/`BoardSwitcher`, `BoardCanvas` (`@hello-pangea/dnd`, соседи места вставки → `move`), `BoardColumn`, `BoardCard`, `CardBadges`, `CardLabels`, `QuickAddCard`, `CardQuickEdit`, `FilterDrawer` (фильтр в адресе), `BoardSettingsDialog`; хуки — `hooks/useBoard.ts` (оптимистичный перенос с откатом), `hooks/useBoardFilters.ts`; цвета — токены `--board-*` в `index.css`. Окно карточки (S2) — [features/tasks/board/card/](frontend/src/features/tasks/board/card/): `CardModal` (по `?card=<id>`), `CardButton` (серая кнопка окна: `secondary` темы — янтарный акцент), `EditableText`, `LabelsPopover`/`MembersPopover`/`DatesPopover`/`MovePopover` (их же открывает быстрая правка), `ChecklistBlock`, `ActivityFeed`, `AccessRequests` (запрос, плашка решающих), `TasksRequestsPanel` (`?panel=requests`), `StandaloneCardModal` (то же окно на старой странице `/tasks`), `FieldsBlock` (поля домашних досок, S3); хуки и ключи — `card/hooks.ts`, `card/api.ts`; настройки доски (S3) — вкладки «Колонки», «Поля» (`settings/FieldsTab`), «Шаблоны чек-листов» (`settings/TemplatesTab`), хуки — `hooks/useBoardFields.ts`, показ значений — `fields/fieldFormat.ts`; правка в окне перечитывает и доски, и старые списки (`hr-tasks`, `employee-tasks`). Схема переходов на фронте — копия `TRANSITIONS` в [lib/tasks/transitions.ts](frontend/src/lib/tasks/transitions.ts), расхождение ловит `apps/tasks/tests/test_transitions_mirror.py`. Старые [KanbanBoard.tsx](frontend/src/components/tasks/KanbanBoard.tsx), `HRTasks`/`EmployeeTasks` живут до переключения (этап S6); их карточки и строки таблицы уже открывают окно карточки (`onOpen`, `?card=<id>`), полная страница задачи — карандашом в таблице и ссылкой «Открыть страницей» в окне.
 
 ---

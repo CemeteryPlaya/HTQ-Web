@@ -6,8 +6,10 @@
 ``details=0`` — комментарии и ключевые события, ``details=1`` — весь журнал.
 Значения журнала гидрируются: id людей и отделов → имена; статусы фронт
 переводит сам. Строка своего поля доски (``field:<id>``, этап S3) несёт
-``board_field`` — название и тип поля (удалённое — без них). Права —
-видимость задачи (``load_for_action``, 404).
+``board_field`` — название и тип поля (удалённое — без них). Правка
+автоматизации доски (этап S4) несёт ``automation`` — правило и его название;
+актор у правила пуст, у кнопки — нажавший. Права — видимость задачи
+(``load_for_action``, 404).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from django.db.models import Q
 
 from htqweb.errors import DomainError
 
-from ..models import TaskActivity, TaskComment
+from ..models import AutomationRule, TaskActivity, TaskComment
 from . import board_fields
 from . import hydration
 from . import task_service
@@ -126,6 +128,10 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
     departments = hydration.department_briefs(department_ids)
     fields = board_fields.journal_fields(entry["row"].field_name for entry in page
                                          if entry["kind"] == ACTIVITY)
+    rule_ids = {entry["row"].via_rule_id for entry in page
+                if entry["kind"] == ACTIVITY and entry["row"].via_rule_id}
+    rule_names = (dict(AutomationRule.objects.filter(pk__in=rule_ids).values_list("pk", "name"))
+                  if rule_ids else {})
 
     def person(user_id):
         if user_id is None:
@@ -164,5 +170,9 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
                           "old": row.old_value, "new": row.new_value,
                           "old_label": label(row.field_name, row.old_value),
                           "new_label": label(row.field_name, row.new_value),
-                          "board_field": board_field(row.field_name)})
+                          "board_field": board_field(row.field_name),
+                          # Правку сделала автоматизация доски (этап S4).
+                          "automation": ({"id": row.via_rule_id,
+                                          "name": rule_names.get(row.via_rule_id) or None}
+                                         if row.via_rule_id else None)})
     return {"items": items, "next_before": _cursor(page[-1]) if more else None}

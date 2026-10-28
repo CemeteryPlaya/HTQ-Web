@@ -3433,7 +3433,10 @@
       "fieldChecked": "флажок «{{name}}» отмечен",
       "fieldUnchecked": "флажок «{{name}}» снят",
       "fieldCleared": "поле «{{name}}» очищено (было: {{from}})",
-      "fieldSet": "поле «{{name}}»: {{from}} → {{to}}"
+      "fieldSet": "поле «{{name}}»: {{from}} → {{to}}",
+      "automationNamed": "Автоматизация «{{name}}»",
+      "viaRule": "через автоматизацию «{{name}}»",
+      "viaAutomation": "через автоматизацию"
     },
     "access": {
       "banner": "Запросы доступа: {{count}}",

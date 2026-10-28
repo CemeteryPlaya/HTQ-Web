@@ -1462,6 +1462,116 @@ class TaskFieldValue(models.Model):
         ]
 
 
+class AutomationKind(models.TextChoices):
+    RULE = "rule"
+    CARD_BUTTON = "card_button"
+    BOARD_BUTTON = "board_button"
+    DUE = "due"
+    SCHEDULE = "schedule"
+
+
+class AutomationRule(models.Model):
+    """Автоматизация доски отдела или проекта (решения K-36…K-40, этап S4).
+
+    Вид задаёт, что запускает: правило — событие задачи (``trigger``),
+    кнопки — нажатие, команда по сроку — наступивший срок, расписание —
+    время. ``trigger``/``conditions``/``actions`` — JSON по каталогу
+    ``services/automation/catalog.py``; у расписания ``next_run_at`` —
+    следующий запуск. ``state`` — служебное состояние действий («по очереди»).
+    ``preset_key`` — автоматизация шаблона доски: повтор применения правит
+    её, а не дублирует. Срабатывают правила домашних досок задачи (K-35).
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    kind = models.CharField(max_length=16, choices=AutomationKind.choices)
+    name = models.CharField(max_length=200, blank=True, default="")
+    icon = models.CharField(max_length=32, blank=True, default="")
+    trigger = models.JSONField(default=dict, blank=True)
+    conditions = models.JSONField(default=list, blank=True)
+    actions = models.JSONField(default=list, blank=True)
+    enabled = models.BooleanField(default=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    preset_key = models.CharField(max_length=64, blank=True, default="")
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    state = models.JSONField(default=dict, blank=True)
+    created_by = models.IntegerField(null=True, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Автоматизация доски"
+        verbose_name_plural = "Автоматизации досок"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["board_kind", "board_id", "preset_key"],
+                condition=~models.Q(preset_key=""), name="uq_automation_preset"),
+        ]
+        indexes = [models.Index(fields=["board_kind", "board_id", "kind", "position"],
+                                name="ix_automation_board")]
+
+
+class AutomationRunStatus(models.TextChoices):
+    OK = "ok"
+    NO_MATCH = "no_match"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    LIMITED = "limited"
+    CHANGED = "changed"
+
+
+class AutomationRun(models.Model):
+    """Журнал запусков автоматизации (как «Журналы» Trello, хранение — 90 дней).
+
+    Строка — проверка правила на событии (условия не сошлись — ``no_match``),
+    выполнение с действиями, сбой, запрет переноса, упор в предел цепочки, а
+    также создание и правка автоматизации (``changed``, «было → стало»).
+    Доска и название — снимком: журнал переживает удаление правила.
+    """
+
+    rule = models.ForeignKey(AutomationRule, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="runs")
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    rule_name = models.CharField(max_length=200, blank=True, default="")
+    task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="automation_runs")
+    event = models.CharField(max_length=40, blank=True, default="")
+    status = models.CharField(max_length=12, choices=AutomationRunStatus.choices)
+    actor_id = models.IntegerField(null=True, blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запуск автоматизации"
+        verbose_name_plural = "Запуски автоматизации"
+        indexes = [
+            models.Index(fields=["board_kind", "board_id", "created_at"],
+                         name="ix_automation_run_board"),
+            models.Index(fields=["rule", "created_at"], name="ix_automation_run_rule"),
+            models.Index(fields=["created_at"], name="ix_automation_run_created"),
+        ]
+
+
+class AutomationDueMark(models.Model):
+    """Команда по сроку уже сработала на задаче с этим сроком: перенесли срок —
+    сработает снова (разбор Trello §3.7)."""
+
+    rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name="due_marks")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="automation_due_marks")
+    due_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Срабатывание команды по сроку"
+        verbose_name_plural = "Срабатывания команд по сроку"
+        constraints = [
+            models.UniqueConstraint(fields=["rule", "task", "due_date"],
+                                    name="uq_automation_due_mark"),
+        ]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Task-attached records
 # ─────────────────────────────────────────────────────────────────────────
@@ -1799,7 +1909,11 @@ class TaskAttachment(models.Model):
 
 
 class TaskActivity(models.Model):
-    """Append-only log of task field changes."""
+    """Append-only log of task field changes.
+
+    ``via_rule_id`` — правку сделала автоматизация доски (этап S4): лента
+    подписывает её «через автоматизацию»; ``actor_id`` у правила пуст, у
+    кнопки — нажавший."""
 
     task = models.ForeignKey(Task, on_delete=models.CASCADE,
                              related_name="activities")
@@ -1807,6 +1921,7 @@ class TaskActivity(models.Model):
     field_name = models.CharField(max_length=50)
     old_value = models.TextField(null=True, blank=True)
     new_value = models.TextField(null=True, blank=True)
+    via_rule_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())

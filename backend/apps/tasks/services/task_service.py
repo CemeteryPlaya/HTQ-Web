@@ -55,6 +55,9 @@ from . import roadmap_service
 from . import site_service
 from . import task_notify
 from . import task_scope
+from .automation import context as automation_context
+from .automation import events as automation
+from .automation.context import Event
 from .reference_service import resolve_task_type_id
 from .sequence_service import due_date_from_working_days, next_task_key
 
@@ -402,6 +405,8 @@ def claim(task_id: int, request) -> Task:
         raise DomainError("task_claim_unavailable",
                           "Задачу уже взяли в работу", status=409)
     user_id = scope.user_id
+    # «Взять в работу» — ручной перенос: запрет доски действует и на него (K-38).
+    automation.precheck_move(task, task.status, Status.IN_PROGRESS, user_id)
     TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY,
                                 seen_at=timezone.now())
     old_status = task.status
@@ -412,6 +417,8 @@ def claim(task_id: int, request) -> Task:
     _log(task, user_id, "assignee_id", None, user_id)
     _log(task, user_id, "status", old_status, task.status)
     task_notify.claimed(task, user_id)
+    automation.emit(Event("assignee_added", task.pk, user_id, {"user_id": user_id}),
+                    Event("moved", task.pk, user_id, {"from": old_status, "to": task.status}))
     return task
 
 
@@ -472,7 +479,33 @@ def _log(task: Task, actor_id: int | None, field_name: str,
         task=task, actor_id=actor_id, field_name=field_name,
         old_value=str(old_value) if old_value is not None else None,
         new_value=str(new_value) if new_value is not None else None,
+        # Правку сделала автоматизация доски — лента подпишет «через
+        # автоматизацию» (этап S4).
+        via_rule_id=automation_context.current_rule_id(),
     )
+
+
+def _crew_ids(task: Task) -> set[int]:
+    ids = set(TaskAssignee.objects.filter(task=task).values_list("user_id", flat=True))
+    if task.assignee_id:
+        ids.add(task.assignee_id)
+    return ids
+
+
+def _crew_events(task: Task, actor_id: int | None, before: set[int], after: set[int]) -> list:
+    """События автоматизации о смене исполнителей (этап S4)."""
+    return ([Event("assignee_added", task.pk, actor_id, {"user_id": uid})
+             for uid in sorted(after - before)]
+            + [Event("assignee_removed", task.pk, actor_id, {"user_id": uid})
+               for uid in sorted(before - after)])
+
+
+def _due_event(task: Task, actor_id: int | None, old, new):
+    if old == new:
+        return None
+    kind = "due_set" if old is None else "due_removed" if new is None else "due_changed"
+    return Event(kind, task.pk, actor_id, {"old": str(old) if old else None,
+                                           "new": str(new) if new else None})
 
 
 @transaction.atomic
@@ -583,6 +616,13 @@ def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
         task, user_id, [uid for uid, _role in crew],
         primary_id=next((uid for uid, role in crew if role == AssigneeRole.PRIMARY), None))
 
+    # Автоматизация досок (этап S4): создана, затем — с чем пришла.
+    automation.emit(
+        Event("card_created", task.pk, user_id, {"status": task.status}),
+        *_crew_events(task, user_id, set(), {uid for uid, _role in crew}),
+        _due_event(task, user_id, None, task.due_date),
+        *[Event("label_added", task.pk, user_id, {"label_id": label_id})
+          for label_id in sorted(task.labels.values_list("pk", flat=True))])
     return task
 
 
@@ -602,6 +642,9 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
     department_ids = changes.pop("department_ids", None)
     status_changed = False
     old_assignee_id = task.assignee_id
+    old_status, old_due, old_supervisor = task.status, task.due_date, task.supervisor_id
+    old_labels = set(task.labels.values_list("pk", flat=True)) if label_ids is not None else set()
+    old_crew = _crew_ids(task) if "assignee_id" in changes else set()
 
     slug = changes.pop("task_type", None)
     if slug is not None and "task_type_id" not in changes:
@@ -657,7 +700,8 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
 
     if "status" in changes:
         target = changes.pop("status")
-        old_status = task.status
+        # Ручной перенос, запрещённый правилом доски, — 409 до правки (K-38).
+        automation.precheck_move(task, task.status, target, user_id)
         try:
             task.apply_transition(target)
         except ValueError as exc:
@@ -707,6 +751,24 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
         task_notify.primary_changed(task, user_id, task.assignee_id)
     if status_changed:
         task_notify.status_changed(task, user_id, task.status)
+
+    # Автоматизация досок (этап S4) — после всех правок задачи.
+    events = []
+    if status_changed:
+        events.append(Event("moved", task.pk, user_id, {"from": old_status, "to": task.status}))
+    if label_ids is not None:
+        new_labels = set(task.labels.values_list("pk", flat=True))
+        events += [Event("label_added", task.pk, user_id, {"label_id": label_id})
+                   for label_id in sorted(new_labels - old_labels)]
+        events += [Event("label_removed", task.pk, user_id, {"label_id": label_id})
+                   for label_id in sorted(old_labels - new_labels)]
+    if "assignee_id" in changes:
+        events += _crew_events(task, user_id, old_crew, _crew_ids(task))
+    events.append(_due_event(task, user_id, old_due, task.due_date))
+    if task.supervisor_id != old_supervisor:
+        events.append(Event("supervisor_set" if task.supervisor_id else "supervisor_removed",
+                            task.pk, user_id, {"user_id": task.supervisor_id}))
+    automation.emit(*events)
     return task
 
 
@@ -790,6 +852,7 @@ def replace_assignees(task_id: int, assignments: list,
     existing = {row.user_id: row for row in task.assignees.all()}
     new_ids = {a.user_id for a in assignments}
     added = []
+    before = _crew_ids(task)
 
     task.assignees.exclude(user_id__in=new_ids).delete()
 
@@ -816,6 +879,7 @@ def replace_assignees(task_id: int, assignments: list,
     task_notify.assignees_added(task, actor_id, added, primary_id=primary)
     if primary_changed and primary not in added:
         task_notify.primary_changed(task, actor_id, primary)
+    automation.emit(*_crew_events(task, actor_id, before, _crew_ids(task)))
     return task
 
 
@@ -832,6 +896,8 @@ def set_supervisor(task_id: int, supervisor_id: int | None,
     task.supervisor_id = supervisor_id
     task.save(update_fields=["supervisor_id", "updated_at"])
     task_notify.supervisor_set(task, actor_id, supervisor_id)
+    automation.emit(Event("supervisor_set" if supervisor_id else "supervisor_removed",
+                          task.pk, actor_id, {"user_id": supervisor_id}))
     return task
 
 

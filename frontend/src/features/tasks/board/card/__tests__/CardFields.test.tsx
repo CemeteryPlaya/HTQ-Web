@@ -75,6 +75,14 @@ const FEED = {
     { kind: 'activity', id: 7, created_at: '2026-10-21T06:00:00Z',
       actor: { id: 7, name: 'Иван Петров', avatar_url: null }, field: 'due_date',
       old: null, new: '2031-10-30', old_label: null, new_label: null, board_field: null },
+    // Правило — без автора, кнопка — от нажавшего (этап S4).
+    { kind: 'activity', id: 8, created_at: '2026-10-21T05:00:00Z', actor: null,
+      field: 'status', old: 'in_progress', new: 'done', old_label: null, new_label: null,
+      board_field: null, automation: { id: 3, name: 'Все пункты — в «Готово»' } },
+    { kind: 'activity', id: 9, created_at: '2026-10-21T04:00:00Z',
+      actor: { id: 7, name: 'Иван Петров', avatar_url: null }, field: 'status',
+      old: 'todo', new: 'in_progress', old_label: null, new_label: null, board_field: null,
+      automation: { id: 4, name: 'Взять в работу' } },
   ],
   next_before: null,
 };
@@ -170,5 +178,13 @@ describe('поля доски в окне карточки', () => {
     expect(screen.getByText(/поле «удалённое поле» очищено \(было: Старое\)/)).toBeInTheDocument();
     // Срок — словами, как на доске, а не ISO-строкой.
     expect(screen.getByText(/срок — 30 окт\. 2031/)).toBeInTheDocument();
+  });
+
+  it('правка автоматизации подписана правилом, кнопка — ещё и нажавшим', async () => {
+    tasksApi.fetchTask.mockResolvedValue(task());
+    renderModal();
+    expect(await screen.findByText('Автоматизация «Все пункты — в «Готово»»')).toBeInTheDocument();
+    expect(screen.getByText('(через автоматизацию «Взять в работу»)', { exact: false }))
+      .toBeInTheDocument();
   });
 });

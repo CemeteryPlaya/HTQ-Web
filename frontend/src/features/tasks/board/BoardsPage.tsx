@@ -22,10 +22,10 @@ import { BoardHeader } from './BoardHeader';
 import { boardKeyFromPath } from './boardRoutes';
 import { BoardSettingsDialog } from './BoardSettingsDialog';
 import { canvasStyle } from './boardColors';
-import { cardKeys } from './card/api';
 import { CardModal } from './card/CardModal';
 import {
-  useBoardNotifications, useCardParam, usePanelParam, useQuickCardEdit, useRequestsInbox,
+  invalidateCard, useBoardNotifications, useCardParam, usePanelParam, useQuickCardEdit,
+  useRequestsInbox,
 } from './card/hooks';
 import { TasksRequestsPanel } from './card/TasksRequestsPanel';
 import { CardQuickEdit } from './CardQuickEdit';
@@ -139,9 +139,10 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
   const onOpenCard = useCallback((card: BoardCard) => openCard(card.id), [openCard]);
 
   /** Перенос из окна карточки: карточка на этой доске — переносом доски
-   * (место в колонке), иначе — сменой статуса задачи. */
+   * (место в колонке), иначе — сменой статуса задачи. Затем карточка и лента
+   * перечитываются: перенос запускает правила доски. */
   const onModalMove = (task: { id: number }, status: TaskStatus) => {
-    const refreshCard = () => queryClient.invalidateQueries({ queryKey: cardKeys.card(task.id) });
+    const refreshCard = () => invalidateCard(queryClient, task.id);
     const onBoard = board?.columns.some((column) => column.cards.some((card) => card.id === task.id));
     if (onBoard) move.mutate({ taskId: task.id, body: { status } }, { onSettled: refreshCard });
     else quickEdit.status.mutate({ taskId: task.id, status }, { onSettled: refreshCard });

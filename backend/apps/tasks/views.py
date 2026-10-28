@@ -58,6 +58,7 @@ from .services import task_response
 from .services import task_scope
 from .services import task_service
 from .services import transfer
+from .services.automation.events import records_blocks
 
 
 def _no_content() -> HttpResponse:
@@ -511,6 +512,7 @@ def _get_task(request, task_id: int):
 
 
 @api_view(methods=("PATCH",), body=schemas.TaskUpdate, module="tasks", level="write")
+@records_blocks
 def _update_task(request, task_id: int, data: schemas.TaskUpdate):
     task = task_service.load_for_action(task_id, request)
     # Status/progress alone need only the soft-edit role; touching anything
@@ -570,6 +572,7 @@ def task_transfer(request, task_id: int, data: schemas.TransferIn):
 
 
 @api_view(methods=("POST",), module="tasks", level="write")
+@records_blocks
 def task_claim(request, task_id: int):
     """«Взять в работу» (канбан K1.6): неразобранная задача своего отдела."""
     task = task_service.claim(task_id, request)

@@ -1,0 +1,37 @@
+"""Маршруты автоматизации досок (решения K-36…K-40, этап S4). Подключаются из
+``urls.py``; ``APPEND_SLASH=False`` — каждое написание регистрируется явно,
+пути — явными ``path(…, views.<имя>)`` для сторожа прав (``test_gate.py``)."""
+
+from django.urls import path
+
+from . import views_automation as views
+
+urlpatterns = [
+    path("automation/catalog", views.automation_catalog),
+    path("automation/catalog/", views.automation_catalog),
+    path("boards/departments/<int:department_id>/automation", views.department_automation),
+    path("boards/departments/<int:department_id>/automation/", views.department_automation),
+    path("boards/departments/<int:department_id>/automation/runs",
+         views.department_automation_runs),
+    path("boards/departments/<int:department_id>/automation/runs/",
+         views.department_automation_runs),
+    path("boards/departments/<int:department_id>/buttons/<int:rule_id>", views.department_button),
+    path("boards/departments/<int:department_id>/buttons/<int:rule_id>/",
+         views.department_button),
+    path("boards/departments/<int:department_id>/preset", views.department_preset),
+    path("boards/departments/<int:department_id>/preset/", views.department_preset),
+    path("boards/projects/<int:project_id>/automation", views.project_automation),
+    path("boards/projects/<int:project_id>/automation/", views.project_automation),
+    path("boards/projects/<int:project_id>/automation/runs", views.project_automation_runs),
+    path("boards/projects/<int:project_id>/automation/runs/", views.project_automation_runs),
+    path("boards/projects/<int:project_id>/buttons/<int:rule_id>", views.project_button),
+    path("boards/projects/<int:project_id>/buttons/<int:rule_id>/", views.project_button),
+    path("boards/projects/<int:project_id>/preset", views.project_preset),
+    path("boards/projects/<int:project_id>/preset/", views.project_preset),
+    path("boards/automation/<int:rule_id>", views.automation_detail),
+    path("boards/automation/<int:rule_id>/", views.automation_detail),
+    path("boards/automation/<int:rule_id>/copy", views.automation_copy),
+    path("boards/automation/<int:rule_id>/copy/", views.automation_copy),
+    path("tasks/<int:task_id>/buttons/<int:rule_id>", views.task_button),
+    path("tasks/<int:task_id>/buttons/<int:rule_id>/", views.task_button),
+]
