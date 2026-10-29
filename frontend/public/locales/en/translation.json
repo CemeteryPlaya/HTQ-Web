@@ -2895,7 +2895,7 @@
         "title": "Members"
       },
       "move": {
-        "hidden": "hidden",
+        "cancel": "Cancel task",
         "none": "The status flow allows no move from this list.",
         "title": "Move to list"
       },

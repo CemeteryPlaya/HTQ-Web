@@ -15,13 +15,15 @@ import random
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
+from apps.companies import interface as companies
 from apps.refdata import interface as refdata
 from htqweb.errors import DomainError
+from htqweb.tenancy.context import current_company_or_none
 
 from ... import schemas
-from ...models import (TRANSITIONS, BoardField, BoardFieldType, BoardKind, BoardSettings, Label,
-                       Priority, Task, TaskAssignee, TaskChecklist, TaskChecklistItem,
-                       TaskFieldValue)
+from ...models import (TRANSITIONS, AutomationRule, BoardField, BoardFieldType, BoardKind,
+                       BoardSettings, Label, Priority, Task, TaskAssignee, TaskChecklist,
+                       TaskChecklistItem, TaskFieldValue)
 from .. import board_fields
 from .. import board_service
 from .. import checklist_service
@@ -30,7 +32,8 @@ from .. import task_content_service
 from .. import task_notify
 from .. import task_service
 from . import context
-from .context import Running
+from .context import ChainLimit, Running
+from .refs import RefMissing
 
 
 class ActionError(DomainError):
@@ -105,7 +108,7 @@ def _add_days(start: date, days: int, working: bool) -> date:
 def _field(ctx: _Ctx, field_id: int) -> BoardField:
     field = BoardField.objects.filter(pk=field_id).first()
     if field is None:
-        raise ActionError("Поля из правила больше нет")
+        raise RefMissing("удалено поле из действия")
     if (field.board_kind, field.board_id) not in board_fields.home_board_keys(ctx.task):
         raise ActionError(f"Поле «{field.name}» не с доски этой задачи")
     return field
@@ -151,15 +154,20 @@ def _labels(ctx: _Ctx) -> set[int]:
 
 
 def _add_label(ctx: _Ctx, action: dict) -> dict:
-    if not Label.objects.filter(pk=action["label_id"]).exists():
-        raise ActionError("Метки из правила больше нет")
+    _require_label(action["label_id"])
     labels = _labels(ctx)
     if action["label_id"] not in labels:
         _update(ctx, label_ids=sorted(labels | {action["label_id"]}))
     return {}
 
 
+def _require_label(label_id: int) -> None:
+    if not Label.objects.filter(pk=label_id).exists():
+        raise RefMissing("удалена метка из действия")
+
+
 def _remove_label(ctx: _Ctx, action: dict) -> dict:
+    _require_label(action["label_id"])
     labels = _labels(ctx)
     if action["label_id"] in labels:
         _update(ctx, label_ids=sorted(labels - {action["label_id"]}))
@@ -180,18 +188,39 @@ def _board_home(ctx: _Ctx) -> dict:
     return {"project_id": ctx.rule.board_id}
 
 
+def _count_created() -> None:
+    """Предел новых задач за цепочку (спецификация §4)."""
+    chain = context.current()
+    if chain is None:
+        return
+    chain.created += 1
+    if chain.created > context.MAX_CREATED:
+        raise ChainLimit(f"больше {context.MAX_CREATED} новых задач за цепочку")
+
+
+def _created(ctx: _Ctx, created: Task) -> dict:
+    """Новая задача — на доску правила; само правило на ней уже не сработает:
+    «создана → создать задачу» иначе плодило бы задачи."""
+    chain = context.current()
+    if chain is not None:
+        chain.executed.add((ctx.rule.pk, created.pk))
+    board_service.place_new(ctx.board, created)
+    return {"task_id": created.pk, "key": created.key}
+
+
 def _create_task(ctx: _Ctx, action: dict) -> dict:
+    _count_created()
     reporter = ctx.event_actor or ctx.rule.created_by
     created = task_service.create_task(
         schemas.TaskCreate(summary=render(ctx, action["summary"])[:500] or "Задача",
                            status=action.get("status", "todo"), reporter_id=reporter,
                            **_board_home(ctx)),
         user_id=reporter, scope=None)
-    board_service.place_new(ctx.board, created)
-    return {"task_id": created.pk, "key": created.key}
+    return _created(ctx, created)
 
 
 def _copy_task(ctx: _Ctx, action: dict) -> dict:
+    _count_created()
     source = ctx.fresh()
     reporter = ctx.event_actor or ctx.rule.created_by
     created = task_service.create_task(
@@ -205,8 +234,7 @@ def _copy_task(ctx: _Ctx, action: dict) -> dict:
     for checklist in TaskChecklist.objects.filter(task=source).order_by("position", "id"):
         items = list(checklist.items.order_by("position", "id").values_list("text", flat=True))
         checklist_service.add_checklist(created, checklist.title, items, ctx.actor)
-    board_service.place_new(ctx.board, created)
-    return {"task_id": created.pk, "key": created.key}
+    return _created(ctx, created)
 
 
 # ── даты ────────────────────────────────────────────────────────────────
@@ -268,7 +296,7 @@ def _add_checklist(ctx: _Ctx, action: dict) -> dict:
         template = next((item for item in board_fields.templates_of(row)
                          if item["id"] == action["template_id"]), None)
         if template is None:
-            raise ActionError("Шаблона чек-листа из правила больше нет")
+            raise RefMissing("удалён шаблон чек-листа из действия")
         items = template["items"]
     checklist = checklist_service.add_checklist(ctx.task, action["title"], items, ctx.actor)
     return {"checklist_id": checklist.pk}
@@ -352,6 +380,18 @@ def _replace_crew(ctx: _Ctx, crew: list[tuple[int, str]]) -> None:
     ctx.fresh()
 
 
+def _require_members(user_ids) -> None:
+    """Человек из настроек автоматизации больше не работает в компании —
+    поломка (решение L-01), а не назначение ушедшего."""
+    slug = current_company_or_none()
+    if not slug:
+        return
+    members = set(companies.active_member_ids(slug))
+    if gone := [uid for uid in user_ids if uid not in members]:
+        people = ", ".join(task_notify.person_name(uid) for uid in gone)
+        raise RefMissing(f"больше не работает в компании: {people}")
+
+
 def _add_person(ctx: _Ctx, user_id: int | None) -> dict:
     if not user_id:
         return {"skipped": "нет человека"}
@@ -367,6 +407,7 @@ def _join_actor(ctx: _Ctx, action: dict) -> dict:
 
 
 def _add_assignee(ctx: _Ctx, action: dict) -> dict:
+    _require_members([action["user_id"]])
     return _add_person(ctx, action["user_id"])
 
 
@@ -384,16 +425,22 @@ def _remove_all_assignees(ctx: _Ctx, action: dict) -> dict:
 
 
 def _random_assignee(ctx: _Ctx, action: dict) -> dict:
+    _require_members(action["user_ids"])
     return _add_person(ctx, random.choice(action["user_ids"]))
 
 
 def _round_robin_assignee(ctx: _Ctx, action: dict) -> dict:
+    """Следующий по кругу. Счётчик — в базе под блокировкой строки и в
+    точке сохранения правила: откат правила откатывает и сдвиг, две цепочки
+    разом не выберут одного человека."""
     people = action["user_ids"]
-    state = dict(ctx.rule.state or {})
+    _require_members(people)
+    rule = AutomationRule.objects.select_for_update().get(pk=ctx.rule.pk)
+    state = dict(rule.state or {})
     index = int(state.get("round_robin", -1)) + 1
     state["round_robin"] = index % len(people)
+    AutomationRule.objects.filter(pk=rule.pk).update(state=state)
     ctx.rule.state = state
-    ctx.rule.save(update_fields=["state", "updated_at"])
     return _add_person(ctx, people[index % len(people)])
 
 
@@ -401,6 +448,8 @@ def _set_supervisor(ctx: _Ctx, action: dict) -> dict:
     user_id = ctx.event_actor if action.get("who") == "actor" else action.get("user_id")
     if not user_id:
         return {"skipped": "нет человека"}
+    if action.get("who") != "actor":
+        _require_members([user_id])
     task_service.set_supervisor(ctx.task.pk, user_id, ctx.actor)
     return {"user_id": user_id}
 
@@ -440,6 +489,7 @@ def _comment(ctx: _Ctx, action: dict) -> dict:
 
 
 def _notify(ctx: _Ctx, action: dict) -> dict:
+    _require_members(action["user_ids"])
     text = render(ctx, action["text"])
     if ctx.task is not None:
         task_notify.automation_notice(ctx.task, ctx.actor, action["user_ids"], text)

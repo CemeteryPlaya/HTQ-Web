@@ -10,7 +10,7 @@ from htqweb.http import api_view, json_error
 
 from . import schemas
 from .services import board_service
-from .services.automation import buttons, catalog, presets, rules
+from .services.automation import buttons, catalog, presets, rules, suggestions
 
 
 def _method_not_allowed(request):
@@ -62,10 +62,22 @@ def department_button(request, department_id: int, rule_id: int):
     return buttons.press_board(request, board_service.department(request, department_id), rule_id)
 
 
+@api_view(methods=("GET",), module="tasks", level="read")
+def department_suggestions(request, department_id: int):
+    return suggestions.for_user(request, board_service.department(request, department_id))
+
+
+@api_view(methods=("POST",), body=schemas.SuggestionDismissIn, status=204, module="tasks",
+          level="write")
+def department_suggestion_dismiss(request, department_id: int, data: schemas.SuggestionDismissIn):
+    suggestions.dismiss(request, board_service.department(request, department_id), data.key)
+    return HttpResponse(status=204)
+
+
 @api_view(methods=("POST",), body=schemas.BoardPresetIn, module="tasks", level="write")
 def department_preset(request, department_id: int, data: schemas.BoardPresetIn):
     return presets.apply_from_request(request, board_service.department(request, department_id),
-                                      data.preset)
+                                      data.preset, dry_run=data.dry_run)
 
 
 # ── автоматизации доски проекта ─────────────────────────────────────────
@@ -104,10 +116,22 @@ def project_button(request, project_id: int, rule_id: int):
     return buttons.press_board(request, board_service.project(request, project_id), rule_id)
 
 
+@api_view(methods=("GET",), module="tasks", level="read")
+def project_suggestions(request, project_id: int):
+    return suggestions.for_user(request, board_service.project(request, project_id))
+
+
+@api_view(methods=("POST",), body=schemas.SuggestionDismissIn, status=204, module="tasks",
+          level="write")
+def project_suggestion_dismiss(request, project_id: int, data: schemas.SuggestionDismissIn):
+    suggestions.dismiss(request, board_service.project(request, project_id), data.key)
+    return HttpResponse(status=204)
+
+
 @api_view(methods=("POST",), body=schemas.BoardPresetIn, module="tasks", level="write")
 def project_preset(request, project_id: int, data: schemas.BoardPresetIn):
     return presets.apply_from_request(request, board_service.project(request, project_id),
-                                      data.preset)
+                                      data.preset, dry_run=data.dry_run)
 
 
 # ── автоматизация ───────────────────────────────────────────────────────

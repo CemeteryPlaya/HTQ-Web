@@ -27,17 +27,25 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.utils import timezone
 
 MAX_DEPTH = 5
 MAX_ACTIONS = 50
-#: Сроки и расписания автоматизации — по Алматы: ``TIME_ZONE`` платформы — UTC,
-#: и «сегодня» по UTC до пяти утра — ещё вчера.
-LOCAL_TZ = ZoneInfo("Asia/Almaty")
+#: Новых задач за цепочку: правило «создана → создать задачу» иначе плодило бы
+#: задачи до предела глубины (спецификация логики §4).
+MAX_CREATED = 10
+
+
+def local_tz() -> ZoneInfo:
+    """Пояс людей платформы (``PLATFORM_TIME_ZONE``, Алматы): сроки и время
+    расписаний автоматизации. ``TIME_ZONE`` хранения — UTC, и «сегодня» по UTC
+    до пяти утра — ещё вчера."""
+    return ZoneInfo(settings.PLATFORM_TIME_ZONE)
 
 
 def now_local() -> datetime:
-    return timezone.now().astimezone(LOCAL_TZ)
+    return timezone.now().astimezone(local_tz())
 
 
 def today() -> date:
@@ -78,6 +86,16 @@ class Chain:
     running: Running | None = None
     rules_cache: dict = field(default_factory=dict)
     initiator_id: int | None = None
+    #: (правило, задача), у которых «условия не сошлись» уже в журнале.
+    no_match: set = field(default_factory=set)
+    created: int = 0
+    #: Ошибка последнего запуска — её показывает нажавший кнопку.
+    last_error: str | None = None
+
+
+class ChainLimit(Exception):
+    """Цепочка упёрлась в предел посреди действий правила (новых задач больше
+    ``MAX_CREATED``): правило откатывается, в журнале — «упёрлось в предел»."""
 
 
 _chain: ContextVar[Chain | None] = ContextVar("tasks_automation_chain", default=None)

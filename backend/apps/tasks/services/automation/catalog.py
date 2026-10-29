@@ -19,12 +19,18 @@ from apps.companies import interface as companies
 from htqweb.errors import DomainError
 from htqweb.tenancy.context import current_company_or_none
 
-from ...models import AutomationKind, BoardField, BoardFieldType, BoardSettings, Label
+from ...models import TRANSITIONS, AutomationKind, BoardField, BoardFieldType, BoardSettings, Label
 from .. import board_fields
+from .. import task_notify
+from . import context
 
 MAX_CONDITIONS = 20
 MAX_ACTIONS = 20
 MAX_PEOPLE = 50
+#: Автоматизаций на доске (всех видов, включая выключенные).
+AUTOMATION_LIMIT = 100
+#: Карточек за один запуск команды или кнопки доски над колонкой.
+CARDS_PER_RUN = 200
 
 StatusKey = Literal["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"]
 Position = Literal["top", "bottom"]
@@ -44,9 +50,12 @@ def _need(condition: bool, message: str) -> None:
 # ── триггеры правил ─────────────────────────────────────────────────────
 
 class CardCreated(_Spec):
-    """Задача создана на доске (в колонке X)."""
+    """Задача появилась на доске (в колонке X): создана, пришла с другой
+    доски — перевод, смена отдела или проекта (спецификация логики §3) — или
+    любым способом."""
 
     type: Literal["card_created"]
+    how: Literal["created", "arrived", "any"] = "created"
     status: StatusKey | None = None
 
 
@@ -245,6 +254,7 @@ class DueWindow(_Spec):
     type: Literal["due_window"]
     window: Literal["today", "overdue", "within_days", "this_week", "this_month"]
     days: int | None = Field(default=None, ge=1, le=365)
+    negate: bool = False
 
     @model_validator(mode="after")
     def _days(self) -> "DueWindow":
@@ -529,14 +539,46 @@ def _invalid(message: str, **details) -> DomainError:
     return DomainError("automation_invalid", message, status=422, details=details or None)
 
 
+#: Тексты ошибок Pydantic по-русски: их видит администратор доски.
+_MESSAGES = {
+    "missing": "обязательное поле не заполнено",
+    "extra_forbidden": "лишнее поле",
+    "literal_error": "недопустимое значение",
+    "enum": "недопустимое значение",
+    "int_parsing": "нужно целое число", "int_type": "нужно целое число",
+    "int_from_float": "нужно целое число",
+    "float_parsing": "нужно число", "float_type": "нужно число",
+    "bool_parsing": "нужно «да» или «нет»", "bool_type": "нужно «да» или «нет»",
+    "string_type": "нужен текст",
+    "string_too_short": "пустой текст",
+    "string_too_long": "слишком длинный текст",
+    "list_type": "нужен список",
+    "too_short": "список пуст",
+    "too_long": "слишком много элементов",
+    "greater_than_equal": "значение меньше допустимого",
+    "greater_than": "значение меньше допустимого",
+    "less_than_equal": "значение больше допустимого",
+    "less_than": "значение больше допустимого",
+    "union_tag_invalid": "неизвестный тип",
+    "union_tag_not_found": "не указан тип",
+    "model_type": "нужен объект", "dict_type": "нужен объект",
+}
+
+
+def _message(error: dict) -> str:
+    if error.get("type") == "value_error":
+        return error.get("msg", "").removeprefix("Value error, ") or "неверное значение"
+    return _MESSAGES.get(error.get("type"), "неверное значение")
+
+
 def _parse(adapter: TypeAdapter, raw, where: str):
     try:
         return adapter.validate_python(raw)
     except ValidationError as exc:
         first = exc.errors()[0]
         place = ".".join(str(part) for part in first.get("loc", ()))
-        message = first.get("msg", "Неверное значение").removeprefix("Value error, ")
-        raise _invalid(f"{where}: {message}", path=f"{where}.{place}".rstrip(".")) from exc
+        raise _invalid(f"{where}: {_message(first)}",
+                       path=f"{where}.{place}".rstrip(".")) from exc
 
 
 def _is_card_scope(kind: str, trigger) -> bool:
@@ -666,6 +708,110 @@ def _collect(refs: _Refs, trigger, conditions, actions) -> None:
             refs.field(action.field_id, "sort", action)
 
 
+# ── логика автоматизации (спецификация §11) ─────────────────────────────
+
+#: Переменные текстов действий (``actions.render``).
+VARIABLES = ("cardname", "username", "date", "duedate")
+_VARIABLE = re.compile(r"\{([^{}]*)\}")
+#: Поле действия, текст которого подставляет переменные.
+_RENDERED = {"create_task": "summary", "copy_task": "summary", "rename": "summary",
+             "set_description": "text", "comment": "text", "notify": "text"}
+#: Действия, которым нужен «сделавший» (кто запустил событие или нажал кнопку).
+_ACTOR_ACTIONS = frozenset({"join_actor", "watch_actor"})
+
+
+def _status_name(status: str) -> str:
+    return task_notify.STATUS_LABELS.get(status, status)
+
+
+def _fixed_status(trigger, conditions) -> str | None:
+    """Колонка карточки в момент срабатывания — если её задают триггер или
+    условия. Противоречие («перенесена в X» и «в колонке Y») — отказ."""
+    trigger_type = getattr(trigger, "type", "")
+    status = None
+    if trigger_type == "moved":
+        status = trigger.to_status
+    elif trigger_type == "completed":
+        status = "done"
+    elif trigger_type == "cancelled":
+        status = "cancelled"
+    elif trigger_type == "card_created":
+        status = trigger.status
+    for index, condition in enumerate(conditions):
+        if condition.type != "in_column" or condition.negate:
+            continue
+        if status is not None and condition.status != status:
+            raise _invalid(
+                f"Условие «в колонке «{_status_name(condition.status)}»» никогда не сойдётся: "
+                f"карточка в этот момент в «{_status_name(status)}»",
+                path=f"conditions.{index}")
+        status = condition.status
+    return status
+
+
+def _move_target(action) -> str | None:
+    if action.type == "move":
+        return action.status
+    if action.type == "complete":
+        return "done"
+    if action.type == "cancel":
+        return "cancelled"
+    return None
+
+
+def _check_logic(kind: str, trigger, conditions, actions) -> None:
+    """Правила, которые форма параметров не ловит: противоречие триггера и
+    условий, невозможный переход по цепочке действий, «сделавший» у команд,
+    переменные и пустой комментарий."""
+    status = _fixed_status(trigger, conditions)
+    for index, action in enumerate(actions):
+        target = _move_target(action)
+        if target is None:
+            continue
+        if status is not None and target != status and target not in TRANSITIONS.get(status, ()):
+            raise _invalid(f"Действие {index + 1}: из «{_status_name(status)}» в "
+                           f"«{_status_name(target)}» перенести нельзя",
+                           path=f"actions.{index}")
+        status = target
+    if kind in (AutomationKind.DUE, AutomationKind.SCHEDULE):
+        for index, condition in enumerate(conditions):
+            if condition.type == "actor":
+                raise _invalid("У команды нет «сделавшего» — условие «кто сделал» не подходит",
+                               path=f"conditions.{index}")
+        for index, action in enumerate(actions):
+            if action.type in _ACTOR_ACTIONS or (action.type == "set_supervisor"
+                                                and action.who == "actor"):
+                raise _invalid(f"Действие {index + 1}: у команды нет «сделавшего» — "
+                               "выберите человека", path=f"actions.{index}")
+    for index, action in enumerate(actions):
+        attr = _RENDERED.get(action.type)
+        if attr is None:
+            continue
+        text = getattr(action, attr) or ""
+        if unknown := sorted({name for name in _VARIABLE.findall(text) if name not in VARIABLES}):
+            known = ", ".join("{" + name + "}" for name in VARIABLES)
+            raise _invalid(f"Действие {index + 1}: неизвестная переменная {{{unknown[0]}}} — "
+                           f"доступны {known}", path=f"actions.{index}.{attr}")
+        if action.type == "comment" and not text.replace("@card", "").strip():
+            raise _invalid(f"Действие {index + 1}: кроме «@card» нужен текст комментария",
+                           path=f"actions.{index}.text")
+
+
+def references(rule) -> _Refs:
+    """Ссылки сохранённой автоматизации — без проверки доски: метки, поля с их
+    употреблениями, шаблоны чек-листов, люди (``refs.py``, спецификация §10).
+    Сохранённое уже прошло проверку; не разобралось — ссылок нет."""
+    refs = _Refs(None)
+    try:
+        trigger = TRIGGERS_BY_KIND[rule.kind].validate_python(rule.trigger)
+        conditions = _CONDITIONS.validate_python(rule.conditions)
+        actions = _ACTIONS.validate_python(rule.actions)
+    except (KeyError, ValidationError):
+        return refs
+    _collect(refs, trigger, conditions, actions)
+    return refs
+
+
 def validate(board, kind: str, trigger: dict, conditions: list, actions: list) -> tuple:
     """Автоматизация целиком → нормализованные ``(trigger, conditions,
     actions)``; ошибка — 422 ``automation_invalid`` с местом в ``details``."""
@@ -699,6 +845,7 @@ def validate(board, kind: str, trigger: dict, conditions: list, actions: list) -
             raise _invalid("Это действие — над карточкой: выберите колонку карточек",
                            actions=wrong)
 
+    _check_logic(kind, trigger_spec, condition_specs, action_specs)
     refs = _Refs(board)
     _collect(refs, trigger_spec, condition_specs, action_specs)
     refs.check()
@@ -765,5 +912,45 @@ def describe() -> dict:
         "actions": actions,
         "board_actions": sorted(BOARD_ACTIONS),
         "move_triggers": sorted(MOVE_TRIGGERS),
-        "limits": {"conditions": MAX_CONDITIONS, "actions": MAX_ACTIONS, "people": MAX_PEOPLE},
+        "transitions": {status: sorted(targets) for status, targets in TRANSITIONS.items()},
+        "field_ops": FIELD_OPS,
+        "param_kinds": PARAM_KINDS,
+        "variables": list(VARIABLES),
+        "limits": {"conditions": MAX_CONDITIONS, "actions": MAX_ACTIONS, "people": MAX_PEOPLE,
+                   "automations": AUTOMATION_LIMIT, "chain_depth": context.MAX_DEPTH,
+                   "chain_actions": context.MAX_ACTIONS, "chain_created": context.MAX_CREATED,
+                   "cards_per_run": CARDS_PER_RUN},
     }
+
+
+#: Что можно с полем каждого типа: в триггере, в условии, в действиях
+#: (``_check_field_use`` — та же таблица при сохранении).
+FIELD_OPS = {
+    BoardFieldType.TEXT.value: {"trigger": ["set", "cleared", "equals"],
+                                "condition": ["set", "empty", "equals"],
+                                "actions": ["set_field", "clear_field"]},
+    BoardFieldType.NUMBER.value: {"trigger": ["set", "cleared", "equals", "gt", "lt"],
+                                  "condition": ["set", "empty", "equals", "gt", "lt"],
+                                  "actions": ["set_field", "clear_field", "increment_field"]},
+    BoardFieldType.DATE.value: {"trigger": ["set", "cleared", "equals"],
+                                "condition": ["set", "empty", "equals"],
+                                "actions": ["set_field", "clear_field", "shift_field_date",
+                                            "set_due"]},
+    BoardFieldType.CHECKBOX.value: {"trigger": ["checked", "unchecked"],
+                                    "condition": ["checked", "unchecked"],
+                                    "actions": ["set_field", "clear_field"]},
+    BoardFieldType.LIST.value: {"trigger": ["set", "cleared", "equals"],
+                                "condition": ["set", "empty", "equals"],
+                                "actions": ["set_field", "clear_field"]},
+}
+
+#: Вид параметра по его имени — чем его выбирать в конструкторе.
+PARAM_KINDS = {
+    "status": "column", "from_status": "column", "to_status": "column",
+    "label_id": "label", "field_id": "field", "value": "field_value",
+    "user_id": "person", "user_ids": "people", "template_id": "template",
+    "days": "number", "count": "number", "offset_days": "number", "day_of_month": "number",
+    "time": "time", "weekdays": "weekdays",
+    "title": "text", "text": "text", "summary": "text", "checklist_title": "text",
+    "message": "text",
+}

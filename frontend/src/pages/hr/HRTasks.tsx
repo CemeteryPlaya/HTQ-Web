@@ -26,7 +26,7 @@ import { fetchDepartments, fetchEmployeeUsers } from '@/api/hr';
 import api from '@/api/client';
 import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
-import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { rebuildTaskList, useCardParam } from '@/features/tasks/board/card/hooks';
 import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import {
   TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
@@ -134,7 +134,12 @@ const HRTasks: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
       toast.success(t('tasks.pages.list.statusUpdated', 'Статус обновлен'));
     },
-    onError: (err) => reportApiError(err, t('tasks.pages.list.statusError', 'Ошибка обновления статуса')),
+    onError: (err) => {
+      // Перенос отклонён (запрет доски — 409): доска показывает карточку на
+      // старом месте — список подменяется копией и перечитывается.
+      rebuildTaskList(queryClient, 'hr-tasks');
+      reportApiError(err, t('tasks.pages.list.statusError', 'Ошибка обновления статуса'));
+    },
   });
 
   const deleteMutation = useMutation({

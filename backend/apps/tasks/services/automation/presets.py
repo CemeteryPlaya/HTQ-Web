@@ -1,4 +1,5 @@
-"""Шаблон доски «Процесс задач HTQ» (решение K-40; разбор Trello §7).
+"""Шаблон доски «Процесс задач HTQ» (решение K-40; разбор Trello §7;
+спецификация логики docs/plans/2026-10-28-kanban-automation-logic.md, §14).
 
 Процесс из Trello («Задачи HTQ») на каталоге автоматизации:
 
@@ -14,11 +15,25 @@
 - команда «через 1 день после срока» — метка «Просрочено» и комментарий;
 - кнопки «Взять в работу», «На доработку», «Сдать».
 
+Защита, которой в Trello не было (решения L-02, L-03 от 28.10):
+
+- кнопки — только в своих колонках: «Взять в работу» — в «Ожидающих
+  исполнения» у назначенной задачи, «На доработку» — в «Готово», «Сдать» — в
+  «Исполнении»;
+- «Взята в работу» ставит правило при входе в «Исполнение» — встроенное
+  «Взять в работу» (свободная задача отдела) запреты не держат;
+- скрытой «На ревью» в процессе нет — вручную в неё нельзя; в «Готово» с
+  невыполненным чек-листом нельзя из любой колонки;
+- в «В ожидании» вручную — только с «Причиной ожидания», обратно — только
+  очистив её;
+- «Просрочено» снимается при выполнении, отмене, переносе и снятии срока.
+
 Применение идемпотентно: поля, метки и шаблон ищутся по названию, у каждой
-автоматизации — свой ``preset_key``, повтор правит её, а не дублирует.
-Поле с тем же названием, но другого типа — отказ 422 (переименуйте поле или
-удалите его). Прочие настройки доски (свои поля, шаблоны, автоматизации)
-шаблон не трогает.
+автоматизации — свой ``preset_key``, повтор правит её, а не дублирует, и
+восстанавливает шаблон: правки администратора в автоматизациях шаблона и
+колонках заменяются, сломанные чинятся. Поле с тем же названием, но другого
+типа — отказ 422 (переименуйте поле или удалите его). Прочие настройки доски
+(свои поля, шаблоны, автоматизации) шаблон не трогает.
 """
 
 from __future__ import annotations
@@ -63,6 +78,12 @@ BLOCK_16 = ("В «Готово» вручную переносить нельз�
             "отметьте все пункты чек-листа — карточка сама уйдёт в «Готово».")
 BLOCK_17 = ("Вручную в «Исполнение» переносить нельзя. Чтобы взять задачу в работу, нажмите "
             "«Взять в работу» или отметьте пункт «Выполнить задачу» в чек-листе.")
+BLOCK_REVIEW = ("Колонки «На ревью» в процессе доски нет. Когда закончите, нажмите «Сдать» "
+                "или отметьте все пункты чек-листа — карточка сама уйдёт в «Готово».")
+BLOCK_WAIT_IN = ("В «В ожидании» карточка уходит сама: напишите причину в поле «Причина "
+                 "ожидания».")
+BLOCK_WAIT_OUT = ("Пока указана «Причина ожидания», карточка остаётся в «В ожидании». Очистите "
+                  "поле — карточка сама вернётся в «Исполнение».")
 COMMENT_REWORK = ("@card Задачу вернули на доработку. Что исправить — смотрите комментарии к "
                   "карточке. Чек-лист сброшен: когда исправите, снова отметьте пункты или "
                   "нажмите «Сдать» — карточка сама уйдёт в «Готово».")
@@ -82,6 +103,9 @@ def _automations(reason: int, taken: int, overdue: int, template_id: str) -> lis
     """``(ключ, вид, название, значок, триггер, условия, действия)``."""
     rule, due, button = AutomationKind.RULE, AutomationKind.DUE, AutomationKind.CARD_BUTTON
     in_column = lambda status: {"type": "in_column", "status": status}  # noqa: E731
+    reason_set = {"type": "field", "field_id": reason, "op": "set"}
+    reason_empty = {"type": "field", "field_id": reason, "op": "empty"}
+    unmark_overdue = [{"type": "remove_label", "label_id": overdue}]
     return [
         ("htq.r01", rule, "Исполнитель назначен — в «Ожидающие исполнения»", "",
          {"type": "assignee_added"},
@@ -100,7 +124,7 @@ def _automations(reason: int, taken: int, overdue: int, template_id: str) -> lis
          {"type": "item_checked"},
          [in_column("in_progress"), {"type": "checklists_complete"}], [_move("done", "top")]),
         ("htq.r08", rule, "Выполнена — снять «Просрочено»", "",
-         {"type": "completed"}, [], [{"type": "remove_label", "label_id": overdue}]),
+         {"type": "completed"}, [], unmark_overdue),
         ("htq.r09", rule, "Причина ожидания задана — в «В ожидании»", "",
          {"type": "field_changed", "field_id": reason, "op": "set"},
          [in_column("in_progress")], [_move("blocked", "top")]),
@@ -118,7 +142,7 @@ def _automations(reason: int, taken: int, overdue: int, template_id: str) -> lis
          {"type": "moved", "from_status": "in_progress", "to_status": "todo"},
          [{"type": "field", "field_id": taken, "op": "set"}], _block(BLOCK_13)),
         ("htq.r16", rule, "Запрет: в «Готово» с невыполненным чек-листом", "",
-         {"type": "moved", "from_status": "in_progress", "to_status": "done"},
+         {"type": "moved", "to_status": "done"},
          [{"type": "checklists_incomplete"}], _block(BLOCK_16)),
         ("htq.r17", rule, "Запрет: в «Исполнение», пока не взята в работу", "",
          {"type": "moved", "from_status": "todo", "to_status": "in_progress"},
@@ -130,19 +154,40 @@ def _automations(reason: int, taken: int, overdue: int, template_id: str) -> lis
         ("htq.r19", rule, "Комментарий «На доработку» — в «Исполнение»", "",
          {"type": "comment_added", "match": "starts_with", "text": "На доработку"},
          [in_column("done")], [_move("in_progress", "top")]),
+        ("htq.r20", rule, "Вошла в «Исполнение» — «Взята в работу» сегодня", "",
+         {"type": "moved", "to_status": "in_progress"},
+         [{"type": "field", "field_id": taken, "op": "empty"}],
+         [{"type": "set_field", "field_id": taken, "mode": "today"}]),
+        ("htq.r21", rule, "Запрет: в «На ревью»", "",
+         {"type": "moved", "to_status": "in_review"}, [], _block(BLOCK_REVIEW)),
+        ("htq.r22", rule, "Запрет: в «В ожидании» без причины", "",
+         {"type": "moved", "to_status": "blocked"}, [reason_empty], _block(BLOCK_WAIT_IN)),
+        ("htq.r23", rule, "Запрет: из «В ожидании» в «Исполнение» с причиной", "",
+         {"type": "moved", "from_status": "blocked", "to_status": "in_progress"}, [reason_set],
+         _block(BLOCK_WAIT_OUT)),
+        ("htq.r24", rule, "Запрет: из «В ожидании» в «Ожидающие исполнения» с причиной", "",
+         {"type": "moved", "from_status": "blocked", "to_status": "todo"}, [reason_set],
+         _block(BLOCK_WAIT_OUT)),
+        ("htq.r25", rule, "Отменена — снять «Просрочено»", "",
+         {"type": "cancelled"}, [], unmark_overdue),
+        ("htq.r26", rule, "Срок перенесён — снять «Просрочено»", "",
+         {"type": "due_changed"},
+         [{"type": "due_window", "window": "overdue", "negate": True}], unmark_overdue),
+        ("htq.r27", rule, "Срок снят — снять «Просрочено»", "",
+         {"type": "due_removed"}, [], unmark_overdue),
         ("htq.due", due, "Просрочено", "",
          {"type": "due", "offset_days": 1},
          [{"type": "due_window", "window": "overdue"}],
          [{"type": "add_label", "label_id": overdue},
           {"type": "comment", "text": COMMENT_OVERDUE}]),
         ("htq.take", button, "Взять в работу", "arrow-right",
-         {"type": "card_button"}, [],
+         {"type": "card_button"}, [in_column("todo"), {"type": "assigned", "who": "anyone"}],
          [{"type": "set_field", "field_id": taken, "mode": "today"},
           _move("in_progress", "bottom"), {"type": "join_actor"}]),
         ("htq.rework", button, "На доработку", "hammer",
-         {"type": "card_button"}, [], [_move("in_progress", "top")]),
+         {"type": "card_button"}, [in_column("done")], [_move("in_progress", "top")]),
         ("htq.submit", button, "Сдать", "circle-check",
-         {"type": "card_button"}, [], [{"type": "complete"}]),
+         {"type": "card_button"}, [in_column("in_progress")], [{"type": "complete"}]),
     ]
 
 
@@ -199,7 +244,8 @@ def _settings(board, actor_id, report) -> str:
 
 
 def apply(board, preset: str, actor_id: int | None, *, dry_run: bool = False) -> dict:
-    """Применить шаблон к доске отдела или проекта (права проверил вызывающий)."""
+    """Применить шаблон к доске отдела или проекта (права проверил вызывающий).
+    ``dry_run`` — тот же отчёт, всё откатывается: что изменится."""
     if preset not in PRESETS:
         raise DomainError("preset_unknown", "Неизвестный шаблон доски", status=422)
     if board.kind == BoardKind.PERSONAL:
@@ -209,7 +255,7 @@ def apply(board, preset: str, actor_id: int | None, *, dry_run: bool = False) ->
               "dry_run": dry_run,
               "fields": {"created": [], "kept": []}, "labels": {"created": [], "kept": []},
               "templates": {"created": [], "kept": []},
-              "automations": {"created": [], "updated": []}}
+              "automations": {"created": [], "updated": [], "unchanged": []}}
     with transaction.atomic():
         template_id = _settings(board, actor_id, report)
         reason = _field(board, FIELD_REASON, BoardFieldType.TEXT, False, actor_id, report)
@@ -225,17 +271,19 @@ def apply(board, preset: str, actor_id: int | None, *, dry_run: bool = False) ->
             if existing is None:
                 rules.save_new(board, data, actor_id, preset_key=key)
                 report["automations"]["created"].append(name)
-            else:
-                rules.apply_patch(board, existing, schemas.AutomationPatch(
-                    name=name, icon=icon, trigger=trigger, conditions=conditions,
-                    actions=actions, enabled=True), actor_id)
-                report["automations"]["updated"].append(name)
+                continue
+            before = rules.snapshot(existing), existing.broken_reason
+            rules.apply_patch(board, existing, schemas.AutomationPatch(
+                name=name, icon=icon, trigger=trigger, conditions=conditions,
+                actions=actions, enabled=True), actor_id)
+            changed = (rules.snapshot(existing), existing.broken_reason) != before
+            report["automations"]["updated" if changed else "unchanged"].append(name)
         if dry_run:
             transaction.set_rollback(True)
     return report
 
 
 @transaction.atomic
-def apply_from_request(request, board, preset: str) -> dict:
+def apply_from_request(request, board, preset: str, *, dry_run: bool = False) -> dict:
     board_service.require_admin(request, board)
-    return apply(board, preset, request.token.user_id)
+    return apply(board, preset, request.token.user_id, dry_run=dry_run)

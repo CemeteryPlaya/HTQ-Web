@@ -154,9 +154,9 @@ function Stamp({ value }: { value: string }) {
 
 function Entry({ entry, describe }: { entry: FeedEntry; describe: (entry: FeedActivity) => string }) {
   const { t } = useTranslation();
-  // Правку сделала автоматизация доски (этап S4): у правила автора нет, у
-  // кнопки — нажавший, и рядом — какая автоматизация.
-  const rule = entry.kind === 'activity' ? entry.automation ?? null : null;
+  // Правку или комментарий сделала автоматизация доски (этапы S4, S4b): у
+  // правила автора нет, у кнопки — нажавший, и рядом — какая автоматизация.
+  const rule = entry.automation ?? null;
   const automationName = rule?.name
     ? t('tasks.feed.automationNamed', 'Автоматизация «{{name}}»', { name: rule.name })
     : t('tasks.feed.automation', 'Автоматизация');

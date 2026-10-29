@@ -9,6 +9,7 @@ are undeletable, equipment is soft-disabled rather than deleted).
 from __future__ import annotations
 
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.http import Http404
 
 from ..models import (Equipment, EquipmentCategory, Label, TaskType, WorkRole,
@@ -87,10 +88,16 @@ def update_label(label_id: int, changes: dict) -> Label:
 
 
 def delete_label(label_id: int) -> None:
+    """Метка общая на компанию: удаление идёт, а автоматизации досок, где
+    она упомянута, ломаются с уведомлением (решение L-01)."""
+    from .automation import refs
+
     label = Label.objects.filter(pk=label_id).first()
     if label is None:
         raise Http404("Label not found")
-    label.delete()
+    with transaction.atomic():
+        refs.label_deleted(label.pk, label.name)
+        label.delete()
 
 
 # ── task types ──────────────────────────────────────────────────────────

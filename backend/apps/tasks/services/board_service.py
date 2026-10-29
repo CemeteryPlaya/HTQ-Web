@@ -664,13 +664,17 @@ def move(request, task_id: int, data: schemas.CardMove) -> dict:
     elif not can_reorder(request, board, task):
         raise PermissionDenied("Порядок карточек меняет участник задачи или администратор доски")
 
-    _lock(board)
-    rank = _rank_between(board, target, task_id, data.before_id, data.after_id)
-    if target != task.status:
-        task_service.update_task(task_id, schemas.TaskUpdate(status=target),
-                                 user_id=request.token.user_id,
-                                 scope=task_scope.for_request(request))
-    _store_rank(board, target, task_id, rank)
+    with transaction.atomic():
+        _lock(board)
+        rank = _rank_between(board, target, task_id, data.before_id, data.after_id)
+        # Сначала ручное место, затем смена колонки с цепочкой правил: место,
+        # поставленное правилом, сильнее перетаскивания (спецификация логики
+        # §6). Запрет переноса откатывает и место.
+        _store_rank(board, target, task_id, rank)
+        if target != task.status:
+            task_service.update_task(task_id, schemas.TaskUpdate(status=target),
+                                     user_id=request.token.user_id,
+                                     scope=task_scope.for_request(request))
     return card_for(request, board, task_id)
 
 
@@ -846,9 +850,21 @@ def save_settings(request, board: Board, data: schemas.BoardSettingsIn) -> dict:
                               "У личной доски нет своих полей и шаблонов", status=422)
         defaults["checklist_templates"] = board_fields.normalize_templates(
             data.checklist_templates, row.checklist_templates if row is not None else [])
+        _ensure_templates_unused(board, row, defaults["checklist_templates"])
     BoardSettings.objects.update_or_create(board_kind=board.kind, board_id=board.id,
                                            defaults=defaults)
     return settings_payload(board)
+
+
+def _ensure_templates_unused(board: Board, row, templates: list[dict]) -> None:
+    """Шаблон из настроек автоматизации доски не удаляется (решение L-01)."""
+    from .automation import refs
+
+    kept = {item["id"] for item in templates}
+    for item in board_fields.templates_of(row):
+        if item["id"] not in kept:
+            refs.ensure_unused(board.kind, board.id, f"Шаблон чек-листа «{item['title']}»",
+                               template_id=item["id"])
 
 
 # ── уведомления по доске (K-30) ─────────────────────────────────────────

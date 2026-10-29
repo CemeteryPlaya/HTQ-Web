@@ -572,7 +572,6 @@ def task_transfer(request, task_id: int, data: schemas.TransferIn):
 
 
 @api_view(methods=("POST",), module="tasks", level="write")
-@records_blocks
 def task_claim(request, task_id: int):
     """«Взять в работу» (канбан K1.6): неразобранная задача своего отдела."""
     task = task_service.claim(task_id, request)

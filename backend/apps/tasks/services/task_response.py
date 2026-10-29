@@ -331,7 +331,7 @@ def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
     payload["subtasks"] = [s.model_dump() for s in build_list(subtasks, scope=scope)]
     payload["can"] = _can(task, scope)
     payload["checklists"] = checklist_service.for_task(task.id)
-    payload["home_boards"] = board_fields.home_boards(task)
+    payload["home_boards"] = board_fields.home_boards(task, scope)
     if scope is not None:
         from . import access_requests
 

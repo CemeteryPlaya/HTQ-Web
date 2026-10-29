@@ -1480,6 +1480,10 @@ class AutomationRule(models.Model):
     следующий запуск. ``state`` — служебное состояние действий («по очереди»).
     ``preset_key`` — автоматизация шаблона доски: повтор применения правит
     её, а не дублирует. Срабатывают правила домашних досок задачи (K-35).
+    ``broken_reason`` — автоматизация сломана: то, на что она ссылается,
+    удалили (спецификация логики §10); такая выключена и включается только
+    правкой, прошедшей проверку. ``activated_at`` — когда её включили или
+    поменяли триггер: команда по сроку не догоняет дни раньше этого (§8).
     """
 
     board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
@@ -1495,6 +1499,8 @@ class AutomationRule(models.Model):
     preset_key = models.CharField(max_length=64, blank=True, default="")
     next_run_at = models.DateTimeField(null=True, blank=True)
     state = models.JSONField(default=dict, blank=True)
+    broken_reason = models.CharField(max_length=500, blank=True, default="", db_default="")
+    activated_at = models.DateTimeField(null=True, blank=True)
     created_by = models.IntegerField(null=True, blank=True)
     updated_by = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
@@ -1518,6 +1524,7 @@ class AutomationRunStatus(models.TextChoices):
     FAILED = "failed"
     BLOCKED = "blocked"
     LIMITED = "limited"
+    SKIPPED = "skipped"
     CHANGED = "changed"
 
 
@@ -1569,6 +1576,26 @@ class AutomationDueMark(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["rule", "task", "due_date"],
                                     name="uq_automation_due_mark"),
+        ]
+
+
+class AutomationSuggestionDismissal(models.Model):
+    """Скрытая «Рекомендация» (спецификация логики §15): подсказки личные, и
+    скрывает их каждый для себя на своей доске. ``key`` — образец действия
+    (``move:in_progress``, ``label:7`` …)."""
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    user_id = models.IntegerField()
+    key = models.CharField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Скрытая рекомендация автоматизации"
+        verbose_name_plural = "Скрытые рекомендации автоматизации"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "user_id", "key"],
+                                    name="uq_automation_suggestion_dismissal"),
         ]
 
 
@@ -1878,6 +1905,8 @@ class TaskComment(models.Model):
                              related_name="comments")
     author_id = models.IntegerField(null=True, blank=True)
     body = models.TextField()
+    # Комментарий написала автоматизация доски (этап S4b): лента называет правило.
+    via_rule_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())

@@ -128,8 +128,7 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
     departments = hydration.department_briefs(department_ids)
     fields = board_fields.journal_fields(entry["row"].field_name for entry in page
                                          if entry["kind"] == ACTIVITY)
-    rule_ids = {entry["row"].via_rule_id for entry in page
-                if entry["kind"] == ACTIVITY and entry["row"].via_rule_id}
+    rule_ids = {entry["row"].via_rule_id for entry in page if entry["row"].via_rule_id}
     rule_names = (dict(AutomationRule.objects.filter(pk__in=rule_ids).values_list("pk", "name"))
                   if rule_ids else {})
 
@@ -149,6 +148,12 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
             return hydration.user_name(users, _requester(value))
         return None
 
+    def automation(rule_id: int | None) -> dict | None:
+        # Правку или комментарий сделала автоматизация доски (этап S4, S4b).
+        if not rule_id:
+            return None
+        return {"id": rule_id, "name": rule_names.get(rule_id) or None}
+
     def board_field(name: str) -> dict | None:
         if not name.startswith(board_fields.FIELD_PREFIX):
             return None
@@ -163,7 +168,8 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
         if entry["kind"] == COMMENT:
             items.append({"kind": COMMENT, "id": row.pk, "created_at": row.created_at,
                           "actor": person(row.author_id), "body": row.body,
-                          "updated_at": row.updated_at})
+                          "updated_at": row.updated_at,
+                          "automation": automation(row.via_rule_id)})
         else:
             items.append({"kind": ACTIVITY, "id": row.pk, "created_at": row.created_at,
                           "actor": person(row.actor_id), "field": row.field_name,
@@ -171,8 +177,5 @@ def feed(task_id: int, request, *, details: bool, before: str | None,
                           "old_label": label(row.field_name, row.old_value),
                           "new_label": label(row.field_name, row.new_value),
                           "board_field": board_field(row.field_name),
-                          # Правку сделала автоматизация доски (этап S4).
-                          "automation": ({"id": row.via_rule_id,
-                                          "name": rule_names.get(row.via_rule_id) or None}
-                                         if row.via_rule_id else None)})
+                          "automation": automation(row.via_rule_id)})
     return {"items": items, "next_before": _cursor(page[-1]) if more else None}

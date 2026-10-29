@@ -13,7 +13,7 @@ from django.test import Client
 from apps.tasks.models import AutomationRule, AutomationRun, Status
 from apps.tasks.services.automation import rules
 
-from .automation_helpers import add_rule, assigned_task, dept_board
+from .automation_helpers import add_rule, assigned_task, dept_board, label
 from .helpers import BASE, patch_json, post_json
 from .org_fixtures import EMP_IT, HEAD_IT, OUTSIDER, TD, as_user, make_board, make_org
 
@@ -108,10 +108,14 @@ def test_copy_is_disabled_and_delete_keeps_the_log(org):
 
 
 def test_runs_are_for_admin_with_filters(org):
-    rule = add_rule(dept_board(org.it), {"type": "moved", "to_status": "in_progress"},
+    # Колонку триггер не задаёт: перенос «В работе → Бэклог» невозможен
+    # только на месте — правило сохраняется и падает при выполнении.
+    marker = label("Метка-триггер (журнал)")
+    rule = add_rule(dept_board(org.it), {"type": "label_added", "label_id": marker.pk},
                     [{"type": "move", "status": "backlog"}], name="Сломанное")
-    task = assigned_task(org.it, EMP_IT)
-    patch_json(Client(), f"{BASE}/tasks/{task.pk}/", {"status": "in_progress"}, **as_user(EMP_IT))
+    task = assigned_task(org.it, EMP_IT, status=Status.IN_PROGRESS)
+    patch_json(Client(), f"{BASE}/tasks/{task.pk}/", {"label_ids": [marker.pk]},
+               **as_user(HEAD_IT))
     runs_url = _url(org, "/runs")
     assert Client().get(runs_url, **as_user(EMP_IT)).status_code == 403
     body = Client().get(runs_url, {"problems": "1"}, **as_user(HEAD_IT)).json()
@@ -134,7 +138,8 @@ def test_card_detail_lists_buttons_of_home_boards(org):
     task = assigned_task(org.it, EMP_IT)
     detail = Client().get(f"{BASE}/tasks/{task.pk}", **as_user(EMP_IT)).json()
     assert detail["home_boards"][0]["buttons"] == [
-        {"id": take["id"], "name": "Взять в работу", "icon": "arrow-right"}]
+        {"id": take["id"], "name": "Взять в работу", "icon": "arrow-right",
+         "available": True, "reason": None}]
     response = post_json(Client(), f"{BASE}/tasks/{task.pk}/buttons/{take['id']}", {},
                          **as_user(EMP_IT))
     assert response.status_code == 200
@@ -154,7 +159,12 @@ def test_project_owner_administers_project_automation(org):
 def test_preset_endpoint_is_for_board_admin(org):
     url = f"{BASE}/boards/departments/{org.it.id}/preset"
     assert post_json(Client(), url, {"preset": "htq_process"}, **as_user(EMP_IT)).status_code == 403
+    # Пробный прогон (этап S4b): тот же отчёт, в базе — ничего.
+    dry = post_json(Client(), url, {"preset": "htq_process", "dry_run": True}, **as_user(HEAD_IT))
+    assert dry.status_code == 200 and dry.json()["dry_run"] is True
+    assert len(dry.json()["automations"]["created"]) == 27
+    assert not AutomationRule.objects.filter(board_id=org.it.id).exists()
     response = post_json(Client(), url, {"preset": "htq_process"}, **as_user(HEAD_IT))
     assert response.status_code == 200, response.content
-    assert len(response.json()["automations"]["created"]) == 19
+    assert len(response.json()["automations"]["created"]) == 27
     assert post_json(Client(), url, {"preset": "nope"}, **as_user(HEAD_IT)).status_code == 422

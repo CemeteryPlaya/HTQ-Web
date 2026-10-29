@@ -9,13 +9,16 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from django.test import Client
 
 from apps.notifications.models import Notification
 from apps.tasks import schemas
-from apps.tasks.models import (AutomationRun, BoardKind, Status, TaskComment, TaskFieldValue)
-from apps.tasks.services import board_fields, board_service, checklist_service
+from apps.tasks.models import (AutomationRun, BoardKind, Status, Task, TaskAccessRequest,
+                               TaskComment, TaskFieldValue)
+from apps.tasks.services import access_requests, board_fields, board_service, checklist_service
 from apps.tasks.services import task_content_service, task_service
 from apps.tasks.services.automation import context
 
@@ -77,14 +80,17 @@ def test_disabled_rule_and_other_trigger_do_nothing(org):
 
 def test_failed_rule_rolls_back_only_itself(org):
     urgent = label("Срочно (откат)")
-    broken = add_rule(dept_board(org.it), {"type": "moved", "to_status": "in_progress"},
+    marker = label("Метка-триггер (откат)")
+    # Колонку триггер не задаёт — сохранение не знает, что перенос невозможен;
+    # из «В работе» в «Бэклог» схема статусов не пускает уже на месте.
+    broken = add_rule(dept_board(org.it), {"type": "label_added", "label_id": marker.pk},
                       [{"type": "add_label", "label_id": urgent.pk},
-                       # Из «В работе» в «Бэклог» схема статусов не пускает.
                        {"type": "move", "status": "backlog"}])
-    task = assigned_task(org.it, EMP_IT)
-    _status(task, Status.IN_PROGRESS)
+    task = assigned_task(org.it, EMP_IT, status=Status.IN_PROGRESS)
+    task_service.update_task(task.pk, schemas.TaskUpdate(label_ids=[marker.pk]), user_id=EMP_IT)
+    task.refresh_from_db()
     assert task.status == Status.IN_PROGRESS            # правка человека осталась
-    assert _labels(task) == set()                       # метка правила откатилась
+    assert _labels(task) == {marker.name}               # метка правила откатилась
     run = AutomationRun.objects.get(rule=broken, status="failed")
     assert "перенести нельзя" in run.details["error"]
 
@@ -321,14 +327,20 @@ def test_block_does_not_stop_automation(org):
     assert task.status == Status.IN_PROGRESS and statuses(mover) == ["ok"]
 
 
-def test_block_applies_to_claim(org):
+def test_block_does_not_hold_claim(org):
+    """«Взять в работу» — шаг процесса, как кнопка (решение L-02): запрет
+    держит только ручной перенос между колонками."""
     add_rule(dept_board(org.it), {"type": "moved", "to_status": "in_progress"},
-             [{"type": "block", "message": "Берут кнопкой"}])
+             [{"type": "block", "message": "Вручную не переносить"}])
     task = make_task(department_id=org.it.id, status=Status.TODO)
     response = post_json(Client(), f"{BASE}/tasks/{task.pk}/claim", {}, **as_user(EMP_IT))
-    assert response.status_code == 409 and response.json()["detail"] == "Берут кнопкой"
+    assert response.status_code == 200
     task.refresh_from_db()
-    assert task.assignee_id is None and task.status == Status.TODO
+    assert task.assignee_id == EMP_IT and task.status == Status.IN_PROGRESS
+    other = make_task(department_id=org.it.id, status=Status.TODO, assignee_id=EMP_IT)
+    moved = patch_json(Client(), f"{BASE}/tasks/{other.pk}/", {"status": "in_progress"},
+                       **as_user(EMP_IT))
+    assert moved.status_code == 409 and moved.json()["detail"] == "Вручную не переносить"
 
 
 def test_automation_journal_rows_carry_the_rule(org):
@@ -367,3 +379,140 @@ def test_chain_initiator_is_not_notified_about_automation_changes(org):
     for title in ("Статус", "Новый комментарий"):
         assert _notified(HEAD_IT, title), title
         assert not _notified(EMP_IT, title), title
+
+
+# ── логика S4b (спецификация docs/plans/2026-10-28-kanban-automation-logic.md) ─
+
+def _mark(board, trigger: dict, name: str, conditions=None):
+    """Правило «событие → метка с названием правила» — по ней видно, что сработало."""
+    tag = label(f"Метка: {name}")
+    add_rule(board, trigger, [{"type": "add_label", "label_id": tag.pk}], conditions, name=name)
+    return tag
+
+
+def test_transfer_arrives_on_the_new_board_and_does_not_recreate_on_the_project(org):
+    project = make_board("S4B-T")
+    project_board = board_service.board_for(BoardKind.PROJECT, project.pk)
+    created_on_project = _mark(project_board, {"type": "card_created"}, "Создана (проект)")
+    arrived = _mark(dept_board(org.ops), {"type": "card_created", "how": "arrived"},
+                    "Пришла (эксплуатация)")
+    not_here = _mark(dept_board(org.it), {"type": "card_created", "how": "arrived"},
+                     "Пришла (ИТ)")
+    task = assigned_task(org.it, EMP_IT, status=Status.IN_PROGRESS, project_id=project.pk)
+    response = post_json(Client(), f"{BASE}/tasks/{task.pk}/transfer",
+                         {"department_id": org.ops.id}, **as_user(HEAD_IT))
+    assert response.status_code == 200, response.content
+    names = _labels(task)
+    assert arrived.name in names
+    assert created_on_project.name not in names and not_here.name not in names
+    statuses_moved = journal(task, "status")
+    assert statuses_moved[-1][:2] == (Status.IN_PROGRESS, Status.TODO)
+
+
+def test_changing_department_in_the_form_arrives_on_the_new_board(org):
+    arrived = _mark(dept_board(org.dev), {"type": "card_created", "how": "any"},
+                    "Появилась (разработка)")
+    task = assigned_task(org.it, EMP_IT)
+    response = patch_json(Client(), f"{BASE}/tasks/{task.pk}/",
+                          {"department_id": org.dev.id}, **as_user(HEAD_IT))
+    assert response.status_code == 200, response.content
+    assert arrived.name in _labels(task)
+
+
+def test_access_approval_and_creation_give_people_events(org):
+    joined = _mark(dept_board(org.it), {"type": "assignee_added", "user_id": EMP_DEV},
+                   "Добавлен разработчик")
+    supervised = _mark(dept_board(org.it), {"type": "supervisor_set"}, "Назначен руководитель")
+    created = task_service.create_task(
+        schemas.TaskCreate(summary="С руководителем", department_id=org.it.id,
+                           reporter_id=HEAD_IT, supervisor_id=HEAD_IT),
+        user_id=HEAD_IT, scope=None)
+    assert supervised.name in _labels(created)
+    task = assigned_task(org.it, EMP_IT)
+    row = TaskAccessRequest.objects.create(task=task, requester_id=EMP_DEV, kind="execute")
+    access_requests._make_executor(task, row, HEAD_IT)
+    assert joined.name in _labels(task)
+
+
+def test_column_count_fires_when_the_threshold_is_crossed(org):
+    crowded = _mark(dept_board(org.it), {"type": "column_count", "status": "in_progress",
+                                         "op": "gt", "count": 1}, "В работе больше одной")
+    first, second, third = (assigned_task(org.it, EMP_IT) for _ in range(3))
+    for task in (first, second, third):
+        _status(task, Status.IN_PROGRESS)
+    assert [crowded.name in _labels(task) for task in (first, second, third)] == [
+        False, True, False]
+
+
+def test_no_match_is_logged_once_per_rule_and_task(org):
+    rule = add_rule(dept_board(org.it), {"type": "label_added"}, [{"type": "set_start_today"}],
+                    [{"type": "in_column", "status": "done"}], name="Метка в «Готово»")
+    task = assigned_task(org.it, EMP_IT)
+    tags = [label(f"Пачка {index}").pk for index in range(3)]
+    task_service.update_task(task.pk, schemas.TaskUpdate(label_ids=tags), user_id=EMP_IT)
+    assert statuses(rule) == ["no_match"]
+
+
+def test_rules_that_create_tasks_do_not_multiply(org):
+    add_rule(dept_board(org.it), {"type": "card_created"},
+             [{"type": "create_task", "summary": "Отчёт к «{cardname}»"}], name="Отчёт")
+    before = Task.objects.count()
+    task_service.create_task(schemas.TaskCreate(summary="Исходная", department_id=org.it.id,
+                                                reporter_id=EMP_IT), user_id=EMP_IT, scope=None)
+    assert Task.objects.count() == before + 2         # исходная и одна созданная правилом
+
+
+def test_two_creating_rules_stop_at_the_chain_limit(org):
+    for name in ("Первая", "Вторая"):
+        add_rule(dept_board(org.it), {"type": "card_created"},
+                 [{"type": "create_task", "summary": name}], name=name)
+    before = Task.objects.count()
+    task_service.create_task(schemas.TaskCreate(summary="Исходная", department_id=org.it.id,
+                                                reporter_id=EMP_IT), user_id=EMP_IT, scope=None)
+    assert Task.objects.count() - before <= 1 + context.MAX_CREATED
+    assert AutomationRun.objects.filter(status="limited").exists()
+
+
+def test_dates_out_of_order_is_a_readable_rule_error(org):
+    rule = add_rule(dept_board(org.it), {"type": "moved", "to_status": "in_progress"},
+                    [{"type": "set_due", "mode": "today"}], name="Срок — сегодня")
+    task = assigned_task(org.it, EMP_IT, start_date=context.today() + timedelta(days=5))
+    _status(task, Status.IN_PROGRESS)
+    run = AutomationRun.objects.get(rule=rule, status="failed")
+    assert run.details["error"] != "Внутренняя ошибка правила"
+
+
+def test_rule_placement_beats_the_drag(org):
+    add_rule(dept_board(org.it), {"type": "moved", "to_status": "in_progress"},
+             [{"type": "reposition", "position": "top"}], name="Наверх")
+    board = {"kind": "department", "id": org.it.id}
+    tasks = [assigned_task(org.it, EMP_IT) for _ in range(3)]
+    for task in tasks[:2]:
+        response = post_json(Client(), f"{BASE}/tasks/{task.pk}/move",
+                             {"board": board, "status": "in_progress"}, **as_user(EMP_IT))
+        assert response.status_code == 200, response.content
+    # Тащат в самый низ колонки — правило ставит наверх, и правило сильнее.
+    response = post_json(Client(), f"{BASE}/tasks/{tasks[2].pk}/move",
+                         {"board": board, "status": "in_progress", "before_id": tasks[0].pk},
+                         **as_user(EMP_IT))
+    assert response.status_code == 200, response.content
+    body = Client().get(f"{BASE}/boards/departments/{org.it.id}", **as_user(EMP_IT)).json()
+    column = next(item for item in body["columns"] if item["status"] == "in_progress")
+    assert column["cards"][0]["id"] == tasks[2].pk
+
+
+def test_blocks_hold_the_post_edit_boards_and_check_transitions_first(org):
+    add_rule(dept_board(org.dev), {"type": "moved", "to_status": "in_progress"},
+             [{"type": "block", "message": "Разработка — только кнопкой"}], name="Запрет")
+    task = assigned_task(org.it, EMP_IT)
+    # Тем же PATCH задача уходит в «Разработку» — держит запрет её доски.
+    response = patch_json(Client(), f"{BASE}/tasks/{task.pk}/",
+                          {"department_id": org.dev.id, "status": "in_progress"},
+                          **as_user(HEAD_IT))
+    assert response.status_code == 409, response.content
+    # Недопустимый переход — 400 раньше запрета.
+    done = assigned_task(org.dev, EMP_IT, status=Status.DONE)
+    add_rule(dept_board(org.dev), {"type": "moved", "to_status": "todo"},
+             [{"type": "block", "message": "Не нужен"}], name="Запрет 2")
+    assert patch_json(Client(), f"{BASE}/tasks/{done.pk}/", {"status": "todo"},
+                      **as_user(HEAD_IT)).status_code == 400

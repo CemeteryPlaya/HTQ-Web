@@ -19,7 +19,7 @@ from apps.tasks.models import (AutomationKind, AutomationRule, BoardCardRank, Bo
 from apps.tasks.services import board_fields, board_service, checklist_service
 from apps.tasks.services.automation import actions, context
 
-from .automation_helpers import add_rule, assigned_task, dept_board, label
+from .automation_helpers import add_rule, assigned_task, dept_board, label, members
 from .helpers import BASE, post_json
 from .org_fixtures import EMP_DEV, EMP_IT, HEAD_IT, OUTSIDER, as_user, make_org, make_task
 
@@ -30,7 +30,9 @@ BUTTON = {"type": "card_button"}
 
 @pytest.fixture
 def org():
-    return make_org()
+    made = make_org()
+    members(EMP_IT, EMP_DEV, HEAD_IT)
+    return made
 
 
 def _button(org, button_actions, conditions=None, name="Кнопка"):
@@ -304,3 +306,41 @@ def test_board_button_over_cards_and_board_level(org):
     response = post_json(Client(), f"{BASE}/boards/departments/{org.it.id}/buttons/"
                          f"{board_level.pk}", {}, **as_user(OUTSIDER))
     assert response.status_code == 404
+
+
+# ── кнопки: доступность и чужие карточки (спецификация §7, этап S4b) ────
+
+def test_card_button_shows_availability_and_reports_its_own_error(org):
+    board = dept_board(org.it)
+    submit = add_rule(board, BUTTON, [{"type": "complete"}],
+                      [{"type": "in_column", "status": "in_progress"}],
+                      kind=AutomationKind.CARD_BUTTON, name="Сдать")
+    task = assigned_task(org.it, EMP_IT, status=Status.TODO)
+    detail = Client().get(f"{BASE}/tasks/{task.pk}", **as_user(EMP_IT)).json()
+    [button] = detail["home_boards"][0]["buttons"]
+    assert button["available"] is False and button["reason"]
+    response = post_json(Client(), f"{BASE}/tasks/{task.pk}/buttons/{submit.pk}", {},
+                         **as_user(EMP_IT))
+    assert response.status_code == 409
+    # Колонку кнопка не задаёт — перенос «В работе → Бэклог» падает уже на
+    # месте, и нажавший видит причину ЭТОГО запуска.
+    back = add_rule(board, BUTTON, [{"type": "move", "status": "backlog"}],
+                    kind=AutomationKind.CARD_BUTTON, name="Назад")
+    working = assigned_task(org.it, EMP_IT, status=Status.IN_PROGRESS)
+    response = post_json(Client(), f"{BASE}/tasks/{working.pk}/buttons/{back.pk}", {},
+                         **as_user(EMP_IT))
+    assert response.status_code == 422 and "перенести нельзя" in response.json()["detail"]
+
+
+def test_board_button_handles_only_cards_the_presser_may_lead(org):
+    button = add_rule(dept_board(org.it), {"type": "board_button", "cards": {"status": "todo"}},
+                      [{"type": "set_start_today"}], kind=AutomationKind.BOARD_BUTTON,
+                      name="Начать сегодня")
+    mine = assigned_task(org.it, EMP_IT, status=Status.TODO)
+    foreign = assigned_task(org.it, EMP_DEV, status=Status.TODO)
+    response = post_json(Client(), f"{BASE}/boards/departments/{org.it.id}/buttons/{button.pk}",
+                         {}, **as_user(EMP_IT))
+    assert response.json() == {"status": "ok", "cards": 1, "done": 1, "skipped": 1}
+    mine.refresh_from_db()
+    foreign.refresh_from_db()
+    assert mine.start_date == context.today() and foreign.start_date is None

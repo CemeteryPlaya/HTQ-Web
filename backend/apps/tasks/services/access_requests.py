@@ -36,6 +36,8 @@ from . import hydration
 from . import task_notify
 from . import task_scope
 from . import task_service
+from .automation import events as automation
+from .automation.context import Event
 
 INBOX_LIMIT = 500
 MINE_DAYS = 90
@@ -217,12 +219,16 @@ def _make_owner(task: Task, row: TaskAccessRequest, mode: str, actor_id: int) ->
     # Руководитель — больше не делегат: полная правка у него и так есть.
     if TaskDelegate.objects.filter(task=task, user_id=requester).delete()[0]:
         task_service._log(task, actor_id, "delegates", requester, None)
+    if replaced != requester:
+        # Сменился руководитель — событие правил доски (спецификация логики §3).
+        automation.emit(Event("supervisor_set", task.pk, actor_id, {"user_id": requester}))
     return replaced if replaced != requester else None
 
 
 def _make_executor(task: Task, row: TaskAccessRequest, actor_id: int) -> int | None:
     requester = row.requester_id
     replaced = task.assignee_id
+    before = task_service._crew_ids(task)
     if replaced is not None and replaced != requester:
         TaskAssignee.objects.filter(task=task, user_id=replaced).delete()
     own = TaskAssignee.objects.filter(task=task, user_id=requester).first()
@@ -235,6 +241,9 @@ def _make_executor(task: Task, row: TaskAccessRequest, actor_id: int) -> int | N
     task_service._log(task, actor_id, "assignee_id", replaced, requester)
     task.assignee_id = requester
     task.save(update_fields=["assignee_id", "updated_at"])
+    # Состав исполнителей изменился — события правил доски (§3).
+    automation.emit(*task_service._crew_events(task, actor_id, before,
+                                               task_service._crew_ids(task)))
     return replaced if replaced != requester else None
 
 

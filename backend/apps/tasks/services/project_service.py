@@ -17,6 +17,7 @@ from __future__ import annotations
 import operator
 from functools import reduce
 
+from django.db import transaction
 from django.db.models import Case, Count, F, IntegerField, Q, Sum, When
 
 from htqweb import date_rules
@@ -107,10 +108,15 @@ def update_project(project_id: int, changes: dict) -> Project:
 
 def delete_project(project_id: int) -> None:
     """Tasks keep existing and lose their project link (FK is SET_NULL)."""
+    from .automation import refs
+
     project = Project.objects.filter(pk=project_id).first()
     if project is None:
         raise Http404("Project not found")
-    project.delete()
+    with transaction.atomic():
+        # Доски проекта больше нет — её автоматизации сломаны (решение L-01).
+        refs.board_gone("project", project.pk, "проект задач удалён")
+        project.delete()
 
 
 def _metrics(project_ids: list[int]) -> dict[int, dict]:

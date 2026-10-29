@@ -158,7 +158,21 @@ def board_notice(board_kind: str, board_id: int, actor_id: int | None, recipient
     """То же для автоматизации уровня доски (кнопка доски, расписание): ссылка
     — на доску, а не на карточку."""
     authors = _authors(actor_id)
-    recipients = sorted({uid for uid in recipients if uid and uid not in authors})
+    _board_send(board_kind, board_id, actor_id,
+                [uid for uid in recipients if uid not in authors], text)
+
+
+def automation_broken(board_kind: str, board_id: int, recipients, text: str) -> None:
+    """Автоматизация доски сломана — её выключили (спецификация логики §10):
+    администраторам доски и автору, без исключения «автора события» —
+    о поломке должен узнать каждый, кто её поправит. Ссылка открывает
+    автоматизацию доски."""
+    _board_send(board_kind, board_id, None, recipients, text, query="?automation=1")
+
+
+def _board_send(board_kind: str, board_id: int, actor_id: int | None, recipients, text: str,
+                *, query: str = "") -> None:
+    recipients = sorted({uid for uid in recipients if uid})
     if not recipients:
         return
     path = "department" if board_kind == BoardKind.DEPARTMENT else "project"
@@ -166,7 +180,8 @@ def board_notice(board_kind: str, board_id: int, actor_id: int | None, recipient
         with transaction.atomic():
             notifications.notify(
                 recipients=recipients, event="tasks.task", title=text,
-                url=f"/tasks/board/{path}/{board_id}", company_slug=current_company_or_none(),
+                url=f"/tasks/board/{path}/{board_id}{query}",
+                company_slug=current_company_or_none(),
                 target_type="board", target_id=f"{board_kind}:{board_id}", actor_id=actor_id,
                 deliver=DELIVER, dedupe_window_seconds=60)
     except ServiceDisabled as exc:
@@ -181,6 +196,11 @@ def board_notice(board_kind: str, board_id: int, actor_id: int | None, recipient
 
 def _name(user_id: int | None) -> str:
     return hydration.user_name(hydration.user_briefs([user_id]), user_id) or f"#{user_id}"
+
+
+def person_name(user_id: int | None) -> str:
+    """Имя человека для текста уведомления (``#id``, если учётки нет)."""
+    return _name(user_id)
 
 
 def assignees_added(task: Task, actor_id: int | None, user_ids, *, primary_id=None) -> None:

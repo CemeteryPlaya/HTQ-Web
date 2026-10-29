@@ -18,7 +18,7 @@ def dept_board(department):
 
 
 def add_rule(board, trigger: dict, actions: list, conditions: list | None = None, *,
-             kind: str = AutomationKind.RULE, name: str = "", actor: int | None = HEAD_IT,
+             kind: str = AutomationKind.RULE, name: str = "Правило", actor: int | None = HEAD_IT,
              enabled: bool = True):
     return rules.save_new(board, schemas.AutomationIn(
         kind=kind, name=name, trigger=trigger, conditions=conditions or [], actions=actions,
@@ -44,3 +44,21 @@ def statuses(rule) -> list[str]:
 def journal(task, field: str) -> list[tuple]:
     return list(TaskActivity.objects.filter(task=task, field_name=field).order_by("pk")
                 .values_list("old_value", "new_value", "via_rule_id"))
+
+
+def members(*user_ids: int) -> None:
+    """Учётки с этими номерами — действующие участники компании запроса:
+    действия с людьми проверяют членство при выполнении (решение L-01), а
+    люди фикстур — голые номера без учёток."""
+    from apps.companies import interface as companies
+    from apps.users.models import User, UserStatus
+
+    from .helpers import COMPANY
+    from .org_fixtures import as_user
+
+    as_user(user_ids[0])                      # заводит компанию запроса
+    for uid in user_ids:
+        User.objects.get_or_create(pk=uid, defaults={
+            "username": f"kb{uid}", "email": f"kb{uid}@htq.test", "password": "x",
+            "status": UserStatus.ACTIVE})
+        companies.grant_membership(COMPANY, uid)

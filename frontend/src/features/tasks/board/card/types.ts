@@ -17,6 +17,8 @@ export interface FeedComment {
   updated_at: string;
   actor: FeedPerson | null;
   body: string;
+  /** Комментарий написала автоматизация доски (этап S4b). */
+  automation?: { id: number; name: string | null } | null;
 }
 
 export interface FeedActivity {

@@ -230,6 +230,10 @@ def update_field(request, field_id: int, data: schemas.BoardFieldPatch) -> dict:
         kept = {option["id"] for option in options}
         removed = {option["id"]: option["name"] for option in field.options or []
                    if option["id"] not in kept}
+        for option_id, option_name in removed.items():
+            # Вариант из настроек автоматизации доски не удаляется (решение L-01).
+            _ensure_unused(field, f"Вариант «{option_name}» поля «{field.name}»",
+                           field_id=field.pk, option_id=option_id)
         if removed:
             _clear_options(field, removed, request.token.user_id)
         field.options = options
@@ -250,7 +254,15 @@ def delete_field(request, field_id: int) -> None:
     поля больше нет, и называть в ленте нечего."""
     field = _field(field_id)
     _admin_board(request, field)
+    # Поле из настроек автоматизации доски не удаляется (решение L-01).
+    _ensure_unused(field, f"Поле «{field.name}»", field_id=field.pk)
     field.delete()
+
+
+def _ensure_unused(field: BoardField, what: str, **ref) -> None:
+    from .automation import refs
+
+    refs.ensure_unused(field.board_kind, field.board_id, what, **ref)
 
 
 # ── значения ────────────────────────────────────────────────────────────
@@ -363,8 +375,9 @@ def set_value(request, task_id: int, field_id: int, raw) -> dict:
     field = BoardField.objects.filter(pk=field_id).first()
     if field is None or (field.board_kind, field.board_id) not in home_board_keys(task):
         raise Http404("Field not found")
-    store_value(task, field, parse_value(field, raw), task_scope.for_request(request).user_id)
-    return {"home_boards": home_boards(task)}
+    scope = task_scope.for_request(request)
+    store_value(task, field, parse_value(field, raw), scope.user_id)
+    return {"home_boards": home_boards(task, scope)}
 
 
 def store_value(task: Task, field: BoardField, value, actor: int | None) -> None:
@@ -429,15 +442,16 @@ def template_for(task: Task, board_kind: str, board_id: int, template_id: str) -
 
 # ── ответы ──────────────────────────────────────────────────────────────
 
-def home_boards(task: Task) -> list[dict]:
+def home_boards(task: Task, scope=None) -> list[dict]:
     """Домашние доски карточки задачи: поля со значениями, шаблоны
-    чек-листов и кнопки автоматизации (поле ``home_boards`` карточки)."""
+    чек-листов и кнопки автоматизации (поле ``home_boards`` карточки).
+    ``scope`` — кто смотрит: кнопки — тому, кто вправе вести задачу."""
     from .automation import buttons
 
     keys = home_board_keys(task)
     if not keys:
         return []
-    card_buttons = buttons.card_buttons(task)
+    card_buttons = buttons.card_buttons(task, scope)
     fields = list(BoardField.objects.filter(_keys_q(keys)).order_by("position", "id"))
     values = ({row.field_id: row for row in TaskFieldValue.objects.filter(
         task=task, field_id__in=[field.id for field in fields])} if fields else {})

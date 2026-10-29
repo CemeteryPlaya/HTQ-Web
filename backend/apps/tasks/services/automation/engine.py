@@ -7,7 +7,11 @@
 в журнал, правка человека и соседние правила не страдают. Пределы цепочки —
 ``context``: упёрлись — правило не выполняется, в журнале ``limited``.
 Проверка без совпадения условий — ``no_match``: по ней администратор доски
-видит, почему правило не сработало (как «Журналы» Trello).
+видит, почему правило не сработало (как «Журналы» Trello); пишется раз на
+правило и задачу за цепочку. Предел проверяется после условий: «упёрлось»
+пишется, только если правило сработало бы. Ссылка на удалённое — поломка
+автоматизации (``refs``), а не молчаливое «да» или «нет» (спецификация
+логики, docs/plans/2026-10-28-kanban-automation-logic.md).
 """
 
 from __future__ import annotations
@@ -19,15 +23,17 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.db.models import Q
 
+from htqweb import date_rules
 from htqweb.errors import DomainError
 
 from ...models import (TERMINAL_STATUSES, AutomationKind, AutomationRule, AutomationRun,
-                       AutomationRunStatus, BoardField, BoardFieldType, Status, Task,
-                       TaskAssignee, TaskChecklist, TaskChecklistItem, TaskFieldValue)
+                       AutomationRunStatus, BoardField, BoardFieldType, BoardKind, Label,
+                       Status, Task, TaskAssignee, TaskChecklist, TaskChecklistItem,
+                       TaskFieldValue)
 from .. import board_fields
-from .. import board_service
 from . import context
-from .context import Chain, Event
+from . import refs
+from .context import Chain, ChainLimit, Event
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +107,18 @@ def _compare(op: str, value, threshold) -> bool:
     return left > right if op == "gt" else left < right
 
 
+def home_tasks(board_kind: str, board_id: int):
+    """Домашние задачи доски — только их касается её автоматизация
+    (спецификация §2): отдела — с ``department_id`` отдела, проекта — с
+    ``project_id`` проекта; подотделы и связанные отделы не входят."""
+    rows = Task.objects.filter(is_deleted=False)
+    if board_kind == BoardKind.DEPARTMENT:
+        return rows.filter(department_id=board_id)
+    return rows.filter(project_id=board_id)
+
+
 def _column_count(rule: AutomationRule, status: str) -> int:
-    board = board_service.board_for(rule.board_kind, rule.board_id)
-    return board_service.board_tasks(board).filter(status=status).count()
+    return home_tasks(rule.board_kind, rule.board_id).filter(status=status).count()
 
 
 def _all_fields_filled(task: Task, keys) -> bool:
@@ -118,12 +133,20 @@ def trigger_matches(rule: AutomationRule, event: Event, task: Task) -> bool:
     trigger = rule.trigger
     kind = trigger.get("type")
     data = event.data
+    if event.type == "card_arrived" and not _for_board(rule, data):
+        return False  # «пришла на доску» видят только правила этой доски
     if kind == "card_created":
-        return event.type == "card_created" and trigger.get("status") in (None, data.get("status"))
-    if kind in ("moved", "completed", "uncompleted", "cancelled", "column_count"):
-        if event.type == "card_created" and kind == "column_count":
-            return (data.get("status") == trigger["status"]
-                    and _count_matches(rule, trigger))
+        how = trigger.get("how") or "created"
+        if event.type == "card_created":
+            wanted = how in ("created", "any")
+        elif event.type == "card_arrived":
+            wanted = how in ("arrived", "any")
+        else:
+            return False
+        return wanted and trigger.get("status") in (None, data.get("status"))
+    if kind == "column_count":
+        return _count_crossed(rule, trigger, event)
+    if kind in ("moved", "completed", "uncompleted", "cancelled"):
         if event.type != "moved":
             return False
         source, target = data.get("from"), data.get("to")
@@ -134,9 +157,7 @@ def trigger_matches(rule: AutomationRule, event: Event, task: Task) -> bool:
             return target == Status.DONE
         if kind == "uncompleted":
             return source == Status.DONE
-        if kind == "cancelled":
-            return target == Status.CANCELLED
-        return trigger["status"] in (source, target) and _count_matches(rule, trigger)
+        return target == Status.CANCELLED
     if kind == "fields_filled":
         # Последнее пустое поле ЭТОЙ доски получило значение.
         return (event.type == "field_changed"
@@ -168,10 +189,31 @@ def trigger_matches(rule: AutomationRule, event: Event, task: Task) -> bool:
     return True
 
 
-def _count_matches(rule: AutomationRule, trigger: dict) -> bool:
-    count = _column_count(rule, trigger["status"])
-    op, wanted = trigger.get("op", "eq"), trigger["count"]
+def _for_board(rule: AutomationRule, data: dict) -> bool:
+    return (data.get("board_kind"), data.get("board_id")) == (rule.board_kind, rule.board_id)
+
+
+def _count_holds(op: str, count: int, wanted: int) -> bool:
     return count == wanted if op == "eq" else count > wanted if op == "gt" else count < wanted
+
+
+def _count_crossed(rule: AutomationRule, trigger: dict, event: Event) -> bool:
+    """«В колонке стало N»: число домашних карточек колонки только что
+    перешло порог — карточка вошла в колонку или вышла из неё, и до этого
+    условие не выполнялось (спецификация §3)."""
+    status, data = trigger["status"], event.data
+    if event.type in ("card_created", "card_arrived"):
+        entered, left = data.get("status") == status, False
+    elif event.type == "moved":
+        entered, left = data.get("to") == status, data.get("from") == status
+    else:
+        return False
+    if not (entered or left):
+        return False
+    op, wanted = trigger.get("op", "eq"), trigger["count"]
+    after = _column_count(rule, status)
+    before = after - 1 if entered else after + 1
+    return _count_holds(op, after, wanted) and not _count_holds(op, before, wanted)
 
 
 def _field_change_matches(trigger: dict, data: dict) -> bool:
@@ -205,7 +247,7 @@ def _items(task: Task):
 def _field_value(task: Task, field_id: int):
     field = BoardField.objects.filter(pk=field_id).first()
     if field is None:
-        raise DomainError("automation_ref_missing", "Поля из правила больше нет", status=422)
+        raise refs.RefMissing("удалено поле из условия")
     row = TaskFieldValue.objects.filter(task=task, field=field).first()
     return field, board_fields.value_json(field, row)
 
@@ -217,6 +259,8 @@ def _condition_holds(condition: dict, task: Task, event: Event, rule: Automation
     if kind == "in_column":
         result = task.status == condition["status"]
     elif kind == "has_label":
+        if not Label.objects.filter(pk=condition["label_id"]).exists():
+            raise refs.RefMissing("удалена метка из условия")
         result = task.labels.filter(pk=condition["label_id"]).exists()
     elif kind == "assigned":
         people = _assignee_ids(task)
@@ -311,9 +355,14 @@ def log_run(rule: AutomationRule | None, *, status: str, task: Task | None = Non
 def _error_text(exc: Exception) -> str:
     if isinstance(exc, DomainError):
         return exc.message
-    if isinstance(exc, ValueError):
+    if isinstance(exc, (ValueError, date_rules.DatesOutOfOrder)):
         return str(exc)
     return "Внутренняя ошибка правила"
+
+
+def _expected(exc: Exception) -> bool:
+    """Сбой по данным, а не по коду: трассировка в лог не нужна."""
+    return isinstance(exc, (DomainError, ValueError, date_rules.DatesOutOfOrder))
 
 
 # ── исполнение ──────────────────────────────────────────────────────────
@@ -326,41 +375,66 @@ def _limit_reason(chain: Chain, rule: AutomationRule, event: Event) -> str | Non
     return None
 
 
+def _failed(chain: Chain, rule: AutomationRule, task: Task | None, event: Event,
+            event_name: str, exc: Exception) -> str:
+    """Сбой правила — в журнал; ссылка на удалённое ломает автоматизацию."""
+    text = _error_text(exc)
+    if isinstance(exc, refs.RefMissing):
+        refs.mark_broken(rule, text)
+        text = f"Автоматизация выключена: {text}"
+    elif not _expected(exc):
+        logger.exception("tasks: automation %s failed on task %s", rule.pk,
+                         task.pk if task is not None else None)
+    chain.last_error = text
+    log_run(rule, status=AutomationRunStatus.FAILED, task=task, event=event_name,
+            actor_id=event.actor_id, details={"error": text})
+    return AutomationRunStatus.FAILED
+
+
+def _run_actions(chain: Chain, rule: AutomationRule, task: Task | None, event: Event,
+                 actor_id: int | None):
+    """Действия под точкой сохранения: ``(итоги, порождённые события)``."""
+    from . import actions
+
+    with transaction.atomic():
+        with context.run_as(chain, rule.pk, actor_id=actor_id, event_actor_id=event.actor_id,
+                            depth=event.depth) as now:
+            results = actions.run_all(rule, task, event, now)
+            return results, list(now.produced)
+
+
 def execute(chain: Chain, rule: AutomationRule, task: Task, event: Event, *,
             actor_id: int | None, check: bool = True, event_name: str = "") -> str:
     """Проверить условия и выполнить действия правила под точкой сохранения.
-    Возвращает итог журнала; события правок правила встают в очередь."""
-    from . import actions
-
+    Возвращает итог журнала; события правок правила встают в очередь, ошибка
+    запуска — в ``chain.last_error``."""
     event_name = event_name or event.type
+    chain.last_error = None
     if (rule.pk, task.pk) in chain.executed:
         return "skipped"
+    try:
+        with transaction.atomic():
+            matched = not check or conditions_hold(rule, task, event)
+    except Exception as exc:  # noqa: BLE001 — условие упало — сбой правила, не правки
+        return _failed(chain, rule, task, event, event_name, exc)
+    if not matched:
+        if (rule.pk, task.pk) not in chain.no_match:
+            chain.no_match.add((rule.pk, task.pk))
+            log_run(rule, status=AutomationRunStatus.NO_MATCH, task=task, event=event_name,
+                    actor_id=event.actor_id)
+        return AutomationRunStatus.NO_MATCH
     if reason := _limit_reason(chain, rule, event):
         log_run(rule, status=AutomationRunStatus.LIMITED, task=task, event=event_name,
                 actor_id=event.actor_id, details={"reason": reason})
         return AutomationRunStatus.LIMITED
     try:
-        matched = not check or conditions_hold(rule, task, event)
-    except Exception as exc:  # noqa: BLE001 — мёртвая ссылка в условии — сбой правила
-        log_run(rule, status=AutomationRunStatus.FAILED, task=task, event=event_name,
-                actor_id=event.actor_id, details={"error": _error_text(exc)})
-        return AutomationRunStatus.FAILED
-    if not matched:
-        log_run(rule, status=AutomationRunStatus.NO_MATCH, task=task, event=event_name,
-                actor_id=event.actor_id)
-        return AutomationRunStatus.NO_MATCH
-    try:
-        with transaction.atomic():
-            with context.run_as(chain, rule.pk, actor_id=actor_id, event_actor_id=event.actor_id,
-                                depth=event.depth) as now:
-                results = actions.run_all(rule, task, event, now)
-                produced = list(now.produced)
+        results, produced = _run_actions(chain, rule, task, event, actor_id)
+    except ChainLimit as exc:
+        log_run(rule, status=AutomationRunStatus.LIMITED, task=task, event=event_name,
+                actor_id=event.actor_id, details={"reason": str(exc)})
+        return AutomationRunStatus.LIMITED
     except Exception as exc:  # noqa: BLE001 — сбой правила откатывает только его
-        if not isinstance(exc, (DomainError, ValueError)):
-            logger.exception("tasks: automation rule %s failed on task %s", rule.pk, task.pk)
-        log_run(rule, status=AutomationRunStatus.FAILED, task=task, event=event_name,
-                actor_id=event.actor_id, details={"error": _error_text(exc)})
-        return AutomationRunStatus.FAILED
+        return _failed(chain, rule, task, event, event_name, exc)
     chain.executed.add((rule.pk, task.pk))
     chain.actions += len(rule.actions)
     log_run(rule, status=AutomationRunStatus.OK, task=task, event=event_name,
@@ -372,20 +446,15 @@ def execute(chain: Chain, rule: AutomationRule, task: Task, event: Event, *,
 def execute_board(chain: Chain, rule: AutomationRule, event: Event, *,
                   actor_id: int | None, event_name: str) -> str:
     """Действия уровня доски (кнопка доски, расписание без карточек)."""
-    from . import actions
-
+    chain.last_error = None
     try:
-        with transaction.atomic():
-            with context.run_as(chain, rule.pk, actor_id=actor_id, event_actor_id=event.actor_id,
-                                depth=event.depth) as now:
-                results = actions.run_all(rule, None, event, now)
-                produced = list(now.produced)
+        results, produced = _run_actions(chain, rule, None, event, actor_id)
+    except ChainLimit as exc:
+        log_run(rule, status=AutomationRunStatus.LIMITED, event=event_name,
+                actor_id=event.actor_id, details={"reason": str(exc)})
+        return AutomationRunStatus.LIMITED
     except Exception as exc:  # noqa: BLE001 — сбой автоматизации откатывает только её
-        if not isinstance(exc, (DomainError, ValueError)):
-            logger.exception("tasks: board automation %s failed", rule.pk)
-        log_run(rule, status=AutomationRunStatus.FAILED, event=event_name,
-                actor_id=event.actor_id, details={"error": _error_text(exc)})
-        return AutomationRunStatus.FAILED
+        return _failed(chain, rule, None, event, event_name, exc)
     chain.actions += len(rule.actions)
     log_run(rule, status=AutomationRunStatus.OK, event=event_name, actor_id=event.actor_id,
             details={"actions": results})
@@ -393,9 +462,15 @@ def execute_board(chain: Chain, rule: AutomationRule, event: Event, *,
     return AutomationRunStatus.OK
 
 
-def last_error(rule: AutomationRule) -> str | None:
-    run = AutomationRun.objects.filter(rule=rule).order_by("-pk").first()
-    return (run.details or {}).get("error") if run is not None else None
+def _matches(chain: Chain, rule: AutomationRule, event: Event, task: Task) -> bool:
+    """Триггер — под точкой сохранения: сбой проверки (подсчёт колонки, поля
+    доски) — сбой правила в журнале, а не правки человека."""
+    try:
+        with transaction.atomic():
+            return trigger_matches(rule, event, task)
+    except Exception as exc:  # noqa: BLE001
+        _failed(chain, rule, task, event, event.type, exc)
+        return False
 
 
 def drain(chain: Chain) -> None:
@@ -406,9 +481,9 @@ def drain(chain: Chain) -> None:
         if task is None:
             continue
         for rule in _task_rules(chain, task):
-            if is_block_rule(rule):
-                continue
-            if not trigger_matches(rule, event, task):
+            if not rule.enabled or is_block_rule(rule):
+                continue  # сломанную в этой же цепочке выключили
+            if not _matches(chain, rule, event, task):
                 continue
             # Предыдущее правило могло изменить задачу — условия по свежей строке.
             task.refresh_from_db()
@@ -418,14 +493,21 @@ def drain(chain: Chain) -> None:
 # ── запрет ручного переноса ─────────────────────────────────────────────
 
 def blocking_rule(task: Task, event: Event) -> AutomationRule | None:
+    """Запрет, который держит этот ручной перенос. Запрет со ссылкой на
+    удалённое ломается (уведомление администраторам), а не молча пропускает."""
     for rule in _task_rules(None, task):
         if not is_block_rule(rule) or not trigger_matches(rule, event, task):
             continue
         try:
-            if conditions_hold(rule, task, event):
-                return rule
+            with transaction.atomic():
+                holds = conditions_hold(rule, task, event)
+        except refs.RefMissing as exc:
+            refs.mark_broken(rule, exc.message)
+            continue
         except DomainError:
             continue
+        if holds:
+            return rule
     return None
 
 

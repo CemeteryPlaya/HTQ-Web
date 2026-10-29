@@ -6,13 +6,18 @@
 видимость у смотрящих разная. У личной доски автоматизации нет. Всё
 проверяет ``catalog.validate``; создание и правка пишут в журнал запусков
 строку ``changed`` («было → стало»). Копия рождается выключенной: две
-одинаковые включённые автоматизации делали бы всё дважды.
+одинаковые включённые автоматизации делали бы всё дважды. Название
+обязательно у всех видов: по нему автоматизацию узнают журнал и лента.
+Сломанную (``broken_reason``, спецификация логики §10) включает только
+правка, прошедшая проверку, — она же снимает поломку. Порядок меняется
+внутри своего вида: раздел конструктора показывает один вид.
 """
 
 from __future__ import annotations
 
 from django.db import connection, transaction
 from django.http import Http404
+from django.utils import timezone
 
 from htqweb.errors import DomainError
 
@@ -25,11 +30,11 @@ from . import catalog
 from . import engine
 from . import scheduled
 
-AUTOMATION_LIMIT = 100
+AUTOMATION_LIMIT = catalog.AUTOMATION_LIMIT
 RUNS_PAGE = 50
 
 
-def _require_shared(board) -> None:
+def require_shared(board) -> None:
     if board.kind == BoardKind.PERSONAL:
         raise DomainError("board_automation_personal",
                           "У личной доски нет автоматизации", status=422)
@@ -55,6 +60,8 @@ def payload(rule: AutomationRule) -> dict:
         "position": rule.position,
         "preset_key": rule.preset_key or None,
         "next_run_at": rule.next_run_at,
+        "broken_reason": rule.broken_reason or None,
+        "activated_at": rule.activated_at,
         "created_by": rule.created_by,
         "updated_by": rule.updated_by,
         "created_at": rule.created_at,
@@ -68,7 +75,7 @@ def _board_rules(board) -> list[AutomationRule]:
 
 
 def list_rules(board, kind: str | None = None) -> list[dict]:
-    _require_shared(board)
+    require_shared(board)
     rows = _board_rules(board)
     if kind:
         rows = [rule for rule in rows if rule.kind == kind]
@@ -76,8 +83,11 @@ def list_rules(board, kind: str | None = None) -> list[dict]:
 
 
 def _check_name(kind: str, name: str) -> None:
-    if kind in (AutomationKind.CARD_BUTTON, AutomationKind.BOARD_BUTTON) and not name.strip():
-        raise DomainError("automation_invalid", "Назовите кнопку", status=422)
+    if not name.strip():
+        what = ("кнопку" if kind in (AutomationKind.CARD_BUTTON, AutomationKind.BOARD_BUTTON)
+                else "автоматизацию")
+        raise DomainError("automation_invalid", f"Назовите {what}", status=422,
+                          details={"path": "name"})
 
 
 def _schedule_next(rule: AutomationRule) -> None:
@@ -103,6 +113,7 @@ def save_new(board, data: schemas.AutomationIn, actor_id: int | None, *,
         enabled=data.enabled, preset_key=preset_key,
         position=ranked.position_between(existing, None, None, None,
                                          code="automation_order_stale", what="автоматизации"),
+        activated_at=timezone.now() if data.enabled else None,
         created_by=actor_id, updated_by=actor_id)
     _schedule_next(rule)
     rule.save()
@@ -113,7 +124,7 @@ def save_new(board, data: schemas.AutomationIn, actor_id: int | None, *,
 
 @transaction.atomic
 def create(request, board, data: schemas.AutomationIn) -> dict:
-    _require_shared(board)
+    require_shared(board)
     board_service.require_admin(request, board)
     return payload(save_new(board, data, request.token.user_id))
 
@@ -141,20 +152,33 @@ def apply_patch(board, rule: AutomationRule, data: schemas.AutomationPatch,
     if "icon" in fields and data.icon is not None:
         rule.icon = data.icon
     _check_name(rule.kind, rule.name)
-    if {"trigger", "conditions", "actions"} & fields:
+    revalidated = bool({"trigger", "conditions", "actions"} & fields)
+    if revalidated:
+        old_trigger = rule.trigger
         rule.trigger, rule.conditions, rule.actions = catalog.validate(
             board, rule.kind,
             data.trigger if data.trigger is not None else rule.trigger,
             data.conditions if data.conditions is not None else rule.conditions,
             data.actions if data.actions is not None else rule.actions)
         _schedule_next(rule)
+        # Прошла проверку — ссылки снова целы: поломка снята.
+        rule.broken_reason = ""
+        if rule.trigger != old_trigger:
+            rule.activated_at = timezone.now()
     if "enabled" in fields and data.enabled is not None:
+        if data.enabled and rule.broken_reason:
+            raise DomainError(
+                "automation_broken",
+                f"Автоматизация сломана: {rule.broken_reason} — поправьте её, затем включите",
+                status=422)
         if data.enabled and not rule.enabled:
             _schedule_next(rule)
+            rule.activated_at = timezone.now()
         rule.enabled = data.enabled
     if data.move:
         rule.position = ranked.position_between(
-            _board_rules(board), rule.pk, data.before_id, data.after_id,
+            [row for row in _board_rules(board) if row.kind == rule.kind], rule.pk,
+            data.before_id, data.after_id,
             code="automation_order_stale", what="автоматизации")
     rule.updated_by = actor_id
     rule.save()
@@ -218,7 +242,7 @@ def runs(request, board, *, rule_id: int | None = None, problems: bool = False,
          before: int | None = None, limit: int | None = None) -> dict:
     """Журнал запусков доски (администратор доски): новые сверху, страницами
     по ``id``; ``problems`` — только сбои, запреты и упоры в пределы."""
-    _require_shared(board)
+    require_shared(board)
     board_service.require_admin(request, board)
     limit = max(1, min(int(limit or RUNS_PAGE), 200))
     rows = AutomationRun.objects.filter(board_kind=board.kind, board_id=board.id)
@@ -226,7 +250,7 @@ def runs(request, board, *, rule_id: int | None = None, problems: bool = False,
         rows = rows.filter(rule_id=rule_id)
     if problems:
         rows = rows.filter(status__in=[AutomationRunStatus.FAILED, AutomationRunStatus.BLOCKED,
-                                       AutomationRunStatus.LIMITED])
+                                       AutomationRunStatus.LIMITED, AutomationRunStatus.SKIPPED])
     if before is not None:
         rows = rows.filter(pk__lt=before)
     page = list(rows.order_by("-pk")[:limit + 1])

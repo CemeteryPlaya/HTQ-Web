@@ -19,6 +19,7 @@ from htqweb.fallback import fallback
 
 from ..models import (DepartmentLinkKind, Status, TERMINAL_STATUSES, Task, TaskAssignee,
                       TaskDepartmentLink)
+from . import board_fields
 from . import board_service
 from . import department_rules
 from . import hydration
@@ -96,6 +97,8 @@ def transfer(task_id: int, target_department_id: int, request, *,
         defaults={"kind": DepartmentLinkKind.MEMBER})
 
     old_assignee = task.assignee_id
+    old_crew = task_service._crew_ids(task)
+    old_boards = set(board_fields.home_board_keys(task))
     TaskAssignee.objects.filter(task=task).delete()
     task.assignee_id = None
     old_status = task.status
@@ -117,8 +120,13 @@ def transfer(task_id: int, target_department_id: int, request, *,
     board_service.forget_department_ranks(task.id)
     board_service.place_on_department(target_department_id, task)
     _notify_transfer(task, target_department_id, actor)
-    # Для доски нового отдела задача пришла на доску — как «создана» в Trello
-    # («added to board»): срабатывают правила этой доски (этап S4).
-    automation.emit(Event("card_created", task.pk, actor,
-                          {"status": task.status, "transferred": True}))
+    # События автоматизации (спецификация логики §3): статус, снятые
+    # исполнители, «пришла на доску» нового отдела — его правила, а не
+    # повтор «создана» на доске проекта.
+    events = []
+    if old_status != task.status:
+        events.append(Event("moved", task.pk, actor, {"from": old_status, "to": task.status}))
+    events += task_service._crew_events(task, actor, old_crew, set())
+    events += task_service.arrived_events(task, actor, old_boards)
+    automation.emit(*events)
     return task

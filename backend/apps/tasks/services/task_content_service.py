@@ -27,6 +27,7 @@ from . import block_service
 from . import daily_report_service
 from . import hydration
 from . import task_notify
+from .automation import context as automation_context
 from .automation import events as automation
 from .automation.context import Event
 
@@ -54,8 +55,9 @@ def list_comments(task_id: int) -> list[schemas.CommentResponse]:
 def create_comment(task_id: int, body: str,
                    author_id: int | None) -> schemas.CommentResponse:
     task = _require_task(task_id)
-    row = TaskComment.objects.create(task_id=task_id, author_id=author_id,
-                                     body=body)
+    # Комментарий автоматизации помнит своё правило — лента его называет.
+    row = TaskComment.objects.create(task_id=task_id, author_id=author_id, body=body,
+                                     via_rule_id=automation_context.current_rule_id())
     # Новый комментарий — событие для участников задачи (K-30).
     task_notify.commented(task, author_id, body)
     automation.emit(Event("comment_added", task.pk, author_id,

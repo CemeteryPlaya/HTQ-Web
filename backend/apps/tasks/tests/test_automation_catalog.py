@@ -131,3 +131,53 @@ def test_describe_lists_everything():
     assert len(actions) == 39
     assert set(described["kinds"]) == {"card_button", "board_button", "due", "schedule"}
     assert described["board_actions"] == ["create_task", "notify", "sort_column"]
+
+
+# ── логика при сохранении (спецификация §11, этап S4b) ──────────────────
+
+@pytest.mark.parametrize(("kind", "trigger", "actions", "conditions", "message"), [
+    ("rule", {"type": "moved", "to_status": "done"}, [{"type": "complete"}],
+     [{"type": "in_column", "status": "todo"}], "никогда не сойдётся"),
+    ("rule", {"type": "moved", "to_status": "done"}, [{"type": "move", "status": "backlog"}],
+     [], "перенести нельзя"),
+    ("rule", {"type": "label_added"},
+     [{"type": "move", "status": "done"}, {"type": "move", "status": "todo"}],
+     [{"type": "in_column", "status": "in_progress"}], "Действие 2"),
+    ("due", {"type": "due", "offset_days": 1}, [{"type": "join_actor"}], [], "сделавшего"),
+    ("schedule", {"type": "schedule", "freq": "daily", "time": "09:00",
+                  "cards": {"status": "todo"}},
+     [{"type": "set_supervisor", "who": "actor"}], [], "сделавшего"),
+    ("due", {"type": "due", "offset_days": 0}, [{"type": "complete"}],
+     [{"type": "actor", "op": "automation"}], "кто сделал"),
+    ("rule", {"type": "moved"}, [{"type": "comment", "text": "@card"}], [],
+     "текст комментария"),
+    ("rule", {"type": "moved"}, [{"type": "rename", "summary": "{cardname} {Имя}"}], [],
+     "неизвестная переменная"),
+])
+def test_logic_is_checked_on_save(org, kind, trigger, actions, conditions, message):
+    assert message in _rejected(dept_board(org.it), kind, trigger, actions, conditions)
+
+
+def test_errors_are_in_russian(org):
+    message = _rejected(dept_board(org.it), "rule", {"type": "moved", "lishnee": 1},
+                        [{"type": "complete"}])
+    assert "лишнее поле" in message
+
+
+def test_every_automation_needs_a_name(org):
+    from .automation_helpers import add_rule
+
+    with pytest.raises(DomainError) as caught:
+        add_rule(dept_board(org.it), {"type": "moved"}, [{"type": "complete"}], name=" ")
+    assert caught.value.message == "Назовите автоматизацию"
+
+
+def test_describe_gives_the_builder_its_tables():
+    described = catalog.describe()
+    assert described["transitions"]["done"] == ["cancelled", "in_progress"]
+    assert described["field_ops"]["checkbox"]["condition"] == ["checked", "unchecked"]
+    assert described["variables"] == ["cardname", "username", "date", "duedate"]
+    assert described["limits"]["automations"] == 100
+    assert described["param_kinds"]["label_id"] == "label"
+    created = next(item for item in described["triggers"] if item["type"] == "card_created")
+    assert created["schema"]["properties"]["how"]["enum"] == ["created", "arrived", "any"]

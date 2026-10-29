@@ -20,6 +20,7 @@ Jira + SharePoint workflow, unchanged from the original:
 
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import timedelta
 
@@ -36,6 +37,7 @@ from django.utils import timezone
 
 from ..models import (
     AssigneeRole,
+    BoardKind,
     DepartmentLinkKind,
     Label,
     Status,
@@ -405,8 +407,8 @@ def claim(task_id: int, request) -> Task:
         raise DomainError("task_claim_unavailable",
                           "Задачу уже взяли в работу", status=409)
     user_id = scope.user_id
-    # «Взять в работу» — ручной перенос: запрет доски действует и на него (K-38).
-    automation.precheck_move(task, task.status, Status.IN_PROGRESS, user_id)
+    # «Взять в работу» — шаг процесса, как кнопка: запреты доски держат только
+    # ручной перенос между колонками (решение L-02, спецификация логики §5).
     TaskAssignee.objects.create(task=task, user_id=user_id, role=AssigneeRole.PRIMARY,
                                 seen_at=timezone.now())
     old_status = task.status
@@ -498,6 +500,17 @@ def _crew_events(task: Task, actor_id: int | None, before: set[int], after: set[
              for uid in sorted(after - before)]
             + [Event("assignee_removed", task.pk, actor_id, {"user_id": uid})
                for uid in sorted(before - after)])
+
+
+def arrived_events(task: Task, actor_id: int | None, before_keys) -> list:
+    """«Пришла на доску» — для домашних досок, которых у задачи не было
+    (перевод, смена отдела или проекта; спецификация логики §3): видят только
+    правила этой доски."""
+    from .board_fields import home_board_keys
+
+    return [Event("card_arrived", task.pk, actor_id,
+                  {"board_kind": kind, "board_id": board_id, "status": task.status})
+            for kind, board_id in home_board_keys(task) if (kind, board_id) not in before_keys]
 
 
 def _due_event(task: Task, actor_id: int | None, old, new):
@@ -622,7 +635,9 @@ def create_task(data, user_id: int | None = None, *, scope=None) -> Task:
         *_crew_events(task, user_id, set(), {uid for uid, _role in crew}),
         _due_event(task, user_id, None, task.due_date),
         *[Event("label_added", task.pk, user_id, {"label_id": label_id})
-          for label_id in sorted(task.labels.values_list("pk", flat=True))])
+          for label_id in sorted(task.labels.values_list("pk", flat=True))],
+        (Event("supervisor_set", task.pk, user_id, {"user_id": task.supervisor_id})
+         if task.supervisor_id else None))
     return task
 
 
@@ -645,6 +660,7 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
     old_status, old_due, old_supervisor = task.status, task.due_date, task.supervisor_id
     old_labels = set(task.labels.values_list("pk", flat=True)) if label_ids is not None else set()
     old_crew = _crew_ids(task) if "assignee_id" in changes else set()
+    old_home = (task.department_id, task.project_id)
 
     slug = changes.pop("task_type", None)
     if slug is not None and "task_type_id" not in changes:
@@ -700,13 +716,18 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
 
     if "status" in changes:
         target = changes.pop("status")
-        # Ручной перенос, запрещённый правилом доски, — 409 до правки (K-38).
-        automation.precheck_move(task, task.status, target, user_id)
+        # Запрет держат домашние доски задачи ПОСЛЕ правки: отдел или проект
+        # могут смениться тем же PATCH (спецификация логики §5).
+        preview = copy.copy(task)
+        preview.department_id = changes.get("department_id", task.department_id)
+        preview.project_id = changes.get("project_id", task.project_id)
         try:
             task.apply_transition(target)
         except ValueError as exc:
-            # Invalid FSM edge -> the original's 400.
+            # Invalid FSM edge -> the original's 400 — раньше запрета.
             raise ValueError(str(exc)) from exc
+        # Ручной перенос, запрещённый правилом доски, — 409 до сохранения (K-38).
+        automation.precheck_move(preview, old_status, task.status, user_id)
         # Смена статуса — ключевое событие ленты карточки (канбан-доски,
         # мастер-план §6.4; в Trello — «переместил карточку из списка в
         # список»). Прежний API её не журналировал ради паритета с FastAPI —
@@ -768,8 +789,19 @@ def update_task(task_id: int, data, user_id: int | None = None, *,
     if task.supervisor_id != old_supervisor:
         events.append(Event("supervisor_set" if task.supervisor_id else "supervisor_removed",
                             task.pk, user_id, {"user_id": task.supervisor_id}))
+    if (task.department_id, task.project_id) != old_home:
+        events += arrived_events(task, user_id, _home_keys(*old_home))
     automation.emit(*events)
     return task
+
+
+def _home_keys(department_id: int | None, project_id: int | None) -> set:
+    keys = set()
+    if department_id:
+        keys.add((BoardKind.DEPARTMENT, department_id))
+    if project_id:
+        keys.add((BoardKind.PROJECT, project_id))
+    return keys
 
 
 def _check_update(task: Task, changes: dict, department_ids, scope) -> None:

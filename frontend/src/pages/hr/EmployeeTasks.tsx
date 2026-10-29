@@ -19,7 +19,7 @@ import { claimTask, fetchTasks, updateTask } from '@/api/tasks';
 import type { TaskListScope, TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
 import { reportApiError } from '@/lib/apiError';
-import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { rebuildTaskList, useCardParam } from '@/features/tasks/board/card/hooks';
 import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import { reportTaskError } from '@/features/tasks/errors';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
@@ -83,7 +83,11 @@ const EmployeeTasks: React.FC<Props> = () => {
     const updateStatusMutation = useMutation({
         mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employee-tasks'] }),
-        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError')),
+        onError: (err) => {
+            // Перенос отклонён (запрет доски — 409): карточку — на старое место.
+            rebuildTaskList(queryClient, 'employee-tasks');
+            reportApiError(err, t('tasks.pages.list.updateError'));
+        },
     });
 
     const query = search.toLowerCase();

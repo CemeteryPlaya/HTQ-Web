@@ -36,6 +36,16 @@ function invalidateTaskLists(queryClient: QueryClient) {
   for (const queryKey of TASK_LISTS) void queryClient.invalidateQueries({ queryKey });
 }
 
+/** Старая страница «Задачи» (до S6): перенос отклонён (запрет доски — 409), а
+ * её канбан пересобирает колонки только при новом массиве задач — перечитанный
+ * без изменений список react-query отдаёт тем же объектом. Копия массива
+ * возвращает карточку на место, перечитывание — сверяет с сервером. */
+export function rebuildTaskList(queryClient: QueryClient, key: string) {
+  queryClient.setQueriesData<unknown>({ queryKey: [key] },
+    (old) => (Array.isArray(old) ? [...old] : old));
+  void queryClient.invalidateQueries({ queryKey: [key] });
+}
+
 /** Карточка, списки и лента — перечитать: правка могла запустить автоматизацию. */
 export function invalidateCard(queryClient: QueryClient, taskId: number) {
   void queryClient.invalidateQueries({ queryKey: cardKeys.card(taskId) });

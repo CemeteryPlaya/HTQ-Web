@@ -1144,6 +1144,9 @@ class CardButtonOut(BaseModel):
     id: int
     name: str
     icon: str | None = None
+    #: Условия кнопки сошлись на этой карточке сейчас (этап S4b).
+    available: bool = True
+    reason: str | None = None
 
 
 class HomeBoardOut(BaseModel):
@@ -1198,10 +1201,20 @@ class AutomationPatch(BaseModel):
         return bool({"before_id", "after_id"} & self.model_fields_set)
 
 
+class SuggestionDismissIn(BaseModel):
+    """Скрыть «Рекомендацию» (этап S4b): ключ образца из списка подсказок."""
+
+    key: str = Field(..., min_length=1, max_length=80)
+
+    model_config = {"extra": "forbid"}
+
+
 class BoardPresetIn(BaseModel):
     """Шаблон процесса доски (K-40)."""
 
     preset: Literal["htq_process"]
+    #: Показать, что изменится, и ничего не записать (этап S4b).
+    dry_run: bool = False
 
     model_config = {"extra": "forbid"}
 

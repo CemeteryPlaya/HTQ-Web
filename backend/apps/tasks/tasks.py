@@ -228,11 +228,13 @@ def automation_schedule_dispatch() -> dict:
 @shared_task(name="apps.tasks.tasks.automation_runs_purge")
 @company_task
 def automation_runs_purge() -> int:
-    """Журнал запусков автоматизации старше 90 дней — вон."""
+    """Раз в сутки: журнал запусков автоматизации старше 90 дней — вон, и
+    ночная сверка ссылок (ушедшие сотрудники, отделы и проекты досок ломают
+    автоматизации — спецификация логики §10)."""
     require_service("tasks")
-    from .services.automation import scheduled
+    from .services.automation import refs, scheduled
 
-    return scheduled.purge_runs()
+    return scheduled.purge_runs() + refs.sweep()
 
 
 @shared_task(name="apps.tasks.tasks.automation_runs_purge_dispatch")

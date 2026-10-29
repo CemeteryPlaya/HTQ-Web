@@ -52,7 +52,8 @@ class Command(BaseCommand):
                 raise CommandError(exc.message) from exc
         title = "Пробный прогон — ничего не записано" if options["dry_run"] else "Применено"
         self.stdout.write(f"{title}: шаблон {report['preset']} → доска {kind} {board_id}")
-        outcomes = {"created": "заведены", "kept": "уже есть", "updated": "обновлены"}
+        outcomes = {"created": "заведены", "kept": "уже есть", "updated": "обновлены",
+                    "unchanged": "без изменений"}
         for section, label in (("fields", "Поля"), ("labels", "Метки"),
                                ("templates", "Шаблоны чек-листов"),
                                ("automations", "Автоматизации")):
