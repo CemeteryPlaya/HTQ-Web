@@ -64,9 +64,21 @@ interface Props {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
+  /** Доска (этап S6a): вся ширина и высота окна, компактная шапка раздела,
+   * то же меню разделов слева; колонки доски прокручиваются вбок. */
+  wide?: boolean;
 }
 
-export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
+/** Пункт «Задачи» — это и доски, и их таблица (этап S6a). */
+function isActive(to: string, pathname: string): boolean {
+  if (to === '/tasks') {
+    return pathname === '/tasks' || pathname === '/tasks/list'
+      || pathname === '/tasks/board' || pathname.startsWith('/tasks/board/');
+  }
+  return pathname === to;
+}
+
+export const TasksLayout: React.FC<Props> = ({ title, subtitle, children, wide = false }) => {
   const { t } = useTranslation();
   const location = useLocation();
   const { activeProfile } = useActiveProfile();
@@ -102,6 +114,120 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
     return groups;
   }, [filteredNavItems]);
 
+  const mobileNav = (
+    <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none lg:hidden">
+      {visibleNavItems.map((item) => {
+        const active = isActive(item.to, location.pathname);
+        return (
+          <Link
+            key={item.to}
+            to={item.to}
+            className={cn(
+              'flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
+              active
+                ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                : 'bg-card text-muted-foreground hover:bg-muted/80 hover:text-foreground border-border/50'
+            )}
+          >
+            <item.icon className="h-3.5 w-3.5" />
+            {t(item.labelKey)}
+          </Link>
+        );
+      })}
+    </div>
+  );
+
+  const sidebar = (
+    <div className="rounded-3xl border bg-card/85 backdrop-blur-md p-4 shadow-sm space-y-4">
+      {/* Search input inside nav */}
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+        <Input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={t('tasks.nav.searchSections')}
+          className="pl-8 pr-8 h-8 text-xs rounded-xl bg-muted/30 border-muted-foreground/20 focus:bg-background"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      <nav className="space-y-4">
+        {Object.entries(groupedNav).map(([catKey, items]) => {
+          if (items.length === 0) return null;
+          return (
+            <div key={catKey} className="space-y-1.5">
+              <div className="px-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                {t(categoryTitleKeys[catKey])}
+              </div>
+              <div className="space-y-1">
+                {items.map((item) => {
+                  const active = isActive(item.to, location.pathname);
+                  return (
+                    <Link
+                      key={item.to}
+                      to={item.to}
+                      className={cn(
+                        'group flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium transition-all duration-150',
+                        active
+                          ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
+                          : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
+                      )}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <item.icon
+                          className={cn(
+                            'h-4 w-4 shrink-0 transition-transform group-hover:scale-110',
+                            active ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-foreground'
+                          )}
+                        />
+                        <span className="truncate">{t(item.labelKey)}</span>
+                      </div>
+                      {active && <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-80" />}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {filteredNavItems.length === 0 && (
+          <div className="py-4 text-center text-xs text-muted-foreground">
+            {t('tasks.nav.noSections')}
+          </div>
+        )}
+      </nav>
+    </div>
+  );
+
+  if (wide) {
+    return (
+      <div className="flex h-[100dvh] flex-col bg-background">
+        <Header />
+        <main className="flex min-h-0 flex-1 flex-col pb-16 md:pb-0">
+          <div className="flex min-h-0 w-full flex-1 flex-col gap-3 px-4 pb-4 pt-3 sm:px-6">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+              <BackToProfile className="mb-0 text-xs" />
+              <h1 className="font-display text-xl font-bold tracking-tight text-foreground">{title}</h1>
+              {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
+            </div>
+            {mobileNav}
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+              <aside className="hidden min-h-0 overflow-y-auto lg:block">{sidebar}</aside>
+              <div className="flex min-h-0 min-w-0 flex-col">{children}</div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
@@ -127,97 +253,13 @@ export const TasksLayout: React.FC<Props> = ({ title, subtitle, children }) => {
           </div>
 
           {/* Mobile horizontal scroll nav */}
-          <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none lg:hidden">
-            {visibleNavItems.map((item) => {
-              const active = location.pathname === item.to;
-              return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className={cn(
-                    'flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all duration-200 border shadow-2xs',
-                    active
-                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                      : 'bg-card text-muted-foreground hover:bg-muted/80 hover:text-foreground border-border/50'
-                  )}
-                >
-                  <item.icon className="h-3.5 w-3.5" />
-                  {t(item.labelKey)}
-                </Link>
-              );
-            })}
-          </div>
+          {mobileNav}
 
           {/* Main Layout Grid */}
           <div className="grid gap-8 lg:grid-cols-[280px_minmax(0,1fr)] items-start">
             {/* Desktop Sticky Sidebar */}
             <aside className="hidden lg:block sticky top-24 z-20">
-              <div className="rounded-3xl border bg-card/85 backdrop-blur-md p-4 shadow-sm space-y-4">
-                {/* Search input inside nav */}
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                  <Input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={t('tasks.nav.searchSections')}
-                    className="pl-8 pr-8 h-8 text-xs rounded-xl bg-muted/30 border-muted-foreground/20 focus:bg-background"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                <nav className="space-y-4">
-                  {Object.entries(groupedNav).map(([catKey, items]) => {
-                    if (items.length === 0) return null;
-                    return (
-                      <div key={catKey} className="space-y-1.5">
-                        <div className="px-3 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
-                          {t(categoryTitleKeys[catKey])}
-                        </div>
-                        <div className="space-y-1">
-                          {items.map((item) => {
-                            const active = location.pathname === item.to;
-                            return (
-                              <Link
-                                key={item.to}
-                                to={item.to}
-                                className={cn(
-                                  'group flex items-center justify-between rounded-xl px-3 py-2 text-xs font-medium transition-all duration-150',
-                                  active
-                                    ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
-                                    : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
-                                )}
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <item.icon
-                                    className={cn(
-                                      'h-4 w-4 shrink-0 transition-transform group-hover:scale-110',
-                                      active ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-foreground'
-                                    )}
-                                  />
-                                  <span className="truncate">{t(item.labelKey)}</span>
-                                </div>
-                                {active && <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-80" />}
-                              </Link>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {filteredNavItems.length === 0 && (
-                    <div className="py-4 text-center text-xs text-muted-foreground">
-                      {t('tasks.nav.noSections')}
-                    </div>
-                  )}
-                </nav>
-              </div>
+              {sidebar}
             </aside>
 
             {/* Content Area */}

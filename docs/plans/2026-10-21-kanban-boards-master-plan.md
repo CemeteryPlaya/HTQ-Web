@@ -610,7 +610,7 @@ API-функции — в `fe/api/tasks.ts` (рядом с существующ�
 - **K5.3** `TasksRequestsPanel` на странице досок: «Ждут моего решения», «Мои запросы», «История отдела» (K-32).
 
 ### Этап 6. Переключение и уборка — после этапа 5
-- **K6.1** Меню «Доски», `/tasks` → `/tasks/board`, `HRTasks` → `/tasks/list`, удаление `EmployeeTasks`, `KanbanBoard`, `TaskRouter`; «Открыть на доске» в `/tasks/:id`; «Открыть доску» в `HRProjects`.
+- **K6.1** Меню «Доски», `/tasks` → `/tasks/board`, `HRTasks` → `/tasks/list`, удаление `EmployeeTasks`, `KanbanBoard`, `TaskRouter`; «Открыть на доске» в `/tasks/:id`; «Открыть доску» в `HRProjects`. *Уточнено 29.10 (этап S6a, [план](2026-10-29-kanban-s6a-switch-plan.md)):* `/tasks` ведёт на последнюю открытую доску, доска — страница пункта «Задачи», `KanbanBoard` удалён.
 - **K6.2** Блок «Мои задачи» в профиле (`ProfileTasksWidget`, K-27): переход на `/tasks/board?card=<id>`, «Открыть мою доску». Идёт вместе с K6.1: блок ведёт на доски, поэтому показывается, когда доски открыты всем.
 - **K6.3** e2e, `STRUCTURE.md` §4.2 (абзац Kanban), `API.md`, `CLAUDE.md` (абзац «Канбан-доски»), `harness-review`, PR.
 

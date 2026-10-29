@@ -1,7 +1,8 @@
 /**
- * Реестр «Задачи» администратора задач (`HRTasks`): карточка канбана и строка
- * таблицы открывают окно карточки поверх страницы (`?card=<id>`), как на
- * досках; карандаш в таблице ведёт на полную страницу задачи.
+ * Вид «Таблица» раздела «Задачи» для администратора задач (`HRTasks`,
+ * `/tasks/list`, этап S6a): строка открывает окно карточки поверх страницы
+ * (`?card=<id>`), как на досках; карандаш ведёт на полную страницу задачи.
+ * Своего канбана у страницы больше нет — «Доска» ведёт на доски раздела.
  */
 import React from 'react';
 import { screen } from '@testing-library/react';
@@ -15,15 +16,6 @@ vi.mock('@/components/tasks/TasksLayout', () => ({
   TasksLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock('@/components/tasks/CreateTaskModal', () => ({ CreateTaskModal: () => null }));
-vi.mock('@/components/tasks/KanbanBoard', () => ({
-  KanbanBoard: ({ tasks, onOpen }: { tasks: Task[]; onOpen?: (task: Task) => void }) => (
-    <div>
-      {tasks.map((task) => (
-        <button key={task.id} type="button" onClick={() => onOpen?.(task)}>{`карточка ${task.key}`}</button>
-      ))}
-    </div>
-  ),
-}));
 // Окно карточки — своё, с тестами; здесь важен только адрес, который его открывает.
 vi.mock('@/features/tasks/board/card/StandaloneCardModal', async () => {
   const { useLocation } = await import('react-router-dom');
@@ -37,7 +29,7 @@ vi.mock('@/features/tasks/board/card/StandaloneCardModal', async () => {
 
 const fetchTasks = vi.hoisted(() => vi.fn());
 vi.mock('@/api/tasks', () => ({
-  fetchTasks, createTask: vi.fn(), deleteTask: vi.fn(), updateTask: vi.fn(),
+  fetchTasks, createTask: vi.fn(), deleteTask: vi.fn(),
   fetchLabels: vi.fn().mockResolvedValue([]), fetchProjects: vi.fn().mockResolvedValue([]),
   fetchSites: vi.fn().mockResolvedValue([]), fetchTaskTypes: vi.fn().mockResolvedValue([]),
   fetchContractors: vi.fn().mockResolvedValue([]),
@@ -59,17 +51,23 @@ beforeEach(() => {
 });
 
 describe('HRTasks', () => {
-  it('карточка канбана открывает окно поверх страницы', async () => {
-    renderWithProviders(<HRTasks />, { route: '/tasks' });
-    await userEvent.click(await screen.findByRole('button', { name: 'карточка TASK-3' }));
-    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks?card=3');
+  it('сразу таблица; «Доска» ведёт на доски раздела', async () => {
+    renderWithProviders(<HRTasks />, { route: '/tasks/list' });
+    expect(await screen.findByText('Проверить акты')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Доска/ })).toHaveAttribute('href', '/tasks/board');
+    expect(screen.getByRole('link', { name: /Таблица/ })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('«Показать задачи объекта» (?site_id=) сразу фильтрует таблицу по объекту', async () => {
+    renderWithProviders(<HRTasks />, { route: '/tasks/list?site_id=4' });
+    expect(await screen.findByText('Проверить акты')).toBeInTheDocument();
+    expect(fetchTasks).toHaveBeenCalledWith({ site_id: '4' });
   });
 
   it('строка таблицы открывает окно, карандаш — страницу задачи', async () => {
-    renderWithProviders(<HRTasks />, { route: '/tasks' });
-    await userEvent.click(await screen.findByRole('button', { name: 'Таблица' }));
+    renderWithProviders(<HRTasks />, { route: '/tasks/list' });
     await userEvent.click(await screen.findByText('Проверить акты'));
-    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks?card=3');
+    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks/list?card=3');
     await userEvent.click(screen.getByTitle('Редактировать'));
     expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks/3');
   });

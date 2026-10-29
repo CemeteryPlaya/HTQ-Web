@@ -28,22 +28,12 @@ import {
 } from './api';
 import type { FeedPage } from './types';
 
-/** Списки, где видна карточка: доски и старый реестр «Задачи» — `HRTasks` и
- * `EmployeeTasks` открывают то же окно, пока не уступят место доскам (S6). */
+/** Списки, где видна карточка: доски и вид «Таблица» раздела — `HRTasks` и
+ * `EmployeeTasks` (`/tasks/list`, этап S6a) открывают то же окно. */
 const TASK_LISTS = [['tasks', 'board'], ['hr-tasks'], ['employee-tasks']];
 
 function invalidateTaskLists(queryClient: QueryClient) {
   for (const queryKey of TASK_LISTS) void queryClient.invalidateQueries({ queryKey });
-}
-
-/** Старая страница «Задачи» (до S6): перенос отклонён (запрет доски — 409), а
- * её канбан пересобирает колонки только при новом массиве задач — перечитанный
- * без изменений список react-query отдаёт тем же объектом. Копия массива
- * возвращает карточку на место, перечитывание — сверяет с сервером. */
-export function rebuildTaskList(queryClient: QueryClient, key: string) {
-  queryClient.setQueriesData<unknown>({ queryKey: [key] },
-    (old) => (Array.isArray(old) ? [...old] : old));
-  void queryClient.invalidateQueries({ queryKey: [key] });
 }
 
 /** Карточка, списки и лента — перечитать: правка могла запустить автоматизацию. */

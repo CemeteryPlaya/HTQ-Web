@@ -19,7 +19,6 @@ import type { UserProfile } from '@/types/userProfile';
 vi.mock('@/components/tasks/TasksLayout', () => ({
   TasksLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
-vi.mock('@/components/tasks/KanbanBoard', () => ({ KanbanBoard: () => null }));
 // Окно карточки — своё, с тестами; здесь важен только адрес, который его открывает.
 vi.mock('@/features/tasks/board/card/StandaloneCardModal', async () => {
   const { useLocation } = await import('react-router-dom');
@@ -41,7 +40,6 @@ const claimTask = vi.fn();
 vi.mock('@/api/tasks', () => ({
   fetchTasks: (params?: Record<string, string>) => fetchTasks(params),
   claimTask: (id: number) => claimTask(id),
-  updateTask: vi.fn(),
 }));
 
 import EmployeeTasks from '../EmployeeTasks';
@@ -113,9 +111,9 @@ describe('EmployeeTasks', () => {
 
   it('строка таблицы открывает окно карточки поверх страницы', async () => {
     fetchTasks.mockResolvedValue([task({ id: 5, key: 'T-5', summary: 'Сверить акты' })]);
-    renderWithProviders(<EmployeeTasks profile={PROFILE} />, { route: '/tasks' });
+    renderWithProviders(<EmployeeTasks profile={PROFILE} />, { route: '/tasks/list' });
     await userEvent.click(await screen.findByText('Сверить акты'));
-    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks?card=5');
+    expect(screen.getByLabelText('адрес')).toHaveTextContent('/tasks/list?card=5');
   });
 
   it('отказ claim показывает текст по коду ошибки', async () => {

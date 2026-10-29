@@ -673,9 +673,7 @@
       "mine": "My tasks",
       "department": "Department tasks",
       "filters": "Filters",
-      "totalCount": "Total: {{count}}",
-      "kanban": "Kanban",
-      "table": "Table"
+      "totalCount": "Total: {{count}}"
     },
     "pages": {
       "recruitment": {
@@ -2035,6 +2033,11 @@
         "resources": "Resources and sites",
         "analytics": "Analytics and reports"
       }
+    },
+    "views": {
+      "label": "Tasks view",
+      "board": "Board",
+      "table": "Table"
     },
     "projectStaff": {
       "pageTitle": "Project staff reports",

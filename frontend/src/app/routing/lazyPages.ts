@@ -136,6 +136,8 @@ export const lazyPages = {
   TaskDetailRouter: React.lazy(() => import('@/components/tasks/TaskDetailRouter').then((module) => ({ default: module.TaskDetailRouter }))),
   // Канбан-доски (этап S1): личная, отдела, проекта — одна страница.
   TasksBoard: React.lazy(() => import('@/features/tasks/board/BoardsPage')),
+  // `/tasks` — последняя открытая доска (этап S6a).
+  TasksHome: React.lazy(() => import('@/features/tasks/board/TasksHome')),
 
   EmailInbox: React.lazy(() => import('@/pages/Email/EmailPage')),
   OAuthCallbackPage: React.lazy(() => import('@/pages/Email/OAuthCallbackPage')),

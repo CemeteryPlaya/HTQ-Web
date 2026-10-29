@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,17 +16,17 @@ import { toast } from 'sonner';
 import { reportApiError } from '@/lib/apiError';
 import {
   Plus, Search, Filter, AlertCircle, ArrowUpDown,
-  Bug, BookOpen, Layers, CheckSquare, ListTodo, Edit, Trash2, LayoutGrid, LayoutList
+  Bug, BookOpen, Layers, CheckSquare, ListTodo, Edit, Trash2
 } from 'lucide-react';
 import {
-  fetchTasks, createTask, deleteTask, updateTask,
+  fetchTasks, createTask, deleteTask,
   fetchLabels, fetchProjects, fetchSites, fetchTaskTypes, fetchContractors,
 } from '@/api/tasks';
 import { fetchDepartments, fetchEmployeeUsers } from '@/api/hr';
 import api from '@/api/client';
-import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { CreateTaskModal } from '@/components/tasks/CreateTaskModal';
-import { rebuildTaskList, useCardParam } from '@/features/tasks/board/card/hooks';
+import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { TasksViewToggle } from '@/features/tasks/board/TasksViewToggle';
 import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import {
   TASK_STATUS_ORDER, statusBadgeClass, statusLabel,
@@ -34,7 +34,6 @@ import {
 import {
   TASK_PRIORITY, TASK_PRIORITY_ORDER, priorityLabel,
 } from '@/lib/tasks/priority';
-import type { TaskStatus } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
 
 /* ---- Constants ---- */
@@ -56,6 +55,9 @@ const HRTasks: React.FC = () => {
   // Карточка открывается окном поверх страницы (как на досках, `?card=<id>`);
   // полная страница задачи — карандашом в таблице.
   const { open: openCard } = useCardParam();
+  // «Показать задачи объекта» со страницы объектов — `?site_id=<id>`.
+  const [searchParams] = useSearchParams();
+  const siteFromUrl = searchParams.get('site_id');
 
   /* filters */
   const [search, setSearch] = useState('');
@@ -65,10 +67,9 @@ const HRTasks: React.FC = () => {
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const [supervisorFilter, setSupervisorFilter] = useState<string>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
-  const [siteFilter, setSiteFilter] = useState<string>('all');
+  const [siteFilter, setSiteFilter] = useState<string>(siteFromUrl ?? 'all');
   const [contractorFilter, setContractorFilter] = useState<string>('all');
-  const [showFilters, setShowFilters] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'board'>('board');
+  const [showFilters, setShowFilters] = useState(Boolean(siteFromUrl));
 
   /* create dialog */
   const [createOpen, setCreateOpen] = useState(false);
@@ -128,20 +129,6 @@ const HRTasks: React.FC = () => {
     queryFn: fetchLabels,
   });
 
-  const updateStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
-      toast.success(t('tasks.pages.list.statusUpdated', 'Статус обновлен'));
-    },
-    onError: (err) => {
-      // Перенос отклонён (запрет доски — 409): доска показывает карточку на
-      // старом месте — список подменяется копией и перечитывается.
-      rebuildTaskList(queryClient, 'hr-tasks');
-      reportApiError(err, t('tasks.pages.list.statusError', 'Ошибка обновления статуса'));
-    },
-  });
-
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteTask(id),
     onSuccess: () => {
@@ -152,7 +139,7 @@ const HRTasks: React.FC = () => {
   });
 
   return (
-    <TasksLayout title={t('tasks.pages.list.title', 'Задачи')} subtitle={t('tasks.pages.list.subtitle', 'Оперативный реестр задач и канбан-доска')}>
+    <TasksLayout title={t('tasks.pages.list.title', 'Задачи')} subtitle={t('tasks.pages.list.subtitle', 'Управление задачами')}>
       {/* Modern Toolbar */}
       <div className="rounded-3xl border bg-card p-4 shadow-2xs space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -211,26 +198,8 @@ const HRTasks: React.FC = () => {
           {/* flex-wrap обязателен: переключатель вида и «Создать задачу» в одну
               строку не влезают на 360px и выталкивали кнопку за экран. */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex bg-muted/40 p-1 rounded-xl border">
-              <Button
-                variant={viewMode === 'board' ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-7 gap-1 px-3 text-xs rounded-lg font-medium shadow-2xs"
-                onClick={() => setViewMode('board')}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                {t('hr.tasks.kanban')}
-              </Button>
-              <Button
-                variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-                size="sm"
-                className="h-7 gap-1 px-3 text-xs rounded-lg font-medium shadow-2xs"
-                onClick={() => setViewMode('table')}
-              >
-                <LayoutList className="h-3.5 w-3.5" />
-                {t('hr.tasks.table')}
-              </Button>
-            </div>
+            {/* Доска — главный вид раздела (этап S6a), здесь — таблица. */}
+            <TasksViewToggle current="table" />
 
             <Button
               onClick={() => setCreateOpen(true)}
@@ -352,14 +321,6 @@ const HRTasks: React.FC = () => {
         ) : tasks.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             {t('tasks.pages.list.empty', 'Задачи не найдены')}
-          </div>
-        ) : viewMode === 'board' ? (
-          <div className="w-full min-w-0">
-            <KanbanBoard
-              tasks={tasks}
-              onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
-              onOpen={(task) => openCard(task.id)}
-            />
           </div>
         ) : (
           <div className="overflow-x-auto">

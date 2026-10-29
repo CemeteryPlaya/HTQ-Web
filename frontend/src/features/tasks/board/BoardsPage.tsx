@@ -5,12 +5,12 @@
  * карточки по `?card=<id>`, панель «Запросы» по `?panel=requests`,
  * выключатель уведомлений доски (этап S2).
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { Header } from '@/components/Header';
+import { TasksLayout } from '@/components/tasks/TasksLayout';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -19,7 +19,7 @@ import type { TaskStatus } from '@/types/tasks';
 
 import { BoardCanvas } from './BoardCanvas';
 import { BoardHeader } from './BoardHeader';
-import { boardKeyFromPath } from './boardRoutes';
+import { boardKeyFromPath, rememberBoard } from './boardRoutes';
 import { BoardSettingsDialog } from './BoardSettingsDialog';
 import { canvasStyle } from './boardColors';
 import { CardModal } from './card/CardModal';
@@ -70,18 +70,20 @@ function BoardMissing({ notFound, detail }: { notFound: boolean; detail: string 
   );
 }
 
+/** Раздел «Задачи»: доска — его главная страница (этап S6a), с меню разделов
+ * модуля слева. */
+function BoardSection({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  return <TasksLayout title={t('tasks.nav.tasks', 'Задачи')} wide>{children}</TasksLayout>;
+}
+
 export default function BoardsPage() {
   const location = useLocation();
   const { id } = useParams<{ id?: string }>();
   const boardKey = useMemo(() => boardKeyFromPath(location.pathname, id), [location.pathname, id]);
 
   if (!boardKey) {
-    return (
-      <div className="flex min-h-[100dvh] flex-col bg-background">
-        <Header />
-        <BoardMissing notFound detail={null} />
-      </div>
-    );
+    return <BoardSection><BoardMissing notFound detail={null} /></BoardSection>;
   }
   // Своё состояние у каждой доски: свёрнутые колонки, быстрая правка.
   return <BoardScreen key={`${boardKey.kind}:${'id' in boardKey ? boardKey.id : ''}`}
@@ -124,6 +126,12 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
 
   const title = board?.board.title
     ?? (boardKey.kind === 'personal' ? t('tasks.board.personalTitle', 'Мои задачи') : '…');
+
+  // Открытая доска — последняя: `/tasks` в следующий раз ведёт на неё (R-03).
+  const loaded = Boolean(board);
+  useEffect(() => {
+    if (loaded) rememberBoard(boardKey);
+  }, [loaded, boardKey]);
 
   const shown = useMemo(() => {
     if (!board || !filters.hideEmpty || active === 0) return board;
@@ -173,9 +181,8 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
   const hiddenColumns = board ? board.columns.filter((column) => column.hidden).length : 0;
 
   return (
-    <div className="flex h-[100dvh] flex-col bg-background">
-      <Header />
-      <main className="flex min-h-0 flex-1 flex-col pb-16 md:pb-0"
+    <BoardSection>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border"
         style={canvasStyle(board?.board.color ?? null)}>
         <BoardHeader
           boardKey={boardKey}
@@ -216,7 +223,7 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
             />
           )}
         </div>
-      </main>
+      </div>
 
       <FilterDrawer
         open={filterOpen}
@@ -265,6 +272,6 @@ function BoardScreen({ boardKey }: { boardKey: BoardKey }) {
         onOpenCard={openCard}
         departmentId={boardKey.kind === 'department' && board?.can.admin ? boardKey.id : null}
       />
-    </div>
+    </BoardSection>
   );
 }

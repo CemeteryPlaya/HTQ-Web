@@ -19,3 +19,21 @@ export function boardKeyFromPath(pathname: string, id: string | undefined): Boar
   const number = Number(id);
   return Number.isInteger(number) && number > 0 ? { kind, id: number } : null;
 }
+
+/** Последняя открытая доска человека (этап S6a, решение R-03): `/tasks` ведёт
+ * на неё. Хранится в браузере; хранилище недоступно (приватный режим) —
+ * личная доска. */
+const LAST_BOARD_KEY = 'tasks.board.last';
+const BOARD_URL = /^\/tasks\/board(\/(department|project)\/\d+)?$/;
+
+export function rememberBoard(key: BoardKey): void {
+  try { window.localStorage.setItem(LAST_BOARD_KEY, boardUrl(key)); } catch { /* приватный режим */ }
+}
+
+export function lastBoardUrl(): string {
+  try {
+    const url = window.localStorage.getItem(LAST_BOARD_KEY);
+    if (url && BOARD_URL.test(url)) return url;
+  } catch { /* приватный режим */ }
+  return '/tasks/board';
+}

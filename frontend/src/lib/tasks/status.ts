@@ -112,8 +112,8 @@ export const OPEN_STATUSES = byFlag((m) => !m.isTerminal && !m.isActive);
 
 /**
  * Legacy rows written before the status vocabulary changed still exist in
- * this database — KanbanBoard has been coercing them at render time ever
- * since. Anything unrecognised falls back to `todo` rather than throwing:
+ * this database — the old task kanban coerced them at render time, and
+ * this helper keeps doing it. Anything unrecognised falls back to `todo` rather than throwing:
  * a card in the wrong column is recoverable, a blank board is not.
  */
 export function normalizeTaskStatus(raw: string | null | undefined): TaskStatus {

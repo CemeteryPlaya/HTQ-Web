@@ -1,5 +1,6 @@
 /**
- * Шапка доски (Trello): название с переключателем досок, вид доски, справа —
+ * Шапка доски (Trello): «Доска | Таблица» раздела «Задачи» (этап S6a),
+ * название с переключателем досок, вид доски, справа —
  * «Запросы» со счётчиком ждущих решения (K-32), колокольчик уведомлений по
  * доске (K-30, у досок отделов и проектов), «Фильтр» со счётчиком условий и
  * «Колонки» у администратора доски (K-39).
@@ -10,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 
 import { BoardSwitcher } from './BoardSwitcher';
+import { TasksViewToggle } from './TasksViewToggle';
 import type { BoardKey } from './types';
 
 export interface BoardHeaderProps {
@@ -38,6 +40,7 @@ export function BoardHeader(props: BoardHeaderProps) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 bg-black/10 px-4 py-2 backdrop-blur-sm dark:bg-black/25">
+      <TasksViewToggle current="board" />
       <BoardSwitcher current={props.boardKey} title={props.title} />
       <span className="hidden rounded-md bg-black/10 px-2 py-0.5 text-xs font-medium sm:inline dark:bg-white/10">
         {kindLabel}

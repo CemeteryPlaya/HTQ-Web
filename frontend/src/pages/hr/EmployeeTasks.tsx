@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
-import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -15,11 +14,11 @@ import { toast } from 'sonner';
 import {
     Search, Bug, BookOpen, Layers, CheckSquare, ListTodo, Check
 } from 'lucide-react';
-import { claimTask, fetchTasks, updateTask } from '@/api/tasks';
-import type { TaskListScope, TaskStatus } from '@/types/tasks';
+import { claimTask, fetchTasks } from '@/api/tasks';
+import type { TaskListScope } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
-import { reportApiError } from '@/lib/apiError';
-import { rebuildTaskList, useCardParam } from '@/features/tasks/board/card/hooks';
+import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { TasksViewToggle } from '@/features/tasks/board/TasksViewToggle';
 import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
 import { reportTaskError } from '@/features/tasks/errors';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
@@ -60,7 +59,6 @@ const EmployeeTasks: React.FC<Props> = () => {
     const { open: openCard } = useCardParam();
     const [search, setSearch] = useState('');
     const [activeTab, setActiveTab] = useState('my-tasks');
-    const [viewMode, setViewMode] = useState<'table' | 'board'>('table');
 
     const { data: tasks = [], isLoading } = useQuery({
         queryKey: ['employee-tasks', activeTab],
@@ -78,16 +76,6 @@ const EmployeeTasks: React.FC<Props> = () => {
             setActiveTab('my-tasks');
         },
         onError: (err) => reportTaskError(err, t, t('tasks.claim.error')),
-    });
-
-    const updateStatusMutation = useMutation({
-        mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employee-tasks'] }),
-        onError: (err) => {
-            // Перенос отклонён (запрет доски — 409): карточку — на старое место.
-            rebuildTaskList(queryClient, 'employee-tasks');
-            reportApiError(err, t('tasks.pages.list.updateError'));
-        },
     });
 
     const query = search.toLowerCase();
@@ -220,24 +208,8 @@ const EmployeeTasks: React.FC<Props> = () => {
                                         className="pl-10 w-full sm:w-64"
                                     />
                                 </div>
-                                <div className="flex bg-muted/50 p-1 rounded-md gap-1 border">
-                                    <Button
-                                        variant={viewMode === 'board' ? 'secondary' : 'ghost'}
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        onClick={() => setViewMode('board')}
-                                    >
-                                        {t('hr.tasks.kanban')}
-                                    </Button>
-                                    <Button
-                                        variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        onClick={() => setViewMode('table')}
-                                    >
-                                        {t('hr.tasks.table')}
-                                    </Button>
-                                </div>
+                                {/* Доска — главный вид раздела (этап S6a), здесь — таблица. */}
+                                <TasksViewToggle current="table" />
                             </div>
                         </div>
 
@@ -245,14 +217,6 @@ const EmployeeTasks: React.FC<Props> = () => {
                             <div className="border rounded-md w-full min-w-0 overflow-hidden">
                                 {isLoading ? (
                                     <div className="p-8 text-center text-muted-foreground">{t('common.loading')}</div>
-                                ) : viewMode === 'board' ? (
-                                    <div className="-mx-2 -mb-2 p-2 min-w-0">
-                                        <KanbanBoard
-                                            tasks={filteredTasks}
-                                            onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
-                                            onOpen={(task) => openCard(task.id)}
-                                        />
-                                    </div>
                                 ) : (
                                     renderTable()
                                 )}
@@ -263,14 +227,6 @@ const EmployeeTasks: React.FC<Props> = () => {
                             <div className="border rounded-md w-full min-w-0 overflow-hidden">
                                 {isLoading ? (
                                     <div className="p-8 text-center text-muted-foreground">{t('common.loading')}</div>
-                                ) : viewMode === 'board' ? (
-                                    <div className="-mx-2 -mb-2 p-2 min-w-0">
-                                        <KanbanBoard
-                                            tasks={filteredTasks}
-                                            onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
-                                            onOpen={(task) => openCard(task.id)}
-                                        />
-                                    </div>
                                 ) : (
                                     renderTable()
                                 )}

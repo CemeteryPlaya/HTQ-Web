@@ -1124,9 +1124,7 @@
       "mine": "Мои задачи",
       "department": "Задачи отдела",
       "filters": "Фильтры",
-      "totalCount": "Всего: {{count}}",
-      "kanban": "Канбан",
-      "table": "Таблица"
+      "totalCount": "Всего: {{count}}"
     },
     "pages": {
       "recruitment": {
@@ -2489,6 +2487,11 @@
         "resources": "Ресурсы и объекты",
         "analytics": "Аналитика и отчеты"
       }
+    },
+    "views": {
+      "label": "Вид раздела «Задачи»",
+      "board": "Доска",
+      "table": "Таблица"
     },
     "projectStaff": {
       "pageTitle": "Ежедневные отчеты проекта",

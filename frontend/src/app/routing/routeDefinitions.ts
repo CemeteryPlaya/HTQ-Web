@@ -78,16 +78,18 @@ export const protectedRoutes: RouteConfig[] = [
   },
 
   // ─── Tasks ────────────────────────────────────────────────────────────
-  // `/tasks` and `/tasks/:id` are for everyone — TaskRouter serves regular
-  // employees a scoped board of their own work. The four management
-  // surfaces below are not: the roadmap, reports and resource schedule show
-  // the whole company's load, and the equipment page edits a shared
-  // register (its writes are admin-only on the backend, so leaving it open
-  // here would only mean a page full of 403s).
-  { path: '/tasks', component: lazyPages.TaskRouter, requiresAuth: true },
-  // Канбан-доски (этап S1): пункта меню ещё нет, вход по ссылке. Видимость
-  // доски решает сервер (404), поэтому гейта модуля на маршруте нет — как у
-  // `/tasks`.
+  // `/tasks`, `/tasks/list` and `/tasks/:id` are for everyone. The four
+  // management surfaces below are not: the roadmap, reports and resource
+  // schedule show the whole company's load, and the equipment page edits a
+  // shared register (its writes are admin-only on the backend, so leaving it
+  // open here would only mean a page full of 403s).
+  // Раздел «Задачи» — доски (этап S6a, решения R-01…R-04): `/tasks` ведёт на
+  // последнюю открытую доску, прежний реестр (TaskRouter — таблица) — вид
+  // «Таблица» на `/tasks/list`.
+  { path: '/tasks', component: lazyPages.TasksHome, requiresAuth: true },
+  { path: '/tasks/list', component: lazyPages.TaskRouter, requiresAuth: true },
+  // Канбан-доски: видимость доски решает сервер (404), поэтому гейта модуля
+  // на маршруте нет — как у `/tasks`.
   { path: '/tasks/board', component: lazyPages.TasksBoard, requiresAuth: true },
   { path: '/tasks/board/department/:id', component: lazyPages.TasksBoard, requiresAuth: true },
   { path: '/tasks/board/project/:id', component: lazyPages.TasksBoard, requiresAuth: true },
