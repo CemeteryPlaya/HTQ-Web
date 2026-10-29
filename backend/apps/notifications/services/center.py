@@ -108,9 +108,29 @@ def unread_pairs(*, target_type: str, target_ids: list[str], recipient_ids: list
     ).values_list("target_id", "recipient_id"))
 
 
+def _feed_companies(user_id: int, company_slug: str | None) -> list[str]:
+    """Компании, чьи уведомления показывает колокольчик этого поддомена.
+
+    БЗО компании может вестись в головном офисе (решение 19.10): его события
+    — «заявка вернулась на доработку», «бюджет утверждён» — создаются там.
+    Человеку без входа в головной офис больше негде их увидеть, поэтому они
+    показываются здесь; у кого вход есть, у того свой колокольчик там, и
+    задваивать ленту незачем.
+    """
+    slugs = [company_slug or ""]
+    if company_slug:
+        from apps.companies import interface as companies
+
+        host = companies.bpp_data_company(company_slug)
+        if host and not companies.user_may_enter_company(user_id, host):
+            slugs.append(host)
+    return slugs
+
+
 def _feed(user_id: int, company_slug: str | None):
     rows = Notification.objects.filter(recipient_id=user_id)
-    rows = rows.filter(Q(company_slug=company_slug or "") | Q(company_slug=""))
+    rows = rows.filter(Q(company_slug__in=_feed_companies(user_id, company_slug))
+                       | Q(company_slug=""))
     if not prefs_of(user_id).bell:
         return rows.none()
     return rows

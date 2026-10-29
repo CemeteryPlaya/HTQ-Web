@@ -39,11 +39,20 @@ export function CompanyMembersPanel({ slug, canEdit, canRevoke, showExternalHold
     onSuccess: invalidate,
     onError: (e) => reportApiError(e, t('companies.members.revokeFailed', 'Не удалось снять членство')),
   });
+  // Решение 19.10: участник без входа числится в компании, но войти не может.
+  const setLogin = useMutation({
+    mutationFn: ({ id, allowed }: { id: number; allowed: boolean }) =>
+      companiesApi.setMembershipLogin(slug, id, allowed),
+    onSuccess: invalidate,
+    onError: (e) => reportApiError(e, t('companies.members.loginFailed', 'Не удалось изменить вход')),
+  });
 
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         {t('companies.members.hint', 'Членство — право войти в компанию (токен получает claim company). Права внутри компании выдают роли должности и личные назначения.')}
+        {' '}
+        {t('companies.members.noLoginHint', 'Участник «без входа» числится в компании — его видно в выборе сотрудников, ему приходят уведомления и выдаются роли, — но войти на её адрес не может.')}
       </p>
       <ul className="divide-y rounded-lg border">
         {(query.data ?? []).map((m) => (
@@ -52,8 +61,20 @@ export function CompanyMembersPanel({ slug, canEdit, canRevoke, showExternalHold
             <span className="text-muted-foreground">{m.full_name}</span>
             {m.is_default && <span className="text-xs text-muted-foreground">{t('companies.members.default', 'по умолчанию')}</span>}
             {!m.is_active && <span className="text-xs text-destructive">{t('companies.members.inactive', 'учётка неактивна')}</span>}
+            {m.login_allowed === false && (
+              <Badge variant="outline" className="text-xs">{t('companies.members.noLogin', 'без входа')}</Badge>
+            )}
             {canRevoke && (
-              <Button size="sm" variant="ghost" className="ml-auto" onClick={() => revoke.mutate(m.user_id)} disabled={revoke.isPending}>
+              <Button size="sm" variant="ghost" className="ml-auto"
+                onClick={() => setLogin.mutate({ id: m.user_id, allowed: m.login_allowed === false })}
+                disabled={setLogin.isPending}>
+                {m.login_allowed === false
+                  ? t('companies.members.allowLogin', 'Открыть вход')
+                  : t('companies.members.denyLogin', 'Закрыть вход')}
+              </Button>
+            )}
+            {canRevoke && (
+              <Button size="sm" variant="ghost" onClick={() => revoke.mutate(m.user_id)} disabled={revoke.isPending}>
                 {t('companies.members.revoke', 'Снять')}
               </Button>
             )}

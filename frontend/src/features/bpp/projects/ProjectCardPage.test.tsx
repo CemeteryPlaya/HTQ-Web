@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Permissions } from '@/hooks/usePermissions';
 import type { DepthFlag } from '@/lib/auth/permissions';
+import type { MyCompany } from '@/types/companies';
 import { createTestQueryClient } from '@/test/renderWithProviders';
 
 import { ProjectCardPage } from './ProjectCardPage';
@@ -47,6 +48,12 @@ const PM = { 'project.projects': ['view'], 'project.members': [] } as Record<str
 const ADMIN = { 'project.projects': ['view', 'create', 'edit'], 'project.members': ['edit'] } as Record<string, DepthFlag[]>;
 const permissions = vi.fn(() => permissionsWith(ADMIN));
 vi.mock('@/hooks/usePermissions', () => ({ usePermissions: () => permissions() }));
+
+// Решение 19.10: где ведётся БЗО текущей компании — из `companies/v1/me`.
+const OWN_BPP: MyCompany[] = [{ slug: 'hi-tech-qazaqstan', name: 'HTQ', kind: 'construction',
+  is_default: true, is_current: true, bpp_data_company_slug: null }];
+const myCompanies = vi.fn(() => ({ companies: OWN_BPP, isLoading: false, isError: false }));
+vi.mock('@/hooks/useMyCompanies', () => ({ useMyCompanies: () => myCompanies() }));
 
 const ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
 
@@ -86,6 +93,7 @@ describe('ProjectCardPage', () => {
   beforeEach(() => {
     get.mockReset();
     permissions.mockReturnValue(permissionsWith(ADMIN));
+    myCompanies.mockReturnValue({ companies: OWN_BPP, isLoading: false, isError: false });
   });
 
   it('карточка: код, вид, заказчик, руководитель и участники по именам', async () => {
@@ -146,6 +154,18 @@ describe('ProjectCardPage', () => {
 
   it('без project.board строки «Доска задач» нет и доску не спрашивают', async () => {
     mockServer();
+    renderCard();
+    await screen.findByText('Петров Пётр');
+    expect(screen.queryByTestId('project-board')).not.toBeInTheDocument();
+    expect(get.mock.calls.some(([url]) => String(url).startsWith('tasks/'))).toBe(false);
+  });
+
+  it('БЗО ведётся в другой компании (решение 19.10) — строки «Доска задач» нет и задачи не спрашивают', async () => {
+    permissions.mockReturnValue(permissionsWith({ ...PM, 'project.board': ['view'] }));
+    myCompanies.mockReturnValue({ isLoading: false, isError: false, companies: [{
+      slug: 'hi-tech-group', name: 'LTD', kind: 'construction', is_default: true, is_current: true,
+      bpp_data_company_slug: 'hi-tech-qazaqstan', bpp_data_company_name: 'Hi-Tech Qazaqstan' }] });
+    mockServer([7, 8], [{ id: 42, name: 'ЖК «Орда» — монтаж', status: 'active' }]);
     renderCard();
     await screen.findByText('Петров Пётр');
     expect(screen.queryByTestId('project-board')).not.toBeInTheDocument();

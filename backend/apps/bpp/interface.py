@@ -1,11 +1,55 @@
-"""Межаппный интерфейс модуля БЗО (для tasks и notifications).
+"""Межаппный интерфейс модуля БЗО (для tasks, notifications и tender).
 
-Каждая функция первой строкой зовёт ``require_service("bpp")``.
+Каждая функция первой строкой зовёт ``require_service("bpp")`` — кроме
+``register_request_listener``: её зовут из ``ready()``, когда базы ещё нет
+(приём ``project.interface.register_change_listener``).
+
+Схемы стыка с тендерным модулем (пакет B-1, ``schemas/tender.py``)
+реэкспортируются отсюда: ``apps.tender`` импортирует только этот модуль
+(сторож изоляции).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Literal
+
+from apps.bpp.schemas.tender import (
+    BudgetArticle,
+    BudgetFigures,
+    ClosingFileIn,
+    CounterpartyRef,
+    DocumentRef,
+    DocumentStatusOut,
+    HandoverDocIn,
+    HandoverLineIn,
+    ProspectIn,
+    ReplacedBy,
+    RequestRef,
+    RequestStatusOut,
+    TenderActor,
+    TenderItemIn,
+    TenderHandover,
+    TenderPartIn,
+    TenderRequestSubmit,
+)
 from apps.core.services import require_service
+
+__all__ = [
+    "BudgetArticle", "BudgetFigures", "ClosingFileIn", "CounterpartyRef", "DocumentRef",
+    "DocumentStatusOut", "HandoverDocIn", "HandoverLineIn", "ProspectIn", "ReplacedBy",
+    "RequestRef", "RequestStatusOut", "TenderActor", "TenderHandover", "TenderItemIn",
+    "TenderPartIn", "TenderRequestSubmit",
+    "attach_closing_docs", "create_documents_from_tender", "documents_status",
+    "register_document_listener", "set_acceptance",
+    "agreement_brief", "budget_articles", "budget_available",
+    "cancel_requests_from_tender", "closing_docs_pending_for_user", "counterparty_brief",
+    "create_counterparty_from_prospect",
+    "find_by_number", "migrated_targets", "register_request_listener", "release_to_plan",
+    "request_status", "search_agreements", "search_counterparties",
+    "submit_request_from_tender", "upsert_counterparty_from_1c", "visible_agreement_brief",
+    "withdraw_requests_from_tender",
+]
 
 
 def closing_docs_pending_for_user(user_id: int) -> list[dict]:
@@ -114,3 +158,163 @@ def search_agreements(query: str | None, *, partner_key, token,
 
     return neighbour.search(query, counterparty_id=partner_key, token=token,
                             company=company, limit=limit)
+
+
+# ── заявка тендерного модуля (пакет B-1, T1.2; мастер-план tender T-07, T-09) ──
+#
+# Зовутся в контексте компании; пользователь — ``actor`` (``TenderActor``):
+# права и группы статей БЗО — его собственные (T-20). Ошибки — штатный
+# ``htqweb.errors.DomainError`` модуля БЗО. Подмодуль ``bpp_requests``
+# выключен у компании — ``ServiceDisabled``.
+
+def submit_request_from_tender(data: TenderRequestSubmit) -> list[RequestRef]:
+    """Части заявки tender → ЗЗ ``source="tender"`` и их отправка, одной
+    транзакцией: новая ЗЗ (``bpp_request_id=None``) или пересборка
+    существующей («Черновик»/«На доработке»), затем BR-011 под блокировкой
+    строки бюджета. Ошибка любой части откатывает все; у ``DomainError`` —
+    ``details={"part": key}``."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    return tender.submit_from_tender(data)
+
+
+def withdraw_requests_from_tender(ids, *, actor: TenderActor) -> None:
+    """Отозвать ЗЗ «На согласовании» (без решений); прочие — без изменений."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    tender.withdraw_from_tender(ids, actor=actor)
+
+
+def cancel_requests_from_tender(ids, *, actor: TenderActor, comment: str) -> None:
+    """Черновик/доработка — отмена; утверждённая — «Закрыть остаток»; на
+    согласовании — 409 ``E-STS-01``; отклонённая/отменённая/закрытая — пропуск."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    tender.cancel_from_tender(ids, actor=actor, comment=comment)
+
+
+def release_to_plan(ids, *, actor: TenderActor) -> None:
+    """«Тендер не состоялся»: снять ``source`` с утверждённых ЗЗ — их позиции
+    видны в Плане закупок у исполнителя. Не «Утверждена» — 409 ``E-STS-01``."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    tender.release_to_plan(ids, actor=actor)
+
+
+def request_status(ids) -> dict[str, RequestStatusOut]:
+    """``{id ЗЗ: RequestStatusOut}`` по ЗЗ, заведённым tender; невозможные и
+    чужие ключи в ответ не попадают."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    return tender.request_status(ids)
+
+
+def register_request_listener(fn: Callable[[RequestStatusOut], None]) -> None:
+    """Подписать соседа на смену статуса ЗЗ ``source="tender"``: ``fn`` зовётся
+    в транзакции смены (старт, утверждение, отказ, возврат, отзыв, отмена,
+    закрытие остатка); исключение ``fn`` откатывает и саму смену. Звать из
+    ``ready()`` — без ``require_service``."""
+    from apps.bpp.services.requests import listeners
+
+    listeners.add(fn)
+
+
+def budget_available(project_id, article_id, *, actor: TenderActor,
+                     role: Literal["sn", "pm"]) -> BudgetFigures:
+    """Лимит, «Задействовано» и остаток статьи по действующей версии бюджета —
+    в правах ``actor`` в роли ``role``, как у заявки: роль не назначена — 403,
+    ПМ и чужой проект — 403 ``E-REQ-05`` (BR-014), статья чужой группы — 403
+    ``E-REQ-04`` (BR-010); нет утверждённого бюджета — ``E-BUD-02``, нет
+    строки — ``E-BUD-07``."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    return tender.budget_available(project_id, article_id, actor=actor, role=role)
+
+
+def budget_articles(project_id, *, actor: TenderActor,
+                    role: Literal["sn", "pm"]) -> list[BudgetArticle]:
+    """Статьи утверждённого бюджета проекта из группы роли ``role`` (BR-010),
+    с остатком. Роль не назначена — 403."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender
+
+    return tender.budget_articles(project_id, actor=actor, role=role)
+
+
+def create_counterparty_from_prospect(data: ProspectIn, *, actor: TenderActor) -> CounterpartyRef:
+    """Карточка контрагента по реквизитам потенциального поставщика тендера
+    (T5.4): совпадение страна + рег. номер — найденная карточка
+    (``created=False``), иначе новая «Активен» правами закупщика (узел
+    ``bpp.counterparties`` create, иначе 403). Нет рег. номера, карточка
+    заблокирована или в архиве — 422 ``E-TND-14``."""
+    require_service("bpp")
+    from apps.bpp.services.requests import tender_counterparty
+
+    return tender_counterparty.create_from_prospect(data, actor=actor)
+
+
+# ── пакет B-2: документы из тендера (T5.3) ────────────────────────────────
+
+def create_documents_from_tender(data: TenderHandover) -> list[DocumentRef]:
+    """Черновики договоров и счетов по утверждённым ЗЗ тендера — от имени
+    закупщика (автора ЗЗ), идемпотентно по ``key`` документа. Схема оплаты:
+    предоплата и аванс — счёт «аванс», постоплата — «оплата после приёмки»."""
+    require_service("bpp")
+    require_service("bpp_requests")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.create_documents(data)
+
+
+def documents_status(request_ids: list[str]) -> list[DocumentStatusOut]:
+    """Договоры и счета ЗЗ: статус, оплачено по отметкам БУХ, запрос
+    закрывающих, приёмка, замена альтернативой."""
+    require_service("bpp")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.documents_status(request_ids)
+
+
+def set_acceptance(invoice_ids: list[str], *, received_at, originals_at, originals_to: str,
+                   actor: TenderActor) -> None:
+    """Отметка «Товар принят, оригиналы переданы» на счетах из тендера; у
+    счёта «после приёмки» — срок оплаты = приёмка + N банковских дней."""
+    require_service("bpp")
+    require_service("bpp_invoices")
+    from apps.bpp.services.requests import tender_documents
+
+    tender_documents.set_acceptance(invoice_ids, received_at=received_at,
+                                    originals_at=originals_at, originals_to=originals_to,
+                                    actor=actor)
+
+
+def attach_closing_docs(invoice_id: str, files: list[ClosingFileIn], *,
+                        actor: TenderActor) -> list[str]:
+    """Закрывающие из тендера на счёт по D-13: только «Ждёт закрывающих» и
+    только запрошенного типа (иначе 409); повтор не дублирует."""
+    require_service("bpp")
+    require_service("bpp_invoices")
+    from apps.bpp.services.requests import tender_documents
+
+    return tender_documents.attach_closing_docs(invoice_id, files, actor=actor)
+
+
+def register_document_listener(fn: Callable[[DocumentStatusOut], None]) -> None:
+    """Слушатель смены статуса документов из тендера — в транзакции смены
+    (как ``register_request_listener``). Зовётся из ``ready()``."""
+    from apps.bpp.services.core import doc_listeners
+
+    doc_listeners.register(fn)

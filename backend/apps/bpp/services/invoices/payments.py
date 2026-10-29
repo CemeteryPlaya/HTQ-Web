@@ -23,8 +23,7 @@ from django.utils import timezone
 
 from apps.bpp.models import Invoice, InvoiceBasis, InvoiceStatus, PaymentMark
 from apps.bpp.services.actor import Actor
-from apps.bpp.services.alternatives import kpi
-from apps.bpp.services.core import audit
+from apps.bpp.services.core import audit, doc_listeners
 from apps.bpp.services.core import files as core_files
 from apps.bpp.services.counterparties import lookup as counterparties
 from apps.bpp.services.money import fmt, money
@@ -98,7 +97,7 @@ def mark_paid(actor: Actor, invoice_id, *, pay_date: date, amount, pp_number: st
     if (inv.status == InvoiceStatus.PAID and inv.basis == InvoiceBasis.NO_CONTRACT
             and inv.counterparty_id):
         counterparties.record_success(inv.counterparty_id)
-    kpi.sync_for_document("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
+    doc_listeners.status_changed("invoice", inv.pk)  # KPI снабжения нового счёта (A5.2)
     return inv
 
 
@@ -128,7 +127,7 @@ def unmark(actor: Actor, invoice_id, mark_id, *, comment: str) -> Invoice:
     service.touch(inv, actor.user_id, "status")
     audit.record(inv, "payment_unmarked", actor_id=actor.user_id, comment=comment,
                  changes={"amount": str(mark.amount), "pay_date": mark.pay_date.isoformat()})
-    kpi.sync_for_document("invoice", inv.pk)  # снятая отметка подтверждённый KPI не откатывает
+    doc_listeners.status_changed("invoice", inv.pk)  # снятая отметка подтверждённый KPI не откатывает
     return inv
 
 
@@ -157,6 +156,7 @@ def request_docs(actor: Actor, invoice_id, *, docs: dict[str, bool] | None = Non
                   "status")
     audit.record(inv, "docs_requested", actor_id=actor.user_id, comment=inv.docs_comment,
                  changes={"docs": [DOC_TYPES[k] for k, v in wanted.items() if v]})
+    doc_listeners.status_changed("invoice", inv.pk)   # тендер вложит сканы приёмки (T-16)
     return inv
 
 
@@ -179,6 +179,7 @@ def submit_docs(actor: Actor, invoice_id) -> Invoice:
     service.touch(inv, actor.user_id, "status")
     audit.record(inv, "docs_submitted", actor_id=actor.user_id,
                  changes={"on_behalf": inv.author_id != actor.user_id})
+    doc_listeners.status_changed("invoice", inv.pk)
     return inv
 
 
@@ -190,6 +191,7 @@ def accept_docs(actor: Actor, invoice_id) -> Invoice:
     inv.status = InvoiceStatus.CLOSED
     service.touch(inv, actor.user_id, "status")
     audit.record(inv, "docs_accepted", actor_id=actor.user_id)
+    doc_listeners.status_changed("invoice", inv.pk)   # «Закрыт» — тендер закрывает поставку
     return inv
 
 
@@ -202,6 +204,7 @@ def return_docs(actor: Actor, invoice_id, *, comment: str) -> Invoice:
     inv.status, inv.docs_comment = InvoiceStatus.AWAITING_DOCS, comment
     service.touch(inv, actor.user_id, "status", "docs_comment")
     audit.record(inv, "docs_returned", actor_id=actor.user_id, comment=comment)
+    doc_listeners.status_changed("invoice", inv.pk)
     return inv
 
 

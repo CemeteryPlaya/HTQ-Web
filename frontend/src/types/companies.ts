@@ -32,6 +32,11 @@ export interface Company {
    * тот же гейт, что у остальных полей).
    */
   show_external_holders: boolean;
+  /**
+   * Решение 19.10: где ведётся БЗО компании (слаг); `null` — у неё самой.
+   * Запросы БЗО с её поддомена работают в данных той компании.
+   */
+  bpp_data_company_slug?: string | null;
 }
 
 /** Ответ `POST companies/<slug>/bankrupt` (и предпросмотра `dry_run`). */
@@ -64,6 +69,9 @@ export interface MyCompany {
   is_current: boolean;
   /** Компания в архиве — только чтение; приходит только суперпользователю. */
   is_archived?: boolean;
+  /** Решение 19.10: где ведётся БЗО этой компании — для плашки в разделе БЗО. */
+  bpp_data_company_slug?: string | null;
+  bpp_data_company_name?: string | null;
 }
 
 /**
@@ -78,6 +86,8 @@ export interface CompanyPatch {
   parent_slug?: string | null;
   show_external_holders?: boolean;
   subdomain?: string | null;
+  /** Где вести БЗО: слаг компании; `''`/`null` — у себя; нет ключа — не трогать. */
+  bpp_data_company_slug?: string | null;
 }
 
 export interface CompanyModule {
@@ -96,6 +106,11 @@ export interface CompanyMembership {
   email: string;
   is_active: boolean;
   is_default: boolean;
+  /**
+   * Решение 19.10: участник без входа числится в компании (роли, уведомления,
+   * выбор сотрудника), но войти на её поддомен не может.
+   */
+  login_allowed?: boolean;
 }
 
 /** Уровень модуля — то же множество, что `AccessLevel` в `src/types/access.ts`. */

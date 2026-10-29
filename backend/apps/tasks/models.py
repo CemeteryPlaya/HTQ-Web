@@ -1091,6 +1091,16 @@ class Task(models.Model):
             self.progress_percent = 100
 
 
+class DepartmentLinkKind(models.TextChoices):
+    """Чем отдел приходится задаче (канбан-доски, мастер-план K-08)."""
+
+    # Отдел-участник: задача на его доске, глава отдела правит её (K-06).
+    MEMBER = "member"
+    # Отдел-отправитель после переноса в другой отдел: задачу видит и следит
+    # за ходом работ, но прав на неё не получает (спека этапа 1, S1-03).
+    ORIGIN = "origin"
+
+
 class TaskDepartmentLink(models.Model):
     """A task may span several departments (cross-functional work).
 
@@ -1104,6 +1114,13 @@ class TaskDepartmentLink(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE,
                              related_name="department_links")
     department_id = models.IntegerField(db_index=True)
+    # ``db_default`` — чтобы старый код (откат выкатки, отставшая по
+    # миграциям компания) вставлял связи без поля и получал «участника».
+    kind = models.CharField(
+        max_length=10, choices=DepartmentLinkKind.choices,
+        default=DepartmentLinkKind.MEMBER, db_default=DepartmentLinkKind.MEMBER,
+        db_index=True,
+    )
 
     class Meta:
         verbose_name = "Отдел задачи"
@@ -1133,6 +1150,9 @@ class TaskAssignee(models.Model):
         default=AssigneeRole.COLLABORATOR, db_default=AssigneeRole.COLLABORATOR,
     )
     assigned_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    # Признак «новая задача» (канбан K-28, мастер-план §3.3): ``NULL`` — человек
+    # ещё не открывал задачу после назначения. Своё назначение видно сразу.
+    seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Исполнитель задачи"
@@ -1140,6 +1160,10 @@ class TaskAssignee(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_assignee"),
+        ]
+        indexes = [
+            models.Index(fields=["user_id"], name="ix_task_assignee_unseen",
+                         condition=models.Q(seen_at__isnull=True)),
         ]
 
 
@@ -1180,6 +1204,398 @@ class TaskWatcher(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["task", "user_id"],
                                     name="uq_task_watcher"),
+        ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Канбан-доски (docs/plans/2026-10-21-kanban-boards-master-plan.md, этап S1)
+#
+# Отдельной модели «доска» нет (K-01): доска — запрос над задачами, а её ключ —
+# пара (вид, id): личная — ``user_id`` владельца, отдела — id отдела ``hr``,
+# проекта — ``tasks.Project.id``. Колонка — статус задачи (K-02).
+# ─────────────────────────────────────────────────────────────────────────
+
+class BoardKind(models.TextChoices):
+    PERSONAL = "personal"
+    DEPARTMENT = "department"
+    PROJECT = "project"
+
+
+class BoardCardRank(models.Model):
+    """Порядок карточки внутри колонки доски (мастер-план §3.2).
+
+    Статус здесь не хранится: колонка — ``Task.status``. Ранг — строка
+    дробной индексации (``services/board_rank.py``), сравнивается побайтно
+    (``COLLATE "C"``). Карточки без строки идут после ранжированных, по
+    ``-created_at``: бэкфилла нет, строка появляется при первом переносе или
+    быстром добавлении.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="board_ranks")
+    rank = models.CharField(max_length=64, db_collation="C")
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Порядок карточки на доске"
+        verbose_name_plural = "Порядок карточек на досках"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "task"],
+                                    name="uq_board_card_rank"),
+        ]
+        indexes = [
+            models.Index(fields=["board_kind", "board_id", "rank"],
+                         name="ix_board_card_order"),
+        ]
+
+
+class BoardSettings(models.Model):
+    """Настройки доски (решение K-34): у каждого статуса-колонки — своё
+    название, цвет из палитры и признак «скрыта».
+
+    ``columns`` — ``{status: {"title": str, "color": str | None, "hidden": bool}}``;
+    статус без записи показывается с названием по умолчанию и без цвета.
+    ``checklist_templates`` (этап S3) — ``[{"id": str, "title": str,
+    "items": [str]}]``: кнопка «Чек-лист» и автоматизация копируют пункты.
+    Строка заводится при первом сохранении настроек.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    columns = models.JSONField(default=dict, blank=True)
+    checklist_templates = models.JSONField(default=list, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Настройки доски"
+        verbose_name_plural = "Настройки досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id"],
+                                    name="uq_board_settings"),
+        ]
+
+
+class BoardNotificationMute(models.Model):
+    """Выключенные уведомления по доске (решение K-30, мастер-план §3.4).
+
+    Строка есть — человек не получает уведомлений о своих задачах этой доски
+    (доска отдела действует на поддерево), нет — получает. Личную доску
+    выключить нельзя; адресные события («вас назначили», запросы доступа)
+    приходят всегда.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    user_id = models.IntegerField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Выключенные уведомления доски"
+        verbose_name_plural = "Выключенные уведомления досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "user_id"],
+                                    name="uq_board_notification_mute"),
+        ]
+
+
+class TaskChecklist(models.Model):
+    """Чек-лист задачи (решение K-20, мастер-план §3.6). Порядок —
+    дробный ранг ``board_rank`` (``COLLATE "C"``), как у карточек."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="checklists")
+    title = models.CharField(max_length=200)
+    position = models.CharField(max_length=64, db_collation="C")
+    created_by_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Чек-лист задачи"
+        verbose_name_plural = "Чек-листы задач"
+        indexes = [models.Index(fields=["task", "position"], name="ix_task_checklist_order")]
+
+
+class TaskChecklistItem(models.Model):
+    """Пункт чек-листа. Отметка хранит, кто и когда отметил; снятая отметка
+    стирает обоих (ограничение ``ck_checklist_item_done``)."""
+
+    checklist = models.ForeignKey(TaskChecklist, on_delete=models.CASCADE,
+                                  related_name="items")
+    text = models.CharField(max_length=500)
+    is_done = models.BooleanField(default=False, db_default=False)
+    done_by_id = models.IntegerField(null=True, blank=True)
+    done_at = models.DateTimeField(null=True, blank=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    created_by_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Пункт чек-листа"
+        verbose_name_plural = "Пункты чек-листов"
+        constraints = [
+            models.CheckConstraint(
+                condition=(models.Q(is_done=True, done_at__isnull=False)
+                           | models.Q(is_done=False, done_at__isnull=True,
+                                      done_by_id__isnull=True)),
+                name="ck_checklist_item_done"),
+        ]
+        indexes = [models.Index(fields=["checklist", "position"],
+                                name="ix_checklist_item_order")]
+
+
+class AccessRequestKind(models.TextChoices):
+    EXECUTE = "execute", "На исполнение"
+    OWN = "own", "На владение"
+
+
+class AccessRequestStatus(models.TextChoices):
+    PENDING = "pending", "Ждёт решения"
+    APPROVED = "approved", "Одобрен"
+    REJECTED = "rejected", "Отклонён"
+    CANCELLED = "cancelled", "Отозван"
+
+
+class AccessApproveMode(models.TextChoices):
+    REPLACE = "replace", "С заменой"
+    DELEGATE = "delegate", "Делегатом"
+
+
+class TaskAccessRequest(models.Model):
+    """Запрос доступа к задаче (решение K-31, мастер-план §3.5): «на
+    исполнение» — стать основным исполнителем, «на владение» — руководителем
+    (с заменой) или делегатом. Решает первый из решающих своего вида; второй
+    получает 409. ``replaced_user_id`` — кого сняли при замене (история
+    отдела, K-32)."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="access_requests")
+    requester_id = models.IntegerField(db_index=True)
+    kind = models.CharField(max_length=10, choices=AccessRequestKind.choices)
+    comment = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=10, choices=AccessRequestStatus.choices,
+                              default=AccessRequestStatus.PENDING,
+                              db_default=AccessRequestStatus.PENDING)
+    approve_mode = models.CharField(max_length=10, choices=AccessApproveMode.choices,
+                                    null=True, blank=True)
+    replaced_user_id = models.IntegerField(null=True, blank=True)
+    decided_by_id = models.IntegerField(null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_comment = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запрос доступа к задаче"
+        verbose_name_plural = "Запросы доступа к задачам"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["task", "requester_id", "kind"],
+                condition=models.Q(status="pending"),
+                name="uq_task_access_request_pending"),
+        ]
+        indexes = [models.Index(fields=["status", "created_at"],
+                                name="ix_task_access_request_status")]
+
+
+class BoardFieldType(models.TextChoices):
+    TEXT = "text"
+    NUMBER = "number"
+    DATE = "date"
+    CHECKBOX = "checkbox"
+    LIST = "list"
+
+
+class BoardField(models.Model):
+    """Своё поле доски отдела или проекта (решение K-35, этап S3).
+
+    Поля задачи — поля её домашних досок: отдела ``Task.department_id`` и
+    проекта ``Task.project_id``. ``options`` — варианты списка
+    ``[{"id": str, "name": str, "color": str | None}]``; ``id`` не меняется
+    при переименовании, на него ссылаются значения и автоматизация. Тип после
+    создания не меняется. Порядок — дробный ранг ``board_rank``.
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    name = models.CharField(max_length=100)
+    field_type = models.CharField(max_length=10, choices=BoardFieldType.choices)
+    options = models.JSONField(default=list, blank=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    show_on_card = models.BooleanField(default=False)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Поле доски"
+        verbose_name_plural = "Поля досок"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "name"],
+                                    name="uq_board_field_name"),
+        ]
+        indexes = [models.Index(fields=["board_kind", "board_id", "position"],
+                                name="ix_board_field_board")]
+
+
+class TaskFieldValue(models.Model):
+    """Значение своего поля у задачи (K-35). Заполнен один столбец — по типу
+    поля; пустое значение строкой не хранится (очистка удаляет строку)."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="field_values")
+    field = models.ForeignKey(BoardField, on_delete=models.CASCADE, related_name="values")
+    value_text = models.TextField(blank=True, default="")
+    value_number = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    value_date = models.DateField(null=True, blank=True)
+    value_bool = models.BooleanField(null=True, blank=True)
+    value_option = models.CharField(max_length=16, blank=True, default="")
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Значение поля задачи"
+        verbose_name_plural = "Значения полей задач"
+        constraints = [
+            models.UniqueConstraint(fields=["task", "field"], name="uq_task_field_value"),
+        ]
+
+
+class AutomationKind(models.TextChoices):
+    RULE = "rule"
+    CARD_BUTTON = "card_button"
+    BOARD_BUTTON = "board_button"
+    DUE = "due"
+    SCHEDULE = "schedule"
+
+
+class AutomationRule(models.Model):
+    """Автоматизация доски отдела или проекта (решения K-36…K-40, этап S4).
+
+    Вид задаёт, что запускает: правило — событие задачи (``trigger``),
+    кнопки — нажатие, команда по сроку — наступивший срок, расписание —
+    время. ``trigger``/``conditions``/``actions`` — JSON по каталогу
+    ``services/automation/catalog.py``; у расписания ``next_run_at`` —
+    следующий запуск. ``state`` — служебное состояние действий («по очереди»).
+    ``preset_key`` — автоматизация шаблона доски: повтор применения правит
+    её, а не дублирует. Срабатывают правила домашних досок задачи (K-35).
+    ``broken_reason`` — автоматизация сломана: то, на что она ссылается,
+    удалили (спецификация логики §10); такая выключена и включается только
+    правкой, прошедшей проверку. ``activated_at`` — когда её включили или
+    поменяли триггер: команда по сроку не догоняет дни раньше этого (§8).
+    """
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    kind = models.CharField(max_length=16, choices=AutomationKind.choices)
+    name = models.CharField(max_length=200, blank=True, default="")
+    icon = models.CharField(max_length=32, blank=True, default="")
+    trigger = models.JSONField(default=dict, blank=True)
+    conditions = models.JSONField(default=list, blank=True)
+    actions = models.JSONField(default=list, blank=True)
+    enabled = models.BooleanField(default=True)
+    position = models.CharField(max_length=64, db_collation="C")
+    preset_key = models.CharField(max_length=64, blank=True, default="")
+    next_run_at = models.DateTimeField(null=True, blank=True)
+    state = models.JSONField(default=dict, blank=True)
+    broken_reason = models.CharField(max_length=500, blank=True, default="", db_default="")
+    activated_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.IntegerField(null=True, blank=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+    updated_at = models.DateTimeField(auto_now=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Автоматизация доски"
+        verbose_name_plural = "Автоматизации досок"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["board_kind", "board_id", "preset_key"],
+                condition=~models.Q(preset_key=""), name="uq_automation_preset"),
+        ]
+        indexes = [models.Index(fields=["board_kind", "board_id", "kind", "position"],
+                                name="ix_automation_board")]
+
+
+class AutomationRunStatus(models.TextChoices):
+    OK = "ok"
+    NO_MATCH = "no_match"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    LIMITED = "limited"
+    SKIPPED = "skipped"
+    CHANGED = "changed"
+
+
+class AutomationRun(models.Model):
+    """Журнал запусков автоматизации (как «Журналы» Trello, хранение — 90 дней).
+
+    Строка — проверка правила на событии (условия не сошлись — ``no_match``),
+    выполнение с действиями, сбой, запрет переноса, упор в предел цепочки, а
+    также создание и правка автоматизации (``changed``, «было → стало»).
+    Доска и название — снимком: журнал переживает удаление правила.
+    """
+
+    rule = models.ForeignKey(AutomationRule, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="runs")
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    rule_name = models.CharField(max_length=200, blank=True, default="")
+    task = models.ForeignKey(Task, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="automation_runs")
+    event = models.CharField(max_length=40, blank=True, default="")
+    status = models.CharField(max_length=12, choices=AutomationRunStatus.choices)
+    actor_id = models.IntegerField(null=True, blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Запуск автоматизации"
+        verbose_name_plural = "Запуски автоматизации"
+        indexes = [
+            models.Index(fields=["board_kind", "board_id", "created_at"],
+                         name="ix_automation_run_board"),
+            models.Index(fields=["rule", "created_at"], name="ix_automation_run_rule"),
+            models.Index(fields=["created_at"], name="ix_automation_run_created"),
+        ]
+
+
+class AutomationDueMark(models.Model):
+    """Команда по сроку уже сработала на задаче с этим сроком: перенесли срок —
+    сработает снова (разбор Trello §3.7)."""
+
+    rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name="due_marks")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="automation_due_marks")
+    due_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Срабатывание команды по сроку"
+        verbose_name_plural = "Срабатывания команд по сроку"
+        constraints = [
+            models.UniqueConstraint(fields=["rule", "task", "due_date"],
+                                    name="uq_automation_due_mark"),
+        ]
+
+
+class AutomationSuggestionDismissal(models.Model):
+    """Скрытая «Рекомендация» (спецификация логики §15): подсказки личные, и
+    скрывает их каждый для себя на своей доске. ``key`` — образец действия
+    (``move:in_progress``, ``label:7`` …)."""
+
+    board_kind = models.CharField(max_length=12, choices=BoardKind.choices)
+    board_id = models.IntegerField()
+    user_id = models.IntegerField()
+    key = models.CharField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
+
+    class Meta:
+        verbose_name = "Скрытая рекомендация автоматизации"
+        verbose_name_plural = "Скрытые рекомендации автоматизации"
+        constraints = [
+            models.UniqueConstraint(fields=["board_kind", "board_id", "user_id", "key"],
+                                    name="uq_automation_suggestion_dismissal"),
         ]
 
 
@@ -1489,6 +1905,8 @@ class TaskComment(models.Model):
                              related_name="comments")
     author_id = models.IntegerField(null=True, blank=True)
     body = models.TextField()
+    # Комментарий написала автоматизация доски (этап S4b): лента называет правило.
+    via_rule_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
@@ -1520,7 +1938,11 @@ class TaskAttachment(models.Model):
 
 
 class TaskActivity(models.Model):
-    """Append-only log of task field changes."""
+    """Append-only log of task field changes.
+
+    ``via_rule_id`` — правку сделала автоматизация доски (этап S4): лента
+    подписывает её «через автоматизацию»; ``actor_id`` у правила пуст, у
+    кнопки — нажавший."""
 
     task = models.ForeignKey(Task, on_delete=models.CASCADE,
                              related_name="activities")
@@ -1528,6 +1950,7 @@ class TaskActivity(models.Model):
     field_name = models.CharField(max_length=50)
     old_value = models.TextField(null=True, blank=True)
     new_value = models.TextField(null=True, blank=True)
+    via_rule_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())

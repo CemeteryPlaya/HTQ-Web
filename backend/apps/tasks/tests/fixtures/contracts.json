@@ -53,7 +53,7 @@
     },
     "TaskListResponse": {
       "source": "services/task/app/schemas/task.py::TaskListResponse",
-      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено.",
+      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено. can (канбан K1.6) — что вызывающему можно с задачей: у списка {claim}, у карточки {full_edit, soft_edit, comment, transfer, claim, delete}; department_links — отделы задачи с видом связи (member/origin).",
       "fields": {
         "id": "int",
         "key": "str",
@@ -103,12 +103,13 @@
         "completed_at": "str|null",
         "subtask_count": "int",
         "created_at": "str",
-        "updated_at": "str"
+        "updated_at": "str",
+        "can": "dict"
       }
     },
     "TaskDetailResponse": {
       "source": "services/task/app/schemas/task.py::TaskDetailResponse",
-      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. volumes — объёмы работ задачи («развезти 250 валов»), из которых считается выполнение по штукам вместо статусов. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено.",
+      "added_after_fastapi": "effective_contractor — кто РЕАЛЬНО выполняет задачу: своё значение или унаследованное с роудмапа/площадки/проекта (null = своя команда). roadmap_id/roadmap_name/roadmap_color — пакет работ, уровень между блоком и задачей. site_block_id/site_block_name — блок объекта («на блок I»), уровень ниже объекта работ. Ни того, ни другого в FastAPI-схеме не было. volumes — объёмы работ задачи («развезти 250 валов»), из которых считается выполнение по штукам вместо статусов. Поля ДОБАВЛЕНЫ, ничего не переименовано и не выброшено. can (канбан K1.6) — что вызывающему можно с задачей: у списка {claim}, у карточки {full_edit, soft_edit, comment, transfer, claim, delete}; department_links — отделы задачи с видом связи (member/origin).",
       "fields": {
         "id": "int",
         "key": "str",
@@ -168,7 +169,12 @@
         "incoming_links": "list",
         "volumes": "list",
         "created_at": "str",
-        "updated_at": "str"
+        "updated_at": "str",
+        "can": "dict",
+        "department_links": "list",
+        "checklists": "list",
+        "pending_access_requests": "int",
+        "home_boards": "list"
       }
     },
     "TaskStats": {

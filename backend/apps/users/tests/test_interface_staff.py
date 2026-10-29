@@ -42,3 +42,17 @@ def test_inactive_staff_is_excluded():
     _user("gone", staff=True, status=UserStatus.SUSPENDED)
 
     assert interface.staff_user_ids() == []
+
+
+@pytest.mark.django_db
+def test_elevated_users_are_staff_and_superusers_with_active_accounts():
+    """``elevated_user_ids`` (канбан, K-31): те, чей токен несёт ``is_admin``,
+    — запасные решающие запросов доступа к задаче."""
+    staff = _user("kb-staffer", staff=True)
+    root = _user("kb-root", superuser=True)
+    plain = _user("kb-plain")
+    gone = _user("kb-gone", staff=True, status=UserStatus.SUSPENDED)
+
+    ids = set(interface.elevated_user_ids())
+    assert {staff.id, root.id} <= ids
+    assert plain.id not in ids and gone.id not in ids

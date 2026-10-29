@@ -63,6 +63,7 @@ from apps.bpp.models import (
     AccountableStatus,
     AdvanceReport,
     PurchaseRequest,
+    RequestSource,
     RequestStatus,
 )
 from apps.bpp.services.accountable import accountable as accountable_service
@@ -133,8 +134,17 @@ def _request_can_view(owner_id, token) -> bool:
     return req is not None and request_service.can_view(actor_from_token(token), req)
 
 
+def _refuse_tender(req: PurchaseRequest | None) -> None:
+    """Замок T-07 и на документах: ЗЗ тендерного модуля в БЗО только
+    читается — её файлы не добавляются, не удаляются и не версионируются
+    (409 ``E-FIL-06``, текст — как у ``E-STS-02``)."""
+    if req is not None and req.source == RequestSource.TENDER:
+        raise files.FilesLocked(request_service.tender_locked(req).message)
+
+
 def _request_can_modify(owner_id, token) -> None:
     req = _request(owner_id)
+    _refuse_tender(req)
     if req is None or req.author_id != token.user_id:
         raise files.FilesForbidden(
             "Менять документы заявки может только её автор. Если это ошибка, "
@@ -156,6 +166,7 @@ def _request_can_version(owner_id, token, file_type) -> bool:
     отправки, пока заявка не в финальном статусе (``apps.files`` спрашивает
     это вместо ``can_modify`` на пути новой версии)."""
     req = _request(owner_id)
+    _refuse_tender(req)
     if req is None or req.author_id != token.user_id:
         raise files.FilesForbidden(
             "Новую версию документа заявки загружает её автор. Если это ошибка, "

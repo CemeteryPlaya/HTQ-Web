@@ -1,6 +1,8 @@
 from django.http import JsonResponse
 
 from apps.core.services import disabled_layer, disabled_payload
+from htqweb.tenancy import bpp_delegation
+from htqweb.tenancy.context import reset_company, set_company
 
 # Префикс URL → имя сервиса в реестре. Единственное место маппинга.
 PREFIX_TO_SERVICE = {
@@ -31,6 +33,7 @@ PREFIX_TO_SERVICE = {
     "/api/bpp/v1/kpi": "bpp_alternatives",
     "/api/bpp/v1/accountable": "bpp_accountable",
     "/api/bpp/": "bpp",
+    "/api/tender/": "tender",
     "/ws/messenger/": "messenger",
     "/ws/sfu/": "conference",
 }
@@ -86,6 +89,16 @@ class ServiceGateMiddleware:
         for prefix, name in PREFIX_TO_SERVICE.items():
             if prefix_matches(request.path, prefix):
                 off = disabled_layer(name)
+                if off is None and bpp_delegation.is_delegated(request):
+                    # Запрос БЗО переведён в компанию данных (решение 19.10) —
+                    # рубильник спрошен у неё; у компании адреса модуль тоже
+                    # обязан быть включён, иначе выключенный раздел открывался
+                    # бы через чужие данные.
+                    token = set_company(request.address_company["slug"])
+                    try:
+                        off = disabled_layer(name)
+                    finally:
+                        reset_company(token)
                 if off is not None:
                     return JsonResponse(disabled_payload(*off), status=503)
                 break

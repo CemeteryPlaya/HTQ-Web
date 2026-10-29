@@ -51,6 +51,10 @@ export const companiesApi = {
   /** 409 `self_revoke` — своё членство снять нельзя. */
   revokeMembership: (slug: string, userId: number) =>
     api.delete<void>(path(`companies/${slug}/memberships/${userId}`)),
+  /** Решение 19.10: «вход разрешён»; 409 `self_revoke` — закрыть вход себе нельзя. */
+  setMembershipLogin: (slug: string, userId: number, loginAllowed: boolean) =>
+    api.patch<CompanyMembership>(path(`companies/${slug}/memberships/${userId}`),
+      { login_allowed: loginAllowed }),
 
   /**
    * Задача 7 блока C: держатели прав из вышестоящих компаний. 403 с телом,

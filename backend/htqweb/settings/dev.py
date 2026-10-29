@@ -15,3 +15,7 @@ STORAGES = {
     **STORAGES,  # noqa: F405  (default из base)
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
+
+# Портал поставщика: стенд без HTTPS — cookie устройства без Secure и без
+# префикса ``__Secure-`` (браузер не примет такую cookie по http).
+TENDER_PORTAL_INSECURE_COOKIE = True

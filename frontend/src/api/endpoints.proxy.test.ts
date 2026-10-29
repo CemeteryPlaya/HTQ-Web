@@ -31,4 +31,9 @@ describe('таблица прокси dev-сервера', () => {
 
     expect(missing).toEqual([]);
   });
+
+  it('знает тендерный модуль (T0.4): домен tender в API_ENDPOINTS и в прокси', () => {
+    expect(API_ENDPOINTS).toHaveProperty('tender', 'tender/v1');
+    expect(viteConfig).toContain('"^/api/tender/"');
+  });
 });

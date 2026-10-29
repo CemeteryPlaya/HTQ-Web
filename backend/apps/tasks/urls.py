@@ -17,7 +17,7 @@ over it with a 307) — BOTH are registered, because a 307 that drops the
 convention exists to prevent.
 """
 
-from django.urls import path
+from django.urls import include, path
 
 from . import views
 
@@ -32,6 +32,10 @@ urlpatterns = [
     path("tasks/<int:task_id>", views.task_detail),
     path("tasks/<int:task_id>/", views.task_detail),
     path("tasks/<int:task_id>/transitions/", views.task_transitions),
+    path("tasks/<int:task_id>/transfer", views.task_transfer),
+    path("tasks/<int:task_id>/transfer/", views.task_transfer),
+    path("tasks/<int:task_id>/claim", views.task_claim),
+    path("tasks/<int:task_id>/claim/", views.task_claim),
     path("tasks/<int:task_id>/assignees/", views.update_assignees),
     path("tasks/<int:task_id>/supervisor/", views.update_supervisor),
     path("tasks/<int:task_id>/delegates/", views.task_delegates),
@@ -267,4 +271,15 @@ urlpatterns = [
     # ── holding — сводка по группе (блок H) ──────────────────────────────────
     path("holding/projects", views.holding_projects),
     path("holding/projects/", views.holding_projects),
+
+    # ── канбан-доски (мастер-план §6.1–6.2) ──────────────────────────────────
+    path("", include("apps.tasks.urls_boards")),
+    # ── чек-листы (§6.3) ─────────────────────────────────────────────────────
+    path("", include("apps.tasks.urls_checklists")),
+    # ── запросы доступа (§6.2, K-31, K-32) ───────────────────────────────────
+    path("", include("apps.tasks.urls_access")),
+    # ── свои поля досок (K-35, этап S3) ──────────────────────────────────────
+    path("", include("apps.tasks.urls_fields")),
+    # ── автоматизация досок (K-36…K-40, этап S4) ─────────────────────────────
+    path("", include("apps.tasks.urls_automation")),
 ]

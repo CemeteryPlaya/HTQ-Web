@@ -890,9 +890,128 @@ export interface Task {
   incoming_links?: TaskLink[];
   /** Объёмы работ: «развезти 250 валов», из них сделано 180. */
   volumes?: TaskVolume[];
+  /** Что вызывающему можно с задачей — считает сервер (канбан K1.6). */
+  can?: TaskCan;
+  /** Отделы задачи с видом связи; `origin` — отдел-отправитель переноса. */
+  department_links?: TaskDepartmentLink[];
+  /** Чек-листы (канбан S2). */
+  checklists?: Checklist[];
+  /** Сколько ждущих запросов доступа вызывающий может решить (K-31). */
+  pending_access_requests?: number;
+  /** Домашние доски: поля со значениями и шаблоны чек-листов (K-35, S3). */
+  home_boards?: TaskHomeBoard[];
 
   created_at: string;
   updated_at: string;
+}
+
+/** Тип своего поля доски (K-35, канбан S3); после создания не меняется. */
+export type BoardFieldType = 'text' | 'number' | 'date' | 'checkbox' | 'list';
+
+/** Вариант поля-списка: `id` не меняется при переименовании. */
+export interface BoardFieldOption {
+  id: string;
+  name: string;
+  /** Цвет из палитры досок (`BOARD_COLORS`) или без цвета. */
+  color: string | null;
+}
+
+/** Своё поле доски отдела или проекта. */
+export interface BoardFieldDef {
+  id: number;
+  board_kind: 'department' | 'project';
+  board_id: number;
+  name: string;
+  type: BoardFieldType;
+  options: BoardFieldOption[];
+  show_on_card: boolean;
+  position: string;
+}
+
+/** Поле домашней доски задачи со значением: текст, число строкой, дата
+ * ISO, `id` варианта; флажок — всегда `boolean`; пусто — `null`. */
+export interface TaskBoardField extends BoardFieldDef {
+  value: string | boolean | null;
+}
+
+/** Шаблон чек-листа доски: кнопка «Чек-лист» копирует его пункты. */
+export interface ChecklistTemplate {
+  id: string;
+  title: string;
+  items: string[];
+}
+
+/** Домашняя доска задачи — отдела `department_id` или проекта `project_id`:
+ * поля задачи — её поля (доска вышестоящего отдела свои не применяет). */
+export interface TaskHomeBoard {
+  kind: 'department' | 'project';
+  id: number;
+  title: string | null;
+  fields: TaskBoardField[];
+  checklist_templates: ChecklistTemplate[];
+  /** Кнопки автоматизации доски на карточке (этап S4; интерфейс — S5):
+   * ``available`` — условия кнопки сошлись на этой карточке сейчас, иначе
+   * ``reason`` (этап S4b). */
+  buttons?: Array<{ id: number; name: string; icon: string | null; available?: boolean;
+    reason?: string | null }>;
+}
+
+/**
+ * Флаги прав на задачу — те же правила, что у ручек: кнопка показывается по
+ * флагу, и сервер на неё не ответит 403. Карточка отдаёт все флаги, строка
+ * списка — только `claim`, поэтому каждый флаг необязателен: нет флага —
+ * нет действия.
+ */
+export interface TaskCan {
+  full_edit?: boolean;
+  soft_edit?: boolean;
+  comment?: boolean;
+  transfer?: boolean;
+  claim?: boolean;
+  delete?: boolean;
+  /** Какие запросы доступа можно отправить сейчас (канбан K-31). */
+  request_access?: TaskAccessKind[];
+  /** Решает ли вызывающий запросы доступа к этой задаче. */
+  decide_access?: boolean;
+}
+
+/** Вид запроса доступа: стать основным исполнителем или руководителем. */
+export type TaskAccessKind = 'execute' | 'own';
+
+/** Пункт чек-листа (канбан S2, мастер-план §3.6). */
+export interface ChecklistItem {
+  id: number;
+  text: string;
+  is_done: boolean;
+  done_by: { id: number; name: string | null } | null;
+  done_at: string | null;
+  position: string;
+}
+
+/** Чек-лист целиком — так его отдаёт каждая ручка чек-листов. */
+export interface Checklist {
+  id: number;
+  title: string;
+  position: string;
+  items: ChecklistItem[];
+  done: number;
+  total: number;
+}
+
+export interface TaskDepartmentLink {
+  department_id: number;
+  name: string;
+  /** `member` — отдел-участник; `origin` — отправитель: видит ход, прав не имеет. */
+  kind: 'member' | 'origin';
+}
+
+/** Вкладка списка задач, которую отбирает сервер (`?scope=`). */
+export type TaskListScope = 'mine' | 'department';
+
+export interface TaskTransferBody {
+  department_id: number;
+  /** Только у задачи без отдела: от какого из своих отделов отправляет глава. */
+  sender_department_id?: number;
 }
 
 /* ---------- Resource planning (Gantt) ---------- */

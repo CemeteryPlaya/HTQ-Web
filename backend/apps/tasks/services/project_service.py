@@ -17,6 +17,7 @@ from __future__ import annotations
 import operator
 from functools import reduce
 
+from django.db import transaction
 from django.db.models import Case, Count, F, IntegerField, Q, Sum, When
 
 from htqweb import date_rules
@@ -28,22 +29,28 @@ from . import board_scope
 from . import hydration
 from . import project_link
 from . import site_service
+from . import task_scope
 
 
-def scope_for(token) -> tuple[bool, int | None]:
-    """``(employee_scope, department_id)`` — elevated callers see everything."""
-    if token.is_elevated:
-        return False, None
-    return True, hydration.employee_department_id(token.user_id)
+def scope_for(request) -> tuple[bool, frozenset[int]]:
+    """``(employee_scope, department_ids)`` — elevated callers see everything.
+
+    Отделы — поддеревья своего и управляемых (``TaskScope``, канбан K1.4,
+    S1-23): задача подотдела видна в списке, значит видна и доска её
+    проекта."""
+    scope = task_scope.for_request(request)
+    if scope.elevated:
+        return False, frozenset()
+    return True, scope.department_ids
 
 
-def _visible(employee_scope: bool, department_id: int | None, refs=None):
+def _visible(employee_scope: bool, department_ids, refs=None):
     """Доски в зоне видимости. ``refs`` — доски «Проектов» держателя «Доски
-    задач проекта» (``board_scope.board_refs_for``), в добавок к отделу."""
+    задач проекта» (``board_scope.board_refs_for``), в добавок к отделам."""
     qs = Project.objects.all()
     if not employee_scope:
         return qs
-    conds = [Q(department_id=department_id)] if department_id is not None else []
+    conds = [Q(department_id__in=list(department_ids))] if department_ids else []
     linked = board_scope.board_q(refs)
     if linked is not None:
         conds.append(linked)
@@ -54,9 +61,9 @@ def _visible(employee_scope: bool, department_id: int | None, refs=None):
     return qs.filter(reduce(operator.or_, conds))
 
 
-def list_projects(*, employee_scope: bool, department_id: int | None, refs=None,
+def list_projects(*, employee_scope: bool, department_ids, refs=None,
                   project_ref: str | None = None) -> list[Project]:
-    qs = _visible(employee_scope, department_id, refs)
+    qs = _visible(employee_scope, department_ids, refs)
     if project_ref:
         # Доска «Проекта» — для ссылки с его карточки (одна на проект).
         qs = qs.filter(project_ref=project_ref)
@@ -66,8 +73,8 @@ def list_projects(*, employee_scope: bool, department_id: int | None, refs=None,
 
 
 def get_project(project_id: int, *, employee_scope: bool,
-                department_id: int | None, refs=None) -> Project:
-    project = _visible(employee_scope, department_id, refs).filter(
+                department_ids, refs=None) -> Project:
+    project = _visible(employee_scope, department_ids, refs).filter(
         pk=project_id).first()
     if project is None:
         raise Http404("Project not found")
@@ -101,10 +108,15 @@ def update_project(project_id: int, changes: dict) -> Project:
 
 def delete_project(project_id: int) -> None:
     """Tasks keep existing and lose their project link (FK is SET_NULL)."""
+    from .automation import refs
+
     project = Project.objects.filter(pk=project_id).first()
     if project is None:
         raise Http404("Project not found")
-    project.delete()
+    with transaction.atomic():
+        # Доски проекта больше нет — её автоматизации сломаны (решение L-01).
+        refs.board_gone("project", project.pk, "проект задач удалён")
+        project.delete()
 
 
 def _metrics(project_ids: list[int]) -> dict[int, dict]:

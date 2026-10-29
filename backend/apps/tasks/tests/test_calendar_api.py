@@ -267,9 +267,10 @@ def test_exceptions_appear_on_the_event_payload():
 
 @pytest.mark.django_db
 def test_timeline_returns_tasks_and_events():
+    # Автор — вызывающий: лента отдаёт только видимые ему задачи (S1-17).
     Task.objects.create(key="TASK-1", summary="В работе",
                         start_date=dt.date(2026, 4, 2),
-                        due_date=dt.date(2026, 4, 5))
+                        due_date=dt.date(2026, 4, 5), reporter_id=USER)
     start = dt.datetime(2026, 4, 3, 10, tzinfo=dt.timezone.utc)
     _mk_event(start_at=start)
     resp = Client().get(f"{CAL}/timeline/?start=2026-04-01&end=2026-04-30",

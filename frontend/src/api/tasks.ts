@@ -13,7 +13,7 @@ import type {
   WorkVolumeType, WorkVolumeUnit, EquipmentUsage,
   DailyReport, DailyReportBoardRow, DailyReportRevision, PlanFactNode,
   ProjectStaffBoard, ProjectStaffReport, ProjectStaffRevision,
-  ProjectBoardCreate, ProjectLinkCandidate,
+  ProjectBoardCreate, ProjectLinkCandidate, TaskTransferBody,
 } from '@/types/tasks';
 import i18next from '@/i18n';
 
@@ -752,6 +752,18 @@ export const deleteTask = async (id: number): Promise<void> => {
   await api.delete(`${BASE}tasks/${id}/`);
 };
 
+/** «Взять в работу»: неразобранная задача своего отдела → исполнитель я, «В работе». */
+export const claimTask = async (id: number): Promise<Task> => {
+  const res = await api.post(`${BASE}tasks/${id}/claim/`);
+  return normalizeTask(res.data);
+};
+
+/** «Отправить в отдел»: исполнители снимаются, задача встаёт в «К выполнению». */
+export const transferTask = async (id: number, body: TaskTransferBody): Promise<Task> => {
+  const res = await api.post(`${BASE}tasks/${id}/transfer/`, body);
+  return normalizeTask(res.data);
+};
+
 export const fetchTaskStats = async (params?: Record<string, string>): Promise<TaskStats> => {
   const query = buildQuery(params, TASK_FIELD_ALIASES);
   const res = await api.get(`${BASE}tasks/stats/${query}`);
@@ -941,7 +953,12 @@ export const deleteNotification = async (id: string): Promise<void> => {
 export const notificationTargetUrl = (
   n: Pick<Notification, 'target_type' | 'target_id' | 'task' | 'verb' | 'url'>,
 ): string | null => {
-  if (n.target_type === 'task' && n.target_id) return `/tasks/${n.target_id}`;
+  // Уведомления о задачах с канбан-досок (этап S2) ведут на доску с окном
+  // карточки — их ссылку положил писатель; старые строки — на страницу задачи.
+  if (n.target_type === 'task' && n.target_id) {
+    if (n.url && n.url.startsWith('/tasks/board?')) return n.url;
+    return `/tasks/${n.target_id}`;
+  }
   if (n.target_type === 'calendar_event' && n.target_id)
     return `/calendar?event=${n.target_id}`;
   if (n.target_type === 'employee' && n.target_id)

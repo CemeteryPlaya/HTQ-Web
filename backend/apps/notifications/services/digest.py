@@ -50,6 +50,21 @@ def _companies_of(user_id: int) -> list[str]:
     return [slug for slug in companies.user_company_slugs(user_id) if slug in active]
 
 
+def _link_company(user_id: int, slug: str | None) -> str | None:
+    """Компания, на чей поддомен вести человека по позиции компании ``slug``.
+
+    Решение 19.10: ПМ без входа в головной офис работает с его БЗО через свою
+    компанию (``Company.bpp_data_company``) — туда и ссылка; на поддомен
+    головного офиса его просто не пустят.
+    """
+    if slug is None or companies.user_may_enter_company(user_id, slug):
+        return slug
+    for delegator in companies.companies_delegating_bpp_to(slug):
+        if companies.user_may_enter_company(user_id, delegator):
+            return delegator
+    return slug
+
+
 def _absolute(url: str, slug: str | None) -> str:
     """Ссылка позиции — абсолютная: в письме и Telegram относительный путь не
     кликабелен. Позиция компании ведёт на её поддомен (там её таблицы),
@@ -76,7 +91,8 @@ def _collect(user_id: int) -> list[dict]:
                 fallback("notifications.digest.source_failed", None,
                          reason="источник сводки упал", exc=exc, expected=True, source=key)
                 continue
-            items.extend({**item, "url": _absolute(item.get("url") or "", slug),
+            link_slug = _link_company(user_id, slug)
+            items.extend({**item, "url": _absolute(item.get("url") or "", link_slug),
                           "path": item.get("url") or "", "section": section,
                           "landing_url": landing_url}
                          for item in got or [])

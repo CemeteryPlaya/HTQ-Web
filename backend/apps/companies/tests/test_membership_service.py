@@ -26,6 +26,7 @@ def test_list_joins_user_brief(company, user):
     assert rows == [{
         "user_id": user.id, "username": "ivanov", "full_name": "Иван Иванов",
         "email": "ivanov@example.test", "is_active": True, "is_default": True,
+        "login_allowed": True,
     }]
 
 

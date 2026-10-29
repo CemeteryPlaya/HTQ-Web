@@ -57,6 +57,7 @@ import secrets
 from types import SimpleNamespace
 from typing import Iterable
 
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from htqweb import phone as phone_utils
@@ -135,6 +136,41 @@ def _derive_username(email: str) -> str:
     local = (email.split("@", 1)[0] if email else "") or "user"
     username = "".join(ch for ch in local if ch.isalnum() or ch in {".", "_", "-"})[:32]
     return username or "user"
+
+
+#: Домен адресов служебных учёток: ``.invalid`` зарезервирован (RFC 2606) и
+#: никогда не доставляется — письмо на служебную учётку уйти не может.
+SERVICE_EMAIL_DOMAIN = "service.invalid"
+
+
+def ensure_service_account(username: str, *, first_name: str, last_name: str) -> int:
+    """Служебная учётка соседа — «автор» действий без человека-пользователя
+    (файлы КП поставщика с портала tender, T3.4). Идемпотентно по
+    ``username``: возвращает id существующей или новой.
+
+    Войти ею нельзя ничем: статус ``suspended`` (вход пускает только
+    ``active``), пароль непригоден (``set_unusable_password``), адрес — в
+    недоставляемом домене. Существующую учётку не трогает — в том числе не
+    «размораживает», если её статус поменяли руками."""
+    require_service("users")
+    username = (username or "").strip()
+    if not username:
+        raise ValueError("ensure_service_account: пустое имя учётки")
+    user = User.objects.filter(username=username).first()
+    if user is not None:
+        return user.id
+    user = User(username=username, email=f"{username}@{SERVICE_EMAIL_DOMAIN}",
+                first_name=first_name, last_name=last_name,
+                display_name=f"{first_name} {last_name}".strip() or username,
+                status=UserStatus.SUSPENDED)
+    user.set_unusable_password()
+    try:
+        with transaction.atomic():
+            user.save()
+    except IntegrityError:
+        # Параллельный вызов успел первым — его учётка и есть ответ.
+        return User.objects.get(username=username).id
+    return user.id
 
 
 def get_user_brief(user_id: int) -> dict | None:
@@ -245,6 +281,22 @@ def staff_user_ids() -> list[int]:
         .order_by("id")
         .values_list("id", flat=True)
     )
+
+
+def elevated_user_ids() -> list[int]:
+    """Id пользователей с ДЕЙСТВУЮЩЕЙ учёткой и ``is_staff`` или
+    ``is_superuser`` — тех, чей токен несёт ``is_admin``
+    (``TokenPayload.is_elevated``), по id.
+
+    Потребитель — запросы доступа к задачам (канбан, K-31): когда решить
+    запрос по правилам некому, его решает администратор задач, и уведомление
+    о запросе должно дойти до него, а не повиснуть. Состав компании отбирает
+    вызывающий (``companies.interface.active_member_ids``).
+    """
+    require_service("users")
+    return list(User.objects
+                .filter(Q(is_staff=True) | Q(is_superuser=True), status=UserStatus.ACTIVE)
+                .order_by("id").values_list("id", flat=True))
 
 
 def is_superuser(user_id: int) -> bool:

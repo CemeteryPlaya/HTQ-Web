@@ -137,6 +137,34 @@ PERIODIC_TASKS: tuple[PeriodicTaskSpec, ...] = (
             "агрегат против пересчёта по позициям, расхождение — алерт."
         ),
     ),
+    # tasks/0036 — автоматизация досок (канбан S4): по сроку, по расписанию, уборка.
+    PeriodicTaskSpec(
+        name="tasks.automation_due",
+        task="apps.tasks.tasks.automation_due_dispatch",
+        schedule=Interval(every=15, period="minutes"),
+        description=(
+            "Команды досок «по сроку» (канбан S4): диспетчер без компании, веером по "
+            "действующим компаниям; каждая — раз на «задачу + срок»."
+        ),
+    ),
+    PeriodicTaskSpec(
+        name="tasks.automation_schedule",
+        task="apps.tasks.tasks.automation_schedule_dispatch",
+        schedule=Interval(every=5, period="minutes"),
+        description=(
+            "Команды досок «по расписанию» (канбан S4): диспетчер без компании, веером "
+            "по действующим компаниям."
+        ),
+    ),
+    PeriodicTaskSpec(
+        name="tasks.automation_runs_purge",
+        task="apps.tasks.tasks.automation_runs_purge_dispatch",
+        schedule=Crontab(minute="10", hour="3", timezone="Asia/Almaty"),
+        description=(
+            "Уборка журнала запусков автоматизации досок старше 90 дней (канбан S4): "
+            "диспетчер без компании, веером по действующим компаниям."
+        ),
+    ),
     # bpp/0012 — уборка потерянных разборов выписки, раз в 10 минут.
     PeriodicTaskSpec(
         name="bpp.bank_import_reaper",

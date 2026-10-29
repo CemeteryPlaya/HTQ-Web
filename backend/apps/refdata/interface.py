@@ -12,12 +12,12 @@ from apps.core.services import require_service
 
 from .services import editing, lookup
 from .services import production_calendar as calendar
-from .services.lookup import RefdataMissing  # noqa: F401 — часть контракта
+from .services.lookup import RateOut, RefdataMissing  # noqa: F401 — часть контракта
 
-__all__ = ["RefdataMissing", "active_articles", "add_bank_days", "add_working_days",
+__all__ = ["RateOut", "RefdataMissing", "active_articles", "add_bank_days", "add_working_days",
            "article_brief", "article_groups", "bank_days_before", "can_edit",
            "contract_threshold", "country_brief", "day_type", "days_between",
-           "exchange_rate", "is_bank_day", "is_working_day", "mrp", "production_days",
+           "exchange_rate", "exchange_rate_on_or_before", "is_bank_day", "is_working_day", "mrp", "production_days",
            "uom_brief", "uom_id", "vat_rate", "working_days_between"]
 
 
@@ -39,6 +39,13 @@ def contract_threshold(on_date: date) -> Decimal:
 def exchange_rate(currency: str, on_date: date) -> Decimal | None:
     require_service("refdata")
     return lookup.exchange_rate(currency, on_date)
+
+
+def exchange_rate_on_or_before(currency: str, on_date: date) -> RateOut | None:
+    """Последний курс не позже даты (``RateOut(rate, on_date)``); KZT — 1 на ту
+    же дату; курса нет ни на одну дату не позже — ``None``."""
+    require_service("refdata")
+    return lookup.exchange_rate_on_or_before(currency, on_date)
 
 
 def article_brief(ids: list[str]) -> dict[str, dict]:

@@ -143,6 +143,11 @@ def ensure_company_membership(user_id: int | None) -> None:
     ``employee-basic``; уже выданное не трогается (``grant_membership``
     идемпотентна). Увольнение и удаление карточки членство не отзывают: это
     отдельное решение, как и снятие ролей при отзыве членства.
+
+    Членство БЕЗ входа (решение 19.10) — если человек входит в компанию, чьё
+    БЗО ведётся здесь: ПМ из Hi-Tech Group LTD «просто есть» в штате головного
+    офиса, работает с его данными через свой поддомен, а войти в головной
+    офис не может.
     """
     if user_id is None:
         return
@@ -151,7 +156,9 @@ def ensure_company_membership(user_id: int | None) -> None:
         return
     from apps.companies import interface as companies
 
-    companies.grant_membership(slug, user_id)
+    login_allowed = not any(companies.user_may_enter_company(user_id, delegator)
+                            for delegator in companies.companies_delegating_bpp_to(slug))
+    companies.grant_membership(slug, user_id, login_allowed=login_allowed)
 
 
 @transaction.atomic

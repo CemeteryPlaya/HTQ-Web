@@ -42,10 +42,10 @@ def test_me_lists_active_memberships_and_marks_current(client, group):
     assert res.json() == [
         {"slug": "hi-tech-qazaqstan", "subdomain": None, "name": "Hi-Tech Qazaqstan",
          "kind": "construction", "is_default": True, "is_current": True,
-         "is_archived": False},
+         "is_archived": False, "bpp_data_company_slug": None, "bpp_data_company_name": None},
         {"slug": "hi-tech-group", "subdomain": None, "name": "Hi-Tech Group",
          "kind": "holding", "is_default": False, "is_current": False,
-         "is_archived": False},
+         "is_archived": False, "bpp_data_company_slug": None, "bpp_data_company_name": None},
     ]
 
 
@@ -80,7 +80,8 @@ def test_me_on_archived_subdomain_marks_it_current(client, group):
     assert res.status_code == 200
     assert res.json() == [
         {"slug": "keg", "subdomain": None, "name": "KEG", "kind": "service",
-         "is_default": False, "is_current": True, "is_archived": True},
+         "is_default": False, "is_current": True, "is_archived": True,
+         "bpp_data_company_slug": None, "bpp_data_company_name": None},
     ]
 
 
@@ -104,7 +105,9 @@ def test_superuser_lists_all_by_default_and_filters_by_status(client, group):
                    "kind": "construction", "status": "active", "country": "KZ",
                    "parent_slug": "hi-tech-group", "successor_slug": None, "archived_at": None,
                    # Задача 7 блока C: включено по умолчанию (решение заказчика 4).
-                   "show_external_holders": True}
+                   "show_external_holders": True,
+                   # Решение 19.10: БЗО ведётся у себя.
+                   "bpp_data_company_slug": None}
 
     res = client.get(f"{BASE}/companies?status=archived", **auth(superuser_token()))
     assert [c["slug"] for c in res.json()] == ["keg"]

@@ -184,3 +184,63 @@ def calendar_event_reminder_dispatch() -> dict:
     require_service("tasks")
     return fan_out_to_companies(calendar_event_reminder,
                                 label="tasks.calendar_event_reminder_dispatch")
+
+
+# ── автоматизация досок (канбан, этап S4) ──────────────────────────────
+
+@shared_task(name="apps.tasks.tasks.automation_due")
+@company_task
+def automation_due() -> int:
+    """Команды досок «по сроку» на сегодня (по Алматы) — по разу на «задачу +
+    срок» (``services/automation/scheduled.py``). Возвращает число сработавших."""
+    require_service("tasks")
+    from .services.automation import scheduled
+
+    return scheduled.run_due()
+
+
+@shared_task(name="apps.tasks.tasks.automation_due_dispatch")
+@company_dispatch_task
+def automation_due_dispatch() -> dict:
+    """Диспетчер ``automation_due`` веером по действующим компаниям."""
+    require_service("tasks")
+    return fan_out_to_companies(automation_due, label="tasks.automation_due_dispatch")
+
+
+@shared_task(name="apps.tasks.tasks.automation_schedule")
+@company_task
+def automation_schedule() -> int:
+    """Команды досок «по расписанию», чьё время пришло."""
+    require_service("tasks")
+    from .services.automation import scheduled
+
+    return scheduled.run_schedules()
+
+
+@shared_task(name="apps.tasks.tasks.automation_schedule_dispatch")
+@company_dispatch_task
+def automation_schedule_dispatch() -> dict:
+    """Диспетчер ``automation_schedule`` веером по действующим компаниям."""
+    require_service("tasks")
+    return fan_out_to_companies(automation_schedule, label="tasks.automation_schedule_dispatch")
+
+
+@shared_task(name="apps.tasks.tasks.automation_runs_purge")
+@company_task
+def automation_runs_purge() -> int:
+    """Раз в сутки: журнал запусков автоматизации старше 90 дней — вон, и
+    ночная сверка ссылок (ушедшие сотрудники, отделы и проекты досок ломают
+    автоматизации — спецификация логики §10)."""
+    require_service("tasks")
+    from .services.automation import refs, scheduled
+
+    return scheduled.purge_runs() + refs.sweep()
+
+
+@shared_task(name="apps.tasks.tasks.automation_runs_purge_dispatch")
+@company_dispatch_task
+def automation_runs_purge_dispatch() -> dict:
+    """Диспетчер ``automation_runs_purge`` веером по действующим компаниям."""
+    require_service("tasks")
+    return fan_out_to_companies(automation_runs_purge,
+                                label="tasks.automation_runs_purge_dispatch")

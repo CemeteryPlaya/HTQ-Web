@@ -861,6 +861,10 @@ class TaskCreate(OrderedDates):
     start_date: date | None = None
     estimated_working_days: int | None = None
 
+    # Быстрое добавление на доске (§6.2): карточка встаёт в конец своей
+    # колонки на этой доске.
+    board: "BoardRef | None" = None
+
     @field_validator("summary")
     @classmethod
     def summary_not_blank(cls, v: str) -> str:
@@ -930,6 +934,461 @@ class ProgressUpdate(BaseModel):
     percent: int = Field(..., ge=0, le=100)
 
 
+class TransferIn(BaseModel):
+    """«Отправить в отдел» (канбан K1.6). ``sender_department_id`` — отдел-
+    отправитель, только для задачи без отдела (иначе им становится прежний
+    основной отдел). Лишние поля — 422: исполнителей перенос не назначает."""
+
+    department_id: int
+    sender_department_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+# ── канбан-доски (мастер-план §6.1, этап S1) ───────────────────────────
+
+#: Палитра цветов колонок (решение K-34); фронт — токены ``--board-color-*``.
+BOARD_COLORS = ("green", "yellow", "orange", "red", "purple", "blue", "sky", "lime",
+                "pink", "gray")
+
+
+class BoardRef(BaseModel):
+    """Какая доска. У личной ``id`` нет: владелец — всегда тот, кто спрашивает
+    (§5.4), поэтому чужой id здесь — ошибка, а не подмена."""
+
+    kind: Literal["personal", "department", "project"]
+    id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def _id_by_kind(self) -> "BoardRef":
+        if self.kind == "personal" and self.id is not None:
+            raise ValueError("У личной доски нет id")
+        if self.kind != "personal" and self.id is None:
+            raise ValueError("Нужен id доски")
+        return self
+
+
+class CardMove(BaseModel):
+    """Перенос карточки: целевая колонка (статус) и соседи по месту вставки —
+    ``before_id`` — карточка над местом, ``after_id`` — под ним."""
+
+    board: BoardRef
+    status: Status
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class ColumnSettingIn(BaseModel):
+    title: str | None = Field(default=None, max_length=60)
+    color: str | None = None
+    hidden: bool = False
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("color")
+    @classmethod
+    def _known_color(cls, value: str | None) -> str | None:
+        return _board_color(value)
+
+
+def _not_blank(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        raise ValueError("Пустое значение")
+    return value
+
+
+def _board_color(value: str | None) -> str | None:
+    if value is not None and value not in BOARD_COLORS:
+        raise ValueError("Неизвестный цвет")
+    return value
+
+
+class ChecklistTemplateIn(BaseModel):
+    """Шаблон чек-листа доски (этап S3): ``id`` — у прежнего, без ``id`` —
+    новый (его выдаёт сервер)."""
+
+    id: str | None = Field(default=None, max_length=16)
+    title: str = Field(..., min_length=1, max_length=200)
+    items: list[str] = Field(default_factory=list, max_length=50)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
+
+    @field_validator("items")
+    @classmethod
+    def items_not_blank(cls, value: list[str]) -> list[str]:
+        items = [_not_blank(item) for item in value]
+        if any(len(item) > 500 for item in items):
+            raise ValueError("Пункт шаблона — не длиннее 500 символов")
+        return items
+
+
+class BoardSettingsIn(BaseModel):
+    """Настройки доски: колонки (K-34) — статус → название, цвет, скрытость;
+    шаблоны чек-листов (этап S3). Присланное заменяется целиком, ``null`` —
+    не меняется."""
+
+    columns: dict[Status, ColumnSettingIn] | None = None
+    checklist_templates: list[ChecklistTemplateIn] | None = Field(default=None, max_length=20)
+
+    model_config = {"extra": "forbid"}
+
+
+# ── свои поля доски (решение K-35, этап S3) ────────────────────────────
+
+class BoardFieldOptionIn(BaseModel):
+    """Вариант поля-списка: с ``id`` — прежний, без — новый."""
+
+    id: str | None = Field(default=None, max_length=16)
+    name: str = Field(..., min_length=1, max_length=100)
+    color: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
+
+    @field_validator("color")
+    @classmethod
+    def _known_color(cls, value: str | None) -> str | None:
+        return _board_color(value)
+
+
+class BoardFieldIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    type: Literal["text", "number", "date", "checkbox", "list"]
+    options: list[BoardFieldOptionIn] = Field(default_factory=list, max_length=50)
+    show_on_card: bool = False
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        return _not_blank(value)
+
+
+class BoardFieldPatch(BaseModel):
+    """Название, варианты (список целиком), «на карточке», место среди полей
+    доски (``before_id``/``after_id``, как у чек-листов). Тип не меняется."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    options: list[BoardFieldOptionIn] | None = Field(default=None, max_length=50)
+    show_on_card: bool | None = None
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+class TaskFieldValueIn(BaseModel):
+    """Значение поля задачи: текст, число (числом или строкой), дата
+    ``ГГГГ-ММ-ДД``, флажок, ``id`` варианта списка; ``null`` — очистить."""
+
+    value: bool | int | float | str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class BoardFieldOptionOut(BaseModel):
+    id: str
+    name: str
+    color: str | None = None
+
+
+class TaskFieldOut(BaseModel):
+    """Поле домашней доски задачи со значением (``home_boards`` карточки)."""
+
+    id: int
+    board_kind: str
+    board_id: int
+    name: str
+    type: str
+    options: list[BoardFieldOptionOut] = []
+    show_on_card: bool = False
+    position: str
+    value: bool | str | None = None
+
+
+class ChecklistTemplateOut(BaseModel):
+    id: str
+    title: str
+    items: list[str] = []
+
+
+class CardButtonOut(BaseModel):
+    """Кнопка автоматизации на карточке (этап S4)."""
+
+    id: int
+    name: str
+    icon: str | None = None
+    #: Условия кнопки сошлись на этой карточке сейчас (этап S4b).
+    available: bool = True
+    reason: str | None = None
+
+
+class HomeBoardOut(BaseModel):
+    """Домашняя доска задачи — отдела ``department_id`` или проекта
+    ``project_id``: её поля, шаблоны чек-листов и кнопки автоматизации."""
+
+    kind: str
+    id: int
+    title: str | None = None
+    fields: list[TaskFieldOut] = []
+    checklist_templates: list[ChecklistTemplateOut] = []
+    buttons: list[CardButtonOut] = []
+
+
+# ── автоматизация досок (решения K-36…K-40, этап S4) ───────────────────
+
+AutomationKindKey = Literal["rule", "card_button", "board_button", "due", "schedule"]
+
+
+class AutomationIn(BaseModel):
+    """Автоматизация доски: вид, триггер, условия и действия — по каталогу
+    ``services/automation/catalog.py`` (его же проверка при сохранении)."""
+
+    kind: AutomationKindKey
+    name: str = Field(default="", max_length=200)
+    icon: str = Field(default="", max_length=32)
+    trigger: dict = Field(default_factory=dict)
+    conditions: list[dict] = Field(default_factory=list)
+    actions: list[dict] = Field(default_factory=list)
+    enabled: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class AutomationPatch(BaseModel):
+    """Правка: присланное заменяется; триггер, условия и действия
+    проверяются вместе. Место — ``before_id``/``after_id``, как у полей."""
+
+    name: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=32)
+    trigger: dict | None = None
+    conditions: list[dict] | None = None
+    actions: list[dict] | None = None
+    enabled: bool | None = None
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+class SuggestionDismissIn(BaseModel):
+    """Скрыть «Рекомендацию» (этап S4b): ключ образца из списка подсказок."""
+
+    key: str = Field(..., min_length=1, max_length=80)
+
+    model_config = {"extra": "forbid"}
+
+
+class BoardPresetIn(BaseModel):
+    """Шаблон процесса доски (K-40)."""
+
+    preset: Literal["htq_process"]
+    #: Показать, что изменится, и ничего не записать (этап S4b).
+    dry_run: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class BoardNotificationsIn(BaseModel):
+    """Уведомления о своих задачах доски: включить или выключить (K-30)."""
+
+    enabled: bool
+
+    model_config = {"extra": "forbid"}
+
+
+# ── запросы доступа (K-31, мастер-план §6.2, этап S2) ──────────────────
+
+class AccessRequestIn(BaseModel):
+    kind: Literal["execute", "own"]
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class AccessApproveIn(BaseModel):
+    """``mode`` — для «владения» обязателен (с заменой или делегатом), для
+    «исполнения» — только замена (422 ``task_access_mode`` иначе)."""
+
+    mode: Literal["replace", "delegate"] | None = None
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class AccessRejectIn(BaseModel):
+    comment: str = Field(default="", max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+# ── чек-листы (мастер-план §6.3, этап S2) ──────────────────────────────
+
+class ChecklistTemplateRef(BaseModel):
+    """Шаблон домашней доски задачи, из которого копируются пункты (S3)."""
+
+    board_kind: Literal["department", "project"]
+    board_id: int
+    template_id: str = Field(..., min_length=1, max_length=16)
+
+    model_config = {"extra": "forbid"}
+
+
+class ChecklistIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    template: ChecklistTemplateRef | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+
+class ChecklistPatch(BaseModel):
+    """Название и/или место среди чек-листов задачи. ``before_id`` — чек-лист
+    над местом вставки, ``after_id`` — под ним; присланный хотя бы один из
+    них (пусть ``null``) — значит «переставить»."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+class ChecklistItemIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+
+class ChecklistDoneBy(BaseModel):
+    id: int
+    name: str | None = None
+
+
+class ChecklistItemOut(BaseModel):
+    id: int
+    text: str
+    is_done: bool = False
+    done_by: ChecklistDoneBy | None = None
+    done_at: datetime | None = None
+    position: str
+
+
+class ChecklistOut(BaseModel):
+    """Чек-лист целиком — ответ каждой ручки чек-листов и поле карточки."""
+
+    id: int
+    title: str
+    position: str
+    items: list[ChecklistItemOut] = []
+    done: int = 0
+    total: int = 0
+
+
+class ChecklistItemPatch(BaseModel):
+    """Текст, отметка, перенос в другой чек-лист той же задачи, место."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=500)
+    is_done: bool | None = None
+    checklist_id: int | None = None
+    before_id: int | None = None
+    after_id: int | None = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("text")
+    @classmethod
+    def text_not_blank(cls, value: str | None) -> str | None:
+        return _not_blank(value)
+
+    @property
+    def move(self) -> bool:
+        return bool({"before_id", "after_id"} & self.model_fields_set)
+
+
+# ``TaskCreate.board`` ссылается на ``BoardRef``, объявленную ниже неё.
+TaskCreate.model_rebuild()
+
+
+class TaskCan(BaseModel):
+    """Что вызывающему можно с задачей — для кнопок интерфейса (канбан K1.6).
+    Те же правила, что у ручек: флаг не расходится с ответом ручки."""
+
+    full_edit: bool = False
+    soft_edit: bool = False
+    comment: bool = False
+    transfer: bool = False
+    claim: bool = False
+    delete: bool = False
+    # Запросы доступа (K-31): какие можно отправить и решает ли вызывающий.
+    request_access: list[str] = []
+    decide_access: bool = False
+
+
+class TaskListCan(BaseModel):
+    """Флаги строки списка — только то, что нужно вкладкам списка."""
+
+    claim: bool = False
+
+
+class TaskDepartmentLinkOut(BaseModel):
+    """Отдел задачи с видом связи: участник или отправитель (``origin``)."""
+
+    department_id: int
+    name: str | None = None
+    kind: str
+
+
 class TaskListResponse(BaseModel):
     """Compact task response for list views."""
 
@@ -989,6 +1448,7 @@ class TaskListResponse(BaseModel):
     subtask_count: int = 0
     created_at: datetime
     updated_at: datetime
+    can: TaskListCan = TaskListCan()
 
     model_config = {"from_attributes": True}
 
@@ -1064,6 +1524,15 @@ class TaskDetailResponse(BaseModel):
 
     created_at: datetime
     updated_at: datetime
+
+    can: TaskCan = TaskCan()
+    department_links: list[TaskDepartmentLinkOut] = []
+    # Чек-листы (канбан S2, мастер-план §3.6).
+    checklists: list[ChecklistOut] = []
+    # Сколько ждущих запросов доступа вызывающий может решить (K-31).
+    pending_access_requests: int = 0
+    # Домашние доски: поля со значениями и шаблоны чек-листов (K-35, S3).
+    home_boards: list[HomeBoardOut] = []
 
     model_config = {"from_attributes": True}
 

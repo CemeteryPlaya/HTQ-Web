@@ -17,6 +17,7 @@ import { protectedRoutes } from '@/app/routing/routeDefinitions';
 import { isRoutableUrl } from '@/components/signoff/routable';
 import type { Permissions } from '@/hooks/usePermissions';
 import type { AccessLevel } from '@/lib/auth/permissions';
+import type { MyCompany } from '@/types/companies';
 import { createTestQueryClient } from '@/test/renderWithProviders';
 
 import { BppLayout } from './BppLayout';
@@ -68,6 +69,12 @@ const NOT_FROZEN = { frozen: false, frozenAt: null as string | null, comment: ''
 const contractsFreeze = vi.fn(() => NOT_FROZEN);
 vi.mock('@/hooks/useContractsFreeze', () => ({ useContractsFreeze: () => contractsFreeze() }));
 afterEach(() => { contractsFreeze.mockReturnValue(NOT_FROZEN); });
+
+// Решение 19.10: где ведётся БЗО текущей компании — из `companies/v1/me`.
+const OWN_BPP = { companies: [] as MyCompany[], isLoading: false, isError: false };
+const myCompanies = vi.fn(() => OWN_BPP);
+vi.mock('@/hooks/useMyCompanies', () => ({ useMyCompanies: () => myCompanies() }));
+afterEach(() => { myCompanies.mockReturnValue(OWN_BPP); });
 
 function WhereAmI() {
   return <div data-testid="where">{useLocation().pathname}</div>;
@@ -156,6 +163,28 @@ describe('BppLayout — меню по правам', () => {
   it('неизвестный путь раздела — «нет такой страницы»', () => {
     renderSection('/bpp/nope', FAKE);
     expect(screen.getByText('Такой страницы в разделе нет')).toBeInTheDocument();
+  });
+});
+
+describe('BppLayout — БЗО ведётся в другой компании (решение 19.10)', () => {
+  it('плашка называет компанию данных', () => {
+    myCompanies.mockReturnValue({ ...OWN_BPP, companies: [
+      { slug: 'hts', name: 'HTS', kind: 'it', is_default: false, is_current: false,
+        bpp_data_company_slug: 'other', bpp_data_company_name: 'Другая' },
+      { slug: 'hi-tech-group', name: 'LTD', kind: 'construction', is_default: true, is_current: true,
+        bpp_data_company_slug: 'hi-tech-qazaqstan', bpp_data_company_name: 'Hi-Tech Qazaqstan' },
+    ] });
+    renderSection('/bpp/plan', FAKE);
+    expect(screen.getByRole('note')).toHaveTextContent(/Данные раздела ведёт Hi-Tech Qazaqstan/);
+  });
+
+  it('БЗО у себя — плашки нет', () => {
+    myCompanies.mockReturnValue({ ...OWN_BPP, companies: [
+      { slug: 'hi-tech-qazaqstan', name: 'HTQ', kind: 'construction', is_default: true, is_current: true,
+        bpp_data_company_slug: null },
+    ] });
+    renderSection('/bpp/plan', FAKE);
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 });
 

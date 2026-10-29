@@ -108,6 +108,15 @@ class Company(models.Model):
     # гейт не заводится. Включено по умолчанию: скрывать по умолчанию значило
     # бы прятать сам факт доступа от той компании, чьи данные читают.
     show_external_holders = models.BooleanField(default=True, db_default=True)
+    # Данные модуля БЗО и «Проектов» этой компании ведёт ДРУГАЯ компания
+    # (решение 19.10: ПМ входят в Hi-Tech Group LTD, а бюджеты, заявки,
+    # договоры и счета живут в головном офисе — Hi-Tech Qazaqstan, без копий
+    # и расхождений). Запросы БЗО с поддомена этой компании работают в схеме
+    # той (htqweb/tenancy/bpp_delegation.py), права на них считаются там же.
+    bpp_data_company = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="bpp_delegators", verbose_name="БЗО ведётся в компании",
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
     updated_at = models.DateTimeField(auto_now=True, db_default=Now())
 
@@ -128,6 +137,11 @@ class Company(models.Model):
     def successor_slug(self) -> str | None:
         """Slug компании-преемника — для схем ответа (``from_attributes``)."""
         return self.successor.slug if self.successor_id else None
+
+    @property
+    def bpp_data_company_slug(self) -> str | None:
+        """Slug компании, где ведётся БЗО этой, — для схем ответа."""
+        return self.bpp_data_company.slug if self.bpp_data_company_id else None
 
     def clean(self):
         """Метка адреса уникальна по ВСЕМ хостам, а не только по своей колонке.
@@ -157,6 +171,20 @@ class Company(models.Model):
                 f"{self.slug!r} — псевдоним другой компании; один хост не "
                 "может вести в две компании."
             )
+        host = self.bpp_data_company
+        if host is not None:
+            # Цепочка «A ведётся в B, B ведётся в C» дала бы два прыжка
+            # контекста на один запрос — данные компании ровно в одном месте.
+            if host.pk == self.pk:
+                errors["bpp_data_company"] = "Компания не может вести БЗО сама в себе."
+            elif host.bpp_data_company_id is not None:
+                errors["bpp_data_company"] = (
+                    f"БЗО компании {host.slug!r} само ведётся в другой компании — "
+                    "цепочки не допускаются.")
+            elif self.pk and Company.objects.filter(bpp_data_company=self).exists():
+                errors["bpp_data_company"] = (
+                    "В этой компании уже ведётся БЗО других компаний — "
+                    "она не может вести своё в третьей.")
         if errors:
             raise ValidationError(errors)
 
@@ -198,6 +226,11 @@ class CompanyMembership(models.Model):
         Company, on_delete=models.CASCADE, related_name="memberships",
     )
     is_default = models.BooleanField(default=False, db_default=False)
+    # Участник без входа (решение 19.10): числится в компании — его видно в
+    # выборе сотрудников, ему приходят уведомления и выдаются роли, — но
+    # токена на её поддомен не получает (user_may_enter_company). Так в
+    # головном офисе «просто есть» ПМ из компании, чьё БЗО он ведёт.
+    login_allowed = models.BooleanField("вход разрешён", default=True, db_default=True)
     created_at = models.DateTimeField(auto_now_add=True, db_default=Now())
 
     class Meta:

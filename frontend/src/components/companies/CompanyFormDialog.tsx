@@ -30,11 +30,13 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
   const [parent, setParent] = useState(company.parent_slug ?? '');
   const [showExternalHolders, setShowExternalHolders] = useState(company.show_external_holders);
   const [subdomain, setSubdomain] = useState(company.subdomain ?? '');
+  const [bppData, setBppData] = useState(company.bpp_data_company_slug ?? '');
 
   useEffect(() => {
     setName(company.name); setKind(company.kind); setCountry(company.country); setParent(company.parent_slug ?? '');
     setShowExternalHolders(company.show_external_holders);
     setSubdomain(company.subdomain ?? '');
+    setBppData(company.bpp_data_company_slug ?? '');
   }, [company]);
 
   const mutation = useMutation({
@@ -53,10 +55,17 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
     // Как есть: пустая строка снимает короткий адрес, проверку формата,
     // зарезервированных меток и столкновений делает бэкенд (422).
     if (subdomain !== (company.subdomain ?? '')) body.subdomain = subdomain;
+    // Пустая строка — «вести БЗО у себя»; остальные проверки (модуль, свои
+    // «Проекты», цепочки) — на бэкенде, 422 `bpp_data_company_invalid`.
+    if (bppData !== (company.bpp_data_company_slug ?? '')) body.bpp_data_company_slug = bppData;
     mutation.mutate(body);
   };
 
   const kinds = (Object.keys(COMPANY_KIND_LABELS) as CompanyKind[]).filter((k) => k !== 'regional' || company.kind === 'regional');
+  // Цепочек не бывает: компания, сама ведущая БЗО в другой, данные не держит.
+  // Текущее значение остаётся в списке всегда — иначе select его не покажет.
+  const bppHosts = candidates.filter((c) => c.slug !== company.slug && (
+    c.slug === company.bpp_data_company_slug || (c.status === 'active' && !c.bpp_data_company_slug)));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -98,6 +107,16 @@ export function CompanyFormDialog({ company, candidates, open, onOpenChange, onS
               aria-describedby="cf-subdomain-hint" onChange={(e) => setSubdomain(e.target.value)} />
             <p id="cf-subdomain-hint" className="mt-1 text-xs text-muted-foreground">
               {t('companies.subdomainHint')}
+            </p></div>
+          <div><Label htmlFor="cf-bpp-data">{t('companies.field.bppDataCompany', 'БЗО ведётся в компании')}</Label>
+            <select id="cf-bpp-data" className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+              aria-describedby="cf-bpp-data-hint" value={bppData} onChange={(e) => setBppData(e.target.value)}>
+              <option value="">{t('companies.bppDataOwn', '— у себя —')}</option>
+              {bppHosts.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
+            </select>
+            <p id="cf-bpp-data-hint" className="mt-1 text-xs text-muted-foreground">
+              {t('companies.bppDataHint',
+                '«Проекты», бюджеты, заявки, договоры и счета компании хранятся в выбранной компании; сотрудники работают с ними со своего адреса, права на них выдаются там. У компании не должно быть своих «Проектов».')}
             </p></div>
           <p className="text-xs text-muted-foreground">
             {t('companies.slugLocked', 'slug не правится: он — имя схемы данных и поддомен компании.')}

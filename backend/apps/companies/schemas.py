@@ -27,6 +27,8 @@ class CompanyRead(BaseModel):
     successor_slug: str | None = None
     archived_at: datetime | None
     show_external_holders: bool
+    # Решение 19.10: где ведётся БЗО компании (слаг), ``None`` — у неё самой.
+    bpp_data_company_slug: str | None = None
 
 
 class BankruptRequest(BaseModel):
@@ -61,6 +63,11 @@ class MyCompany(BaseModel):
     is_default: bool
     is_current: bool
     is_archived: bool = False
+    # Где ведётся БЗО этой компании (решение 19.10): фронт ставит плашку в
+    # разделе БЗО. Имя — здесь же: в список «моих» компания данных может не
+    # попасть вовсе (у человека в ней нет входа).
+    bpp_data_company_slug: str | None = None
+    bpp_data_company_name: str | None = None
 
 
 class CompanyPatch(BaseModel):
@@ -85,6 +92,11 @@ class CompanyPatch(BaseModel):
     # Формат, зарезервированные метки и столкновения со слагами проверяет
     # ``Company.full_clean()`` в сервисе (422 ``invalid``), не схема.
     subdomain: str | None = Field(default=None, max_length=32)
+    # Решение 19.10: где вести БЗО компании. Слаг — «в той компании», пустая
+    # строка или null — «у себя», отсутствие ключа — «не трогать» (UNSET во
+    # вьюхе). Проверки — ``lifecycle._resolve_bpp_data_company`` (422
+    # ``bpp_data_company_invalid``) и ``Company.clean()`` (цепочки, сама в себе).
+    bpp_data_company_slug: str | None = Field(default=None, max_length=32)
 
     @field_validator("kind")
     @classmethod
@@ -114,6 +126,14 @@ class MembershipRead(BaseModel):
     email: str
     is_active: bool
     is_default: bool
+    login_allowed: bool = True
+
+
+class MembershipPatch(BaseModel):
+    """Решение 19.10: участник без входа числится в компании, но токена на её
+    поддомен не получает. Правит только суперпользователь."""
+
+    login_allowed: bool
 
 
 class ExternalHolderModule(BaseModel):

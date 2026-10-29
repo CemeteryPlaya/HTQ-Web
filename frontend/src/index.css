@@ -60,6 +60,27 @@
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Канбан-доски (решения K-23, K-33): холст, колонка, карточка, значки
+       срока и палитра колонок — визуальный язык Trello на токенах темы. */
+    --board-canvas-from: 210 22% 95%;
+    --board-canvas-to: 210 24% 89%;
+    --board-column: 210 16% 93%;
+    --board-card: 0 0% 100%;
+    --board-card-hover-ring: 217 91% 60%;
+    --board-badge-overdue: 0 72% 51%;
+    --board-badge-soon: 42 92% 48%;
+    --board-badge-done: 142 64% 34%;
+    --board-color-green: 145 50% 36%;
+    --board-color-yellow: 44 88% 44%;
+    --board-color-orange: 24 90% 50%;
+    --board-color-red: 0 68% 52%;
+    --board-color-purple: 268 50% 54%;
+    --board-color-blue: 217 76% 52%;
+    --board-color-sky: 192 74% 40%;
+    --board-color-lime: 84 58% 38%;
+    --board-color-pink: 328 66% 54%;
+    --board-color-gray: 215 10% 50%;
   }
 
   .dark {
@@ -104,6 +125,25 @@
     --sidebar-accent-foreground: 210 20% 92%;
     --sidebar-border: 210 15% 24%;
     --sidebar-ring: 145 45% 45%;
+
+    --board-canvas-from: 215 26% 14%;
+    --board-canvas-to: 220 30% 9%;
+    --board-column: 215 20% 11%;
+    --board-card: 215 18% 19%;
+    --board-card-hover-ring: 213 90% 66%;
+    --board-badge-overdue: 0 70% 58%;
+    --board-badge-soon: 44 92% 52%;
+    --board-badge-done: 142 55% 45%;
+    --board-color-green: 145 45% 42%;
+    --board-color-yellow: 44 80% 50%;
+    --board-color-orange: 24 85% 55%;
+    --board-color-red: 0 65% 56%;
+    --board-color-purple: 268 48% 62%;
+    --board-color-blue: 217 75% 60%;
+    --board-color-sky: 192 70% 48%;
+    --board-color-lime: 84 52% 46%;
+    --board-color-pink: 328 60% 60%;
+    --board-color-gray: 215 10% 56%;
   }
 }
 

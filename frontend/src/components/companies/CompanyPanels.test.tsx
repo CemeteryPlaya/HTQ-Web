@@ -12,12 +12,14 @@ const setModule = vi.fn();
 const memberships = vi.fn();
 const grantMembership = vi.fn();
 const revokeMembership = vi.fn();
+const setMembershipLogin = vi.fn();
 const externalHolders = vi.fn();
 vi.mock('@/api/companies', () => ({
   companiesApi: {
     modules: () => modules(), setModule: (s: string, a: string, b: unknown) => setModule(s, a, b),
     memberships: () => memberships(), grantMembership: (s: string, b: unknown) => grantMembership(s, b),
     revokeMembership: (s: string, u: number) => revokeMembership(s, u),
+    setMembershipLogin: (s: string, u: number, a: boolean) => setMembershipLogin(s, u, a),
     externalHolders: () => externalHolders(),
   },
 }));
@@ -75,6 +77,28 @@ describe('CompanyMembersPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /Снять/ }));
     expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/у себя/));
+  });
+
+  it('решение 19.10: «без входа» видно в строке, вход открывает и закрывает суперпользователь', async () => {
+    memberships.mockResolvedValue({ data: [
+      { user_id: 7, username: 'ivanov', full_name: '', email: '', is_active: true, is_default: true, login_allowed: true },
+      { user_id: 17, username: 'almenov', full_name: '', email: '', is_active: true, is_default: false, login_allowed: false },
+    ] });
+    setMembershipLogin.mockResolvedValue({ data: {} });
+    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit canRevoke showExternalHolders={false} />);
+    expect(await screen.findByText('almenov')).toBeInTheDocument();
+    expect(screen.getAllByText('без входа')).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Открыть вход' }));
+    expect(setMembershipLogin).toHaveBeenCalledWith('htq', 17, true);
+    await userEvent.click(screen.getByRole('button', { name: 'Закрыть вход' }));
+    expect(setMembershipLogin).toHaveBeenCalledWith('htq', 7, false);
+  });
+
+  it('решение 19.10: без права правки кнопок входа нет', async () => {
+    renderWithProviders(<CompanyMembersPanel slug="htq" canEdit={false} canRevoke={false} showExternalHolders={false} />);
+    await screen.findByText('ivanov');
+    expect(screen.queryByRole('button', { name: /вход/ })).not.toBeInTheDocument();
   });
 
   it('задача 7 блока C: секция «Из холдинга» отсутствует, когда настройка выключена', async () => {

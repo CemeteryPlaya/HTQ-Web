@@ -492,6 +492,77 @@ def org_ancestors(department_id: int) -> list[dict]:
     return [by_path[p] for p in prefixes if p in by_path]
 
 
+def department_subtree_ids(department_ids: list[int]) -> dict[int, list[int]]:
+    """Каждый отдел и все его потомки: ``{id: [id, …потомки]}``.
+
+    Потребитель — доски задач (``apps.tasks``, канбан K1.1): задача подотдела
+    видна на доске отдела-родителя. Потомок — ``path = P`` или ``path LIKE
+    'P.%'``: разделитель «.» обязателен, иначе ``it`` захватил бы ``itops``
+    (у ``org_service`` обход идёт без точки намеренно — там другой смысл).
+    Неактивные подотделы входят: задачи закрытого подотдела не должны
+    пропасть с доски родителя. Неизвестный id в ответ не попадает.
+    """
+    require_service("hr")
+    roots = dict(Department.objects.filter(id__in=list(department_ids))
+                 .values_list("id", "path"))
+    if not roots:
+        return {}
+    condition = Q()
+    for path in roots.values():
+        condition |= Q(path=path) | Q(path__startswith=f"{path}.")
+    rows = list(Department.objects.filter(condition).values_list("id", "path"))
+    return {
+        root_id: [row_id for row_id, row_path in rows
+                  if row_path == root_path or row_path.startswith(f"{root_path}.")]
+        for root_id, root_path in roots.items()
+    }
+
+
+def _departments_with_active_manager():
+    """Отделы, у которых есть действующий глава с учётной записью.
+
+    Один фильтр на ``managed_department_ids`` и ``department_manager_user_ids``:
+    кому уходит уведомление «задача пришла в ваш отдел», тот обязан и видеть
+    этот отдел как свой — разойдись фильтры, уведомление получил бы человек
+    без доступа к задаче.
+    """
+    return Department.objects.filter(
+        is_active=True,
+        manager__isnull=False,
+        manager__user_id__isnull=False,
+        manager__is_deleted=False,
+        manager__status=EmployeeStatus.ACTIVE,
+    )
+
+
+def managed_department_ids(user_id: int) -> list[int]:
+    """Отделы, которыми руководит пользователь (``Department.manager``).
+
+    Один сотрудник может вести несколько отделов (``manager`` — внешний ключ),
+    в том числе отдел, где сам не числится. Уволенный или удалённый глава и
+    неактивный отдел не дают ничего. Временные исполнители и замещающие не
+    учитываются (мастер-план канбан-досок, K-09).
+    """
+    require_service("hr")
+    return sorted(_departments_with_active_manager()
+                  .filter(manager__user_id=user_id)
+                  .values_list("id", flat=True))
+
+
+def department_manager_user_ids(department_ids: list[int]) -> dict[int, int]:
+    """``{id отдела: user_id главы}`` — только у отделов с действующим главой.
+
+    Для уведомления главе отдела-получателя при переносе задачи (канбан K1.5).
+    """
+    require_service("hr")
+    ids = list(department_ids)
+    if not ids:
+        return {}
+    return dict(_departments_with_active_manager()
+                .filter(id__in=ids)
+                .values_list("id", "manager__user_id"))
+
+
 def notice_user_profile_changed(user_id: int) -> None:
     """Сосед (apps.users) сообщает, что профиль изменился — обновляем копию.
 

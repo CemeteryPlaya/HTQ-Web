@@ -22,6 +22,7 @@ import {
     Clock,
     FileText,
     FileSignature,
+    Gavel,
     History,
     ClipboardList,
     Stamp,
@@ -59,6 +60,7 @@ import { useContractsFreeze } from '@/hooks/useContractsFreeze';
 import { hrNavVisible } from '@/app/navigation/hrNavAccess';
 import { moduleVisible } from '@/features/bpp/core/moduleAccess';
 import { bppMenuHref, bppModules } from '@/features/bpp/modules';
+import { tenderMenuHref, tenderModules, tenderModuleVisible } from '@/features/tender/modules';
 import { useServiceStatus } from '@/hooks/useServiceStatus';
 import { grafanaSsoUrl } from '@/lib/monitoring';
 import { cn } from '@/lib/utils';
@@ -271,6 +273,8 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     // поэтому его пункты без уровня модуля не показываем, даже если узел
     // подмодуля (`project`, `refdata`) открыт сам по себе.
     const hasBpp = permissions.atLeast('bpp', 'read');
+    // Раздел «Тендеры» — гейт маршрута `/tender/*` (`tender:read`).
+    const hasTender = permissions.atLeast('tender', 'read');
     // «Договоры» заморожены после переноса в БЗО (A6.2) — тогда это архив,
     // и подпись та же, что в шапке (`navItems.labelled`).
     const { frozen: contractsFrozen } = useContractsFreeze();
@@ -347,6 +351,7 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
      *   тем же правам (`moduleVisible`), что левое меню `BppLayout`, поэтому
      *   новый подмодуль появится здесь сам. Модульный пункт «Мои согласования»
      *   (`/bpp/approvals`) пропущен: его заменяет общая очередь выше.
+     *   Тендерный модуль здесь не живёт — у него свой блок (`tenderItems`).
      * - «Архив договоров» (`/contracts`) — последним; маршрут без гейта модуля,
      *   поэтому виден всем, как прежний пункт «Договоры». Пока раздел у компании
      *   не заморожен, он ещё живой и подписан «Договоры».
@@ -377,6 +382,28 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
                 : { id: 'contracts', to: '/contracts', icon: FileSignature, label: t('contracts.nav.title', 'Договоры') });
         return items;
     }, [t, hasBpp, permissions, contractsFrozen]);
+
+    /**
+     * Блок «Тендерные закупки» (`/tender/*`) — отдельный от «Подтверждений»:
+     * тендер — это подбор поставщика, а не утверждение денег. Пункты — меню
+     * подразделов из того же реестра и по тем же правам (`tenderModuleVisible`),
+     * что левое меню `TenderLayout`, поэтому новый подраздел появится здесь сам.
+     */
+    const tenderItems: ItemConfig[] = useMemo(() => {
+        if (!hasTender) return [];
+        const items: ItemConfig[] = [];
+        for (const module of tenderModules) {
+            if (!module.menu || !tenderModuleVisible(module, permissions)) continue;
+            items.push({
+                id: `tender-${module.key}`,
+                to: tenderMenuHref(module.menu.path),
+                icon: module.menu.icon ?? Gavel,
+                label: t(module.menu.labelKey, module.menu.labelFallback),
+                matchPrefix: true,
+            });
+        }
+        return items;
+    }, [t, hasTender, permissions]);
 
     const contentItems: ItemConfig[] = useMemo(() => {
         if (!editor) return [];
@@ -476,13 +503,14 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
     const filteredComm = filterFn(communicationItems);
     const filteredWork = filterFn(workItems);
     const filteredApprovals = filterFn(approvalItems);
+    const filteredTender = filterFn(tenderItems);
     const filteredContent = filterFn(contentItems);
     const filteredHr = filterFn(hrItems);
     const filteredAdmin = filterFn(adminItems);
     const filteredMonitoring = filterFn(monitoringItems);
 
     const totalResults = filteredAccount.length + filteredComm.length + filteredWork.length +
-        filteredApprovals.length + filteredContent.length + filteredHr.length + filteredAdmin.length + filteredMonitoring.length;
+        filteredApprovals.length + filteredTender.length + filteredContent.length + filteredHr.length + filteredAdmin.length + filteredMonitoring.length;
 
     const isSearching = Boolean(searchQuery.trim());
 
@@ -546,6 +574,15 @@ export const ProfileSidebar: React.FC<Props> = ({ department, position }) => {
             {filteredApprovals.length > 0 && (
                 <SidebarSection id="approvals" title={t('profile.sidebar.sectionApprovals', 'Подтверждения')} count={filteredApprovals.length} forceOpen={isSearching}>
                     {filteredApprovals.map((item) => (
+                        <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
+                    ))}
+                </SidebarSection>
+            )}
+
+            {/* Tender Section — подразделы тендерного модуля */}
+            {filteredTender.length > 0 && (
+                <SidebarSection id="tender" title={t('profile.sidebar.sectionTender', 'Тендерные закупки')} count={filteredTender.length} forceOpen={isSearching}>
+                    {filteredTender.map((item) => (
                         <SidebarItem key={item.id} {...item} searchQuery={searchQuery} />
                     ))}
                 </SidebarSection>

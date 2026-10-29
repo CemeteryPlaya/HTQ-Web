@@ -20,7 +20,8 @@
 from __future__ import annotations
 
 from apps.bpp.models import Agreement, AgreementStatus
-from apps.bpp.services.alternatives import kpi, lifecycle
+from apps.bpp.services.alternatives import lifecycle
+from apps.bpp.services.core import doc_listeners
 from apps.signoff import interface as signoff
 
 from . import documents
@@ -42,7 +43,7 @@ def apply_final_choice(agreement_id) -> bool:
     Agreement.objects.filter(pk=agr.pk).update(status=AgreementStatus.REPLACED,
                                                rework_comment="")
     agr.refresh_from_db()
-    kpi.sync_for_document(lifecycle.SOURCE_AGREEMENT, agr.pk)
+    doc_listeners.status_changed(lifecycle.SOURCE_AGREEMENT, agr.pk)
     offer.refresh_from_db()
     documents.replace_with(offer, agr, selector_id=final["actor_id"])
     return True

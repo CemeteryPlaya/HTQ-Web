@@ -204,3 +204,35 @@ tests:
       - eval_time: 20m
         alertname: htqweb-antivirus-unavailable
         exp_alerts: []
+
+  # ══ htqweb-tender-award-stale: > 0, for 1h, channel=business ═══════════════
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_tender_award_approval_stale{company="group",job="django-backend",instance="backend-web:8000"}'
+        values: '1x90'
+      - series: 'htqweb_tender_award_approval_stale{company="htq",job="django-backend",instance="backend-web:8000"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: htqweb-tender-award-stale
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: htqweb-tender-award-stale
+        exp_alerts:
+          - exp_labels:
+              company: group
+              job: django-backend
+              instance: backend-web:8000
+              severity: warning
+              team: platform
+              channel: business
+
+  # Метрики нет (signoff или refdata выключены) — молчит.
+  - interval: 1m
+    input_series:
+      - series: 'htqweb_tender_tenders{company="group",status="on_approval",job="django-backend",instance="backend-web:8000"}'
+        values: '3x90'
+    alert_rule_test:
+      - eval_time: 61m
+        alertname: htqweb-tender-award-stale
+        exp_alerts: []

@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { TasksLayout } from '@/components/tasks/TasksLayout';
-import { KanbanBoard } from '@/components/tasks/KanbanBoard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -16,10 +14,13 @@ import { toast } from 'sonner';
 import {
     Search, Bug, BookOpen, Layers, CheckSquare, ListTodo, Check
 } from 'lucide-react';
-import { fetchTasks, updateTask } from '@/api/tasks';
-import type { Task, TaskPriority, TaskStatus } from '@/types/tasks';
+import { claimTask, fetchTasks } from '@/api/tasks';
+import type { TaskListScope } from '@/types/tasks';
 import type { UserProfile } from '@/types/userProfile';
-import { reportApiError } from '@/lib/apiError';
+import { useCardParam } from '@/features/tasks/board/card/hooks';
+import { TasksViewToggle } from '@/features/tasks/board/TasksViewToggle';
+import { StandaloneCardModal } from '@/features/tasks/board/card/StandaloneCardModal';
+import { reportTaskError } from '@/features/tasks/errors';
 import { statusBadgeClass, statusLabel } from '@/lib/tasks/status';
 import { TASK_PRIORITY, priorityLabel } from '@/lib/tasks/priority';
 
@@ -39,71 +40,47 @@ interface Props {
     profile: UserProfile;
 }
 
-const EmployeeTasks: React.FC<Props> = ({ profile }) => {
+/*
+ * Вкладки отбирает сервер (`?scope=`, канбан K1.6, S1-04): с тех пор как
+ * видимость расширилась до поддерева отдела, задачи отдела вытесняли свои
+ * из первой страницы, и клиентский фильтр по ней их терял. Поиск остаётся
+ * на клиенте — по уже отобранной вкладке.
+ */
+const TAB_SCOPE: Record<string, TaskListScope> = {
+    'my-tasks': 'mine',
+    'department-tasks': 'department',
+};
+
+/* `profile` передаёт маршрут; вкладки и права теперь считает сервер. */
+const EmployeeTasks: React.FC<Props> = () => {
     const { t } = useTranslation();
-    const navigate = useNavigate();
     const queryClient = useQueryClient();
+    // Карточка открывается окном поверх страницы, как на досках (`?card=<id>`).
+    const { open: openCard } = useCardParam();
     const [search, setSearch] = useState('');
     const [activeTab, setActiveTab] = useState('my-tasks');
-    const [viewMode, setViewMode] = useState<'table' | 'board'>('table');
 
-    const currentUserDepartmentId = profile.department_id;
-    const currentUserId = Number(profile.id);
-
-    // Load tasks
     const { data: tasks = [], isLoading } = useQuery({
         queryKey: ['employee-tasks', activeTab],
-        queryFn: async () => {
-            const data = await fetchTasks(); // Using identical fetch method, backend handles scoping initially
-            return data;
-        },
+        queryFn: () => fetchTasks({ scope: TAB_SCOPE[activeTab] }),
     });
 
-    // Accepting task immediately updates assignee and status
-    const acceptMutation = useMutation({
-        mutationFn: (taskToAccept: Task) => {
-            return updateTask(taskToAccept.id, {
-                assignee: currentUserId,
-                status: (taskToAccept.status === 'todo' || taskToAccept.status === 'backlog')
-                    ? 'in_progress'
-                    : taskToAccept.status,
-            } as Partial<Task>);
-        },
+    // «Взять в работу» — своя ручка: PATCH исполнителя и статуса — полная
+    // правка, и не-участнику сервер отвечал 403.
+    const claimMutation = useMutation({
+        mutationFn: (taskId: number) => claimTask(taskId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['employee-tasks'] });
-            toast.success(t('tasks.pages.detail.success'));
+            queryClient.invalidateQueries({ queryKey: ['hr-tasks'] });
+            toast.success(t('tasks.claim.success'));
             setActiveTab('my-tasks');
         },
-        onError: (err) => reportApiError(err, t('tasks.pages.detail.error')),
+        onError: (err) => reportTaskError(err, t, t('tasks.claim.error')),
     });
 
-    const updateStatusMutation = useMutation({
-        mutationFn: ({ id, status }: { id: number; status: TaskStatus }) => updateTask(id, { status }),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employee-tasks'] }),
-        onError: (err) => reportApiError(err, t('tasks.pages.list.updateError')),
-    });
-
-    // Filter tasks locally to serve tab functionalities
-    const filteredTasks = tasks.filter((t_opt) => {
-        const sMatch = t_opt.summary.toLowerCase().includes(search.toLowerCase()) ||
-            t_opt.key.toLowerCase().includes(search.toLowerCase());
-        if (!sMatch) return false;
-
-        if (activeTab === 'my-tasks') {
-            return (t_opt.assignee === currentUserId) || (t_opt.reporter === currentUserId);
-        }
-
-        if (activeTab === 'department-tasks') {
-            const sameDepartment = currentUserDepartmentId
-                ? t_opt.department === currentUserDepartmentId
-                : Boolean(profile.department && t_opt.department_name === profile.department);
-            return sameDepartment
-                && (t_opt.status === 'todo' || t_opt.status === 'backlog')
-                && !t_opt.assignee;
-        }
-
-        return true;
-    });
+    const query = search.toLowerCase();
+    const filteredTasks = tasks.filter((task) =>
+        task.summary.toLowerCase().includes(query) || task.key.toLowerCase().includes(query));
 
     const renderTable = () => (
         <div className="overflow-x-auto">
@@ -131,7 +108,7 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                         <TableRow
                             key={task.id}
                             className="cursor-pointer hover:bg-muted/50"
-                            onClick={() => navigate(`/tasks/${task.id}`)}
+                            onClick={() => openCard(task.id)}
                         >
                             <TableCell>
                                 <div className="flex items-center gap-1.5">
@@ -182,26 +159,22 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                                 </span>
                             </TableCell>
                             <TableCell className="text-sm">
-                                {task.assignee_name ? (
-                                    task.assignee_name
+                                {task.can?.claim ? (
+                                    <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        className="h-7 px-2 text-xs"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            claimMutation.mutate(task.id);
+                                        }}
+                                        disabled={claimMutation.isPending}
+                                    >
+                                        <Check className="h-3 w-3 mr-1" />
+                                        {t('tasks.claim.action')}
+                                    </Button>
                                 ) : (
-                                    activeTab === 'department-tasks' ? (
-                                        <Button
-                                            size="sm"
-                                            variant="secondary"
-                                            className="h-7 px-2 text-xs"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                acceptMutation.mutate(task);
-                                            }}
-                                            disabled={acceptMutation.isPending}
-                                        >
-                                            <Check className="h-3 w-3 mr-1" />
-                                            {t('tasks.pages.detail.acceptTask')}
-                                        </Button>
-                                    ) : (
-                                        '—'
-                                    )
+                                    task.assignee_name || '—'
                                 )}
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
@@ -222,7 +195,7 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                         <div className="flex flex-col sm:flex-row gap-4 mb-4 items-center justify-between">
                             <TabsList>
                                 <TabsTrigger value="my-tasks">{t('hr.tasks.mine')}</TabsTrigger>
-                                <TabsTrigger value="department-tasks">{t('hr.tasks.departmentFree')}</TabsTrigger>
+                                <TabsTrigger value="department-tasks">{t('hr.tasks.department')}</TabsTrigger>
                             </TabsList>
 
                             <div className="flex gap-2 w-full sm:w-auto items-center">
@@ -235,38 +208,15 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                                         className="pl-10 w-full sm:w-64"
                                     />
                                 </div>
-                                <div className="flex bg-muted/50 p-1 rounded-md gap-1 border">
-                                    <Button
-                                        variant={viewMode === 'board' ? 'secondary' : 'ghost'}
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        onClick={() => setViewMode('board')}
-                                    >
-                                        Kanban
-                                    </Button>
-                                    <Button
-                                        variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-                                        size="sm"
-                                        className="h-7 text-xs"
-                                        onClick={() => setViewMode('table')}
-                                    >
-                                        Table
-                                    </Button>
-                                </div>
+                                {/* Доска — главный вид раздела (этап S6a), здесь — таблица. */}
+                                <TasksViewToggle current="table" />
                             </div>
                         </div>
 
                         <TabsContent value="my-tasks" className="w-full min-w-0 overflow-hidden">
                             <div className="border rounded-md w-full min-w-0 overflow-hidden">
                                 {isLoading ? (
-                                    <div className="p-8 text-center text-muted-foreground">Loading...</div>
-                                ) : viewMode === 'board' ? (
-                                    <div className="-mx-2 -mb-2 p-2 min-w-0">
-                                        <KanbanBoard
-                                            tasks={filteredTasks}
-                                            onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
-                                        />
-                                    </div>
+                                    <div className="p-8 text-center text-muted-foreground">{t('common.loading')}</div>
                                 ) : (
                                     renderTable()
                                 )}
@@ -276,14 +226,7 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                         <TabsContent value="department-tasks" className="w-full min-w-0 overflow-hidden">
                             <div className="border rounded-md w-full min-w-0 overflow-hidden">
                                 {isLoading ? (
-                                    <div className="p-8 text-center text-muted-foreground">Loading...</div>
-                                ) : viewMode === 'board' ? (
-                                    <div className="-mx-2 -mb-2 p-2 min-w-0">
-                                        <KanbanBoard
-                                            tasks={filteredTasks}
-                                            onStatusChange={(taskId, newStatus) => updateStatusMutation.mutate({ id: taskId, status: newStatus })}
-                                        />
-                                    </div>
+                                    <div className="p-8 text-center text-muted-foreground">{t('common.loading')}</div>
                                 ) : (
                                     renderTable()
                                 )}
@@ -292,6 +235,7 @@ const EmployeeTasks: React.FC<Props> = ({ profile }) => {
                     </Tabs>
                 </CardContent>
             </Card>
+            <StandaloneCardModal />
         </TasksLayout>
     );
 };

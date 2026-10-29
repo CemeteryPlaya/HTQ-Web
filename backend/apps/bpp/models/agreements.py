@@ -88,10 +88,16 @@ class Agreement(signoff.Approvable, VersionedModel):
     # Непроверенного контрагента автор подтвердил при отправке (D-20).
     counterparty_confirmed = models.BooleanField(default=False, db_default=False)
     is_migrated = models.BooleanField(default=False, db_default=False)
+    # Договор из тендера (пакет B-2, тендер T5.3): номер ТН и ключ передачи.
+    source_tender = models.CharField(max_length=32, default="", blank=True, db_default="")
+    tender_key = models.CharField(max_length=80, default="", blank=True, db_default="")
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["number"], name="uq_bpp_agreement_number"),
+            # Передача тендера идемпотентна: один договор на ключ передачи.
+            models.UniqueConstraint(fields=["tender_key"], condition=~Q(tender_key=""),
+                                    name="uq_bpp_agreement_tender_key"),
             # BR-032: номер и дата по документу уникальны у контрагента —
             # кроме отклонённых и заменённых альтернативой.
             models.UniqueConstraint(

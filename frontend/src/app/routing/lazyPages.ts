@@ -67,6 +67,8 @@ export const lazyPages = {
 
   // Модуль БЗО: раздел «Закупки и оплаты» (`/bpp/*`) с меню подмодулей.
   BppLayout: React.lazy(() => import('@/features/bpp/BppLayout')),
+  // Тендерный модуль: раздел «Тендеры» (`/tender/*`) с меню подразделов.
+  TenderLayout: React.lazy(() => import('@/features/tender/TenderLayout')),
 
   AdminNews: React.lazy(() => import('@/pages/AdminNews')),
   ManageHomeSections: React.lazy(() => import('@/pages/ManageHomeSections')),
@@ -116,6 +118,8 @@ export const lazyPages = {
   HRApplications: React.lazy(() => import('@/pages/hr/recruitmentStandalone').then(m => ({ default: m.HRApplicationsPage }))),
   HROffers: React.lazy(() => import('@/pages/hr/recruitmentStandalone').then(m => ({ default: m.HROffersPage }))),
   PublicOrgView: React.lazy(() => import('@/pages/public/PublicOrgView')),
+  // Портал поставщика тендера — публичная страница по ссылке-приглашению.
+  SupplierTender: React.lazy(() => import('@/pages/public/SupplierTender')),
   PublicEmployeeView: React.lazy(() => import('@/pages/public/PublicEmployeeView')),
   HRCalendar: React.lazy(() => import('@/pages/Calendar')),
   HRProductionCalendar: React.lazy(() => import('@/pages/hr/HRProductionCalendar')),
@@ -130,6 +134,10 @@ export const lazyPages = {
 
   TaskRouter: React.lazy(() => import('@/components/tasks/TaskRouter').then((module) => ({ default: module.TaskRouter }))),
   TaskDetailRouter: React.lazy(() => import('@/components/tasks/TaskDetailRouter').then((module) => ({ default: module.TaskDetailRouter }))),
+  // Канбан-доски (этап S1): личная, отдела, проекта — одна страница.
+  TasksBoard: React.lazy(() => import('@/features/tasks/board/BoardsPage')),
+  // `/tasks` — последняя открытая доска (этап S6a).
+  TasksHome: React.lazy(() => import('@/features/tasks/board/TasksHome')),
 
   EmailInbox: React.lazy(() => import('@/pages/Email/EmailPage')),
   OAuthCallbackPage: React.lazy(() => import('@/pages/Email/OAuthCallbackPage')),

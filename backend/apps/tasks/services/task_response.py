@@ -16,7 +16,9 @@ inside a per-task loop is the bug this module exists to prevent.
 from __future__ import annotations
 
 from .. import schemas
-from ..models import Task
+from ..models import DepartmentLinkKind, Task
+from . import board_fields
+from . import checklist_service
 from . import contractor_service
 from . import hydration
 from . import task_content_service
@@ -97,7 +99,11 @@ def _iter_list_user_ids(tasks: list[Task]):
 def _common_fields(task: Task, ctx: _Ctx) -> dict:
     """Fields shared by the list and detail shapes."""
     type_row = task.task_type
-    dept_ids = [link.department_id for link in task.department_links.all()]
+    # Только отделы-участники: отдел-отправитель (``origin``) — не отдел
+    # задачи, и интерфейс, отправив список обратно, не должен делать его
+    # участником (S1-20).
+    dept_ids = [link.department_id for link in task.department_links.all()
+                if link.kind == DepartmentLinkKind.MEMBER]
     return {
         "id": task.id,
         "key": task.key,
@@ -184,10 +190,39 @@ def _list_payload(task: Task, ctx: _Ctx) -> dict:
     return payload
 
 
-def build_list(tasks: list[Task]) -> list[schemas.TaskListResponse]:
+def build_list(tasks: list[Task], *, scope=None) -> list[schemas.TaskListResponse]:
+    """``scope`` — ``TaskScope`` вызывающего: флаг ``can.claim`` строки (канбан
+    K1.6), из уже загруженных связей и исполнителей, без новых запросов."""
+    from . import task_service
+
     ctx = _Ctx(tasks, deep=False)
-    return [schemas.TaskListResponse.model_validate(_list_payload(t, ctx))
-            for t in tasks]
+    out = []
+    for task in tasks:
+        payload = _list_payload(task, ctx)
+        payload["can"] = {"claim": scope is not None and task_service.can_claim(task, scope)}
+        out.append(schemas.TaskListResponse.model_validate(payload))
+    return out
+
+
+def _can(task: Task, scope) -> dict:
+    """Флаги кнопок карточки — те же функции, что проверяют ручки (K1.6)."""
+    from . import access_requests, task_service, transfer
+
+    if scope is None:
+        return dict.fromkeys(("full_edit", "soft_edit", "comment", "transfer", "delete"),
+                             True) | {"claim": False, "request_access": [], "decide_access": False}
+    full = task_service.can_edit(task, scope)
+    return {
+        "full_edit": full,
+        "soft_edit": task_service.can_progress(task, scope),
+        "comment": True,                                   # видна — значит можно (K-16)
+        "transfer": transfer.can_transfer(task, scope),
+        "claim": task_service.can_claim(task, scope),
+        "delete": full,
+        "request_access": access_requests.can_request(task, scope),
+        "decide_access": any(access_requests.may_decide(task, kind, 0, scope)
+                             for kind in ("execute", "own")),
+    }
 
 
 def _link_payload(link) -> dict:
@@ -211,8 +246,26 @@ def _link_payload(link) -> dict:
     }
 
 
-def build_detail(task: Task) -> schemas.TaskDetailResponse:
+def _visible_ids(ids: set[int], scope) -> set[int]:
+    """Какие из этих задач вызывающий видит — одним запросом. ``scope=None``
+    или администратор — все."""
+    from . import task_service
+
+    condition = task_service.visibility_q(scope)
+    if not ids or condition is None:
+        return ids
+    return set(Task.objects.filter(id__in=ids, is_deleted=False).filter(condition)
+               .values_list("id", flat=True).distinct())
+
+
+def build_detail(task: Task, *, scope) -> schemas.TaskDetailResponse:
+    """``scope`` — ``TaskScope`` вызывающего (обязателен, канбан K1.4): связи
+    и подзадачи — только видимые ему, иначе карточка отдавала бы заголовки
+    чужих задач (S1-17). ``None`` — без ограничений."""
     ctx = _Ctx([task], deep=True)
+    linked_visible = _visible_ids(
+        {link.target_id for link in task.outgoing_links.all()}
+        | {link.source_id for link in task.incoming_links.all()}, scope)
     payload = _common_fields(task, ctx)
     payload.update({
         "description": task.description,
@@ -251,15 +304,23 @@ def build_detail(task: Task) -> schemas.TaskDetailResponse:
             for row in task.activities.all()
         ],
         "outgoing_links": [_link_payload(link)
-                           for link in task.outgoing_links.all()],
+                           for link in task.outgoing_links.all()
+                           if link.target_id in linked_visible],
         "incoming_links": [_link_payload(link)
-                           for link in task.incoming_links.all()],
+                           for link in task.incoming_links.all()
+                           if link.source_id in linked_visible],
         # Факт по каждому виду работ — свёртка отчётов задачи; в самой
         # строке объёма его нет (см. докстринг TaskVolume).
         "volumes": task_content_service.list_task_volumes(task.id),
         "subtasks": [],
     })
-    subtasks = list(task.subtasks.filter(is_deleted=False)
+    from . import task_service
+
+    subtask_qs = task.subtasks.filter(is_deleted=False)
+    condition = task_service.visibility_q(scope)
+    if condition is not None:
+        subtask_qs = subtask_qs.filter(condition).distinct()
+    subtasks = list(subtask_qs
                     # ``site``/``site_block`` тоже: ``_common_fields`` печатает
                     # их имена, и без джойна каждая подзадача стоила бы двух
                     # лишних запросов.
@@ -267,5 +328,16 @@ def build_detail(task: Task) -> schemas.TaskDetailResponse:
                                     "site_block", "parent")
                     .prefetch_related("labels", "assignees", "department_links",
                                       "subtasks"))
-    payload["subtasks"] = [s.model_dump() for s in build_list(subtasks)]
+    payload["subtasks"] = [s.model_dump() for s in build_list(subtasks, scope=scope)]
+    payload["can"] = _can(task, scope)
+    payload["checklists"] = checklist_service.for_task(task.id)
+    payload["home_boards"] = board_fields.home_boards(task, scope)
+    if scope is not None:
+        from . import access_requests
+
+        payload["pending_access_requests"] = access_requests.pending_to_decide(task, scope)
+    payload["department_links"] = [
+        {"department_id": link.department_id, "name": ctx.dept(link.department_id),
+         "kind": link.kind}
+        for link in task.department_links.all()]
     return schemas.TaskDetailResponse.model_validate(payload)

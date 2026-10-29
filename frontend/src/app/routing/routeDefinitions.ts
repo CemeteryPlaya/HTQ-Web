@@ -16,6 +16,9 @@ export const publicRoutes: RouteConfig[] = [
   // Вход в конференцию по ссылке-приглашению: сюда приходит внешний
   // участник, у которого учётки нет вовсе (см. ConferenceJoin.tsx).
   { path: '/join/:token', component: lazyPages.ConferenceJoin },
+  // Портал поставщика тендера (этап 3): внешний участник без учётки, вход по
+  // токену ссылки и cookie устройства, без layout приложения.
+  { path: '/supplier/:token', component: lazyPages.SupplierTender },
   // Комната открыта без обязательной авторизации намеренно: в ней может
   // оказаться гость с токеном из sessionStorage. Право войти проверяет не
   // маршрут, а SFU — он принимает гостевой токен только в ту комнату, на
@@ -75,13 +78,21 @@ export const protectedRoutes: RouteConfig[] = [
   },
 
   // ─── Tasks ────────────────────────────────────────────────────────────
-  // `/tasks` and `/tasks/:id` are for everyone — TaskRouter serves regular
-  // employees a scoped board of their own work. The four management
-  // surfaces below are not: the roadmap, reports and resource schedule show
-  // the whole company's load, and the equipment page edits a shared
-  // register (its writes are admin-only on the backend, so leaving it open
-  // here would only mean a page full of 403s).
-  { path: '/tasks', component: lazyPages.TaskRouter, requiresAuth: true },
+  // `/tasks`, `/tasks/list` and `/tasks/:id` are for everyone. The four
+  // management surfaces below are not: the roadmap, reports and resource
+  // schedule show the whole company's load, and the equipment page edits a
+  // shared register (its writes are admin-only on the backend, so leaving it
+  // open here would only mean a page full of 403s).
+  // Раздел «Задачи» — доски (этап S6a, решения R-01…R-04): `/tasks` ведёт на
+  // последнюю открытую доску, прежний реестр (TaskRouter — таблица) — вид
+  // «Таблица» на `/tasks/list`.
+  { path: '/tasks', component: lazyPages.TasksHome, requiresAuth: true },
+  { path: '/tasks/list', component: lazyPages.TaskRouter, requiresAuth: true },
+  // Канбан-доски: видимость доски решает сервер (404), поэтому гейта модуля
+  // на маршруте нет — как у `/tasks`.
+  { path: '/tasks/board', component: lazyPages.TasksBoard, requiresAuth: true },
+  { path: '/tasks/board/department/:id', component: lazyPages.TasksBoard, requiresAuth: true },
+  { path: '/tasks/board/project/:id', component: lazyPages.TasksBoard, requiresAuth: true },
   { path: '/tasks/roadmap', component: lazyPages.HRRoadmap, requiresAuth: true, requires: { module: 'hr', level: 'read' } },
   // Перед `/tasks/:id` (см. ниже) и перед ним же по смыслу: карточка пакета
   // работ, а не задачи.
@@ -164,6 +175,12 @@ export const protectedRoutes: RouteConfig[] = [
   // Сюда же ведут ссылки согласования и уведомлений (`/bpp/requests/<id>`,
   // `/bpp/accountable/<id>`). Права на сам документ проверяет бэкенд.
   { path: '/bpp/*', component: lazyPages.BppLayout, requiresAuth: true, requires: { module: 'bpp', level: 'read' } },
+
+  // ─── Тендерный модуль (apps.tender): раздел «Тендеры» ─────────────────
+  // Как у БЗО: один маршрут на раздел, меню и экраны приносят подразделы
+  // (`features/tender/<подраздел>/module.tsx`), `TenderLayout` раскладывает их.
+  // Портал поставщика (этап 3) — отдельно, в `publicRoutes`, без общего layout.
+  { path: '/tender/*', component: lazyPages.TenderLayout, requiresAuth: true, requires: { module: 'tender', level: 'read' } },
 
   { path: '/email', component: lazyPages.EmailInbox, requiresAuth: true },
   { path: '/email/oauth/callback', component: lazyPages.OAuthCallbackPage, requiresAuth: true },

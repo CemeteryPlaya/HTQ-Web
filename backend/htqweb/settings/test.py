@@ -78,3 +78,7 @@ FALLBACK_MODE = fallback_mode_for(HTQ_ENV)  # noqa: F405
 # pytest-django's test environment also force-swaps EMAIL_BACKEND to the
 # locmem backend for the duration of the run regardless of what's
 # configured, so no EMAIL_BACKEND override is needed here.
+
+# Портал поставщика: стенд без HTTPS — cookie устройства без Secure и без
+# префикса ``__Secure-`` (браузер не примет такую cookie по http).
+TENDER_PORTAL_INSECURE_COOKIE = True

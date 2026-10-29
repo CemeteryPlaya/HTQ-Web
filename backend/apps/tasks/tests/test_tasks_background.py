@@ -190,7 +190,10 @@ def test_both_jobs_are_registered_in_beat():
     jobs = {row.name: row for row in PeriodicTask.objects.filter(
         name__startswith="tasks.")}
     assert set(jobs) == {"tasks.task_deadline_reminder",
-                         "tasks.calendar_event_reminder"}
+                         "tasks.calendar_event_reminder",
+                         "tasks.automation_due",
+                         "tasks.automation_schedule",
+                         "tasks.automation_runs_purge"}
     assert all(row.enabled for row in jobs.values())
     # Schedules carried over from the APScheduler originals.
     assert jobs["tasks.task_deadline_reminder"].crontab.minute == "0"
@@ -199,6 +202,13 @@ def test_both_jobs_are_registered_in_beat():
         "apps.tasks.tasks.task_deadline_reminder_dispatch"
     assert jobs["tasks.calendar_event_reminder"].task == \
         "apps.tasks.tasks.calendar_event_reminder_dispatch"
+    # Board automation (kanban S4, migration 0036): dispatchers too.
+    assert jobs["tasks.automation_due"].interval.every == 15
+    assert jobs["tasks.automation_schedule"].interval.every == 5
+    purge = jobs["tasks.automation_runs_purge"].crontab
+    assert (purge.minute, purge.hour, str(purge.timezone)) == ("10", "3", "Asia/Almaty")
+    for name in ("automation_due", "automation_schedule", "automation_runs_purge"):
+        assert jobs[f"tasks.{name}"].task == f"apps.tasks.tasks.{name}_dispatch"
 
 
 # ── interface ───────────────────────────────────────────────────────────

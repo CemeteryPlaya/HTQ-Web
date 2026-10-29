@@ -89,6 +89,11 @@ class ParentCycle(LifecycleError):
     code = "parent_cycle"
 
 
+class BppDataCompanyInvalid(LifecycleError):
+    status = 422
+    code = "bpp_data_company_invalid"
+
+
 class LastActiveCompany(LifecycleError):
     status = 409
     code = "last_active"
@@ -203,10 +208,44 @@ def provision_company(*, slug: str, name: str, kind: str,
     return company
 
 
+def _resolve_bpp_data_company(company: Company, slug: str | None) -> Company | None:
+    """Где вести БЗО компании (решение 19.10). Пусто — у себя.
+
+    «Сама в себе» и цепочки отсекает ``Company.clean()``; здесь — то, что
+    требует чтения соседей: компания данных действует, модуль БЗО включён у
+    обеих, а у самой компании нет своих «Проектов» — иначе её данные пропали
+    бы из вида, как только запросы БЗО уйдут в чужую схему.
+    """
+    if not slug:
+        return None
+    from apps.companies import interface as companies
+    from apps.project import interface as project
+    from htqweb.tenancy.db import use_company
+
+    host = Company.objects.filter(slug=slug).first()
+    if host is None:
+        raise BppDataCompanyInvalid(f"Компания {slug} не найдена.")
+    if host.status != CompanyStatus.ACTIVE:
+        raise BppDataCompanyInvalid(f"Компания {slug} не действует.")
+    for target in (company.slug, host.slug):
+        enabled, _message = companies.module_enabled(target, "bpp")
+        if not enabled:
+            raise BppDataCompanyInvalid(f"Модуль БЗО выключен у компании {target}.")
+    if (company.bpp_data_company_id != host.pk
+            and companies.schema_exists(company.slug)):
+        with use_company(company.slug):
+            own = project.has_projects()
+        if own:
+            raise BppDataCompanyInvalid(
+                f"У компании {company.slug} есть свои «Проекты» — их данные "
+                "пропали бы из вида. Сначала перенесите или удалите их.")
+    return host
+
+
 def update_company(slug: str, *, name: str | None = None, kind: str | None = None,
                    country: str | None = None, parent_slug=UNSET,
                    show_external_holders: bool | None = None,
-                   subdomain=UNSET) -> Company:
+                   subdomain=UNSET, bpp_data_company=UNSET) -> Company:
     """Правка реестровых полей. Slug не правится никогда: он — имя схемы и поддомен.
 
     ``show_external_holders`` (задача 7 блока C) не нуждается в ``UNSET``, в
@@ -234,6 +273,9 @@ def update_company(slug: str, *, name: str | None = None, kind: str | None = Non
         # UNSET — «не трогать». Как у parent_slug: у поля есть третье,
         # явно пустое значение, и None его не выражает.
         company.subdomain = (subdomain or None)
+    if bpp_data_company is not UNSET:
+        # Пусто — «вести БЗО у себя»; UNSET — «не трогать», как у parent_slug.
+        company.bpp_data_company = _resolve_bpp_data_company(company, bpp_data_company)
     _full_clean(company)
     company.save()
     return company

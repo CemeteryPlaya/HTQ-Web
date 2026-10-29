@@ -208,7 +208,7 @@ const HRSites: React.FC = () => {
                           style={{ backgroundColor: site.color }}
                         />
                         <Link
-                          to={`/tasks?site_id=${site.id}`}
+                          to={`/tasks/list?site_id=${site.id}`}
                           className="hover:underline"
                           title={t('tasks.pages.sites.openTasks',
                             'Показать задачи объекта')}

@@ -81,6 +81,8 @@ def card(actor: Actor, req: PurchaseRequest) -> dict:
         "approval_state": req.approval_state, "version": req.version,
         "author_id": req.author_id, "author_name": names.get(req.author_id),
         "created_at": req.created_at, "initiator_role": req.initiator_role,
+        # ЗЗ тендерного модуля (T-07): в БЗО только читается и печатается.
+        "source": req.source, "tender_number": req.tender_number,
         "project": {"id": str(req.project_id), "code": project.get("code"),
                     "name": project.get("name")},
         "article": None if not req.article_id else {
@@ -158,6 +160,7 @@ def registry(actor: Actor, *, filters: dict | None = None, page: int = 1,
         "purchase_type": r.purchase_type, "need_date": r.need_date,
         "total_amount": r.total_amount, "currency_code": r.currency_code,
         "current_holders": holders.get(str(r.pk)),
+        "source": r.source, "tender_number": r.tender_number,
     } for r in chunk]
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "totals": {"total_amount": totals_amount}}

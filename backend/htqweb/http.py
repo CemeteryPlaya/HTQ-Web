@@ -101,6 +101,19 @@ def _authenticate_jwt(request):
 _AUTHENTICATORS = {"jwt": _authenticate_jwt}
 
 
+def _address_company(request):
+    """Компания адреса (поддомена) запроса — та, на которую выдан токен.
+
+    Обычно это ``request.company``. Запрос БЗО компании, чьё БЗО ведётся в
+    другой (решение 19.10, ``htqweb/tenancy/bpp_delegation.py``), работает в
+    данных той: ``request.company`` — компания данных, а адрес —
+    ``request.address_company``. Запрос, собранный мимо middleware, атрибута
+    не несёт — тогда адрес и есть ``request.company``.
+    """
+    company = getattr(request, "company", None)
+    return getattr(request, "address_company", company)
+
+
 def _to_response(result, status: int):
     if isinstance(result, BaseModel):
         return JsonResponse(result.model_dump(mode="json"), status=status)
@@ -156,7 +169,11 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     # Токен, выпущенный для одной компании, не должен работать
                     # в другой, даже если у пользователя есть членство в обеих:
                     # переключение обязано пройти через выдачу нового токена.
-                    current = getattr(request, "company", None)
+                    #
+                    # Сверяется компания АДРЕСА: запрос БЗО компании, чьё БЗО
+                    # ведётся в другой (решение 19.10), работает в данных
+                    # той (request.company), а токен выдан на свой поддомен.
+                    current = _address_company(request)
                     if current is not None and payload.company != current["slug"]:
                         return json_error("Forbidden", 403)
                     # Архив — только чтение, и читает его только
@@ -217,7 +234,7 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     # условие не попадают и так; исключение оставлено явным —
                     # без выдачи токена суперпользователь архив не прочтёт.
                     if (blocks_in_archive
-                            and archive.is_archived(getattr(request, "company", None))
+                            and archive.is_archived(_address_company(request))
                             and request.path not in archive.TOKEN_PATHS):
                         return archive.not_found_response()
                     request.token = None  # чтобы вьюхи с auth=None не падали на AttributeError
@@ -252,7 +269,10 @@ def api_view(methods=("GET",), auth="jwt", body: type[BaseModel] | None = None,
                     if idem_key is not None:
                         idempotency.release(request, idem_key)
             except DomainError as exc:
-                return JsonResponse(exc.payload(), status=exc.status)
+                response = JsonResponse(exc.payload(), status=exc.status)
+                for name, value in exc.headers.items():
+                    response[name] = value
+                return response
             except ApiError as exc:
                 return json_error(exc.detail or str(exc), exc.status_code)
             except ServiceDisabled as exc:

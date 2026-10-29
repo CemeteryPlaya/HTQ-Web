@@ -21,7 +21,8 @@ Fail-open по кэшу: недоступный Redis не должен роня
 голый ``company:{slug}`` — иначе slug компании, совпавший со статическим
 ключом другой функции (например, компания с slug "active"), читал бы или
 писал чужую запись кэша и подменял бы там тип значения (dict вместо list
-или наоборот) без единой ошибки. ``company:member:{user_id}`` и
+или наоборот) без единой ошибки. ``company:member:{user_id}``,
+``company:login:{user_id}`` и
 ``company:module:{slug}:{app_label}`` от такой коллизии защищены тем, что
 двоеточие в slug запрещено валидатором (SLUG_VALIDATOR в models.py), а
 user_id — int, а не пользовательская строка.
@@ -73,13 +74,18 @@ def _serialize(company: Company) -> dict:
         "is_active": company.status == CompanyStatus.ACTIVE,
         "country": company.country,
         "parent_slug": company.parent.slug if company.parent_id else None,
+        # Где ведётся БЗО этой компании (решение 19.10): его читает
+        # CompanyContextMiddleware на каждом запросе, поэтому — в кэше строки.
+        "bpp_data_company": (company.bpp_data_company.slug
+                             if company.bpp_data_company_id else None),
     }
 
 
 def get_company(slug: str) -> dict | None:
     """Строка реестра по slug, или None если такой компании нет."""
     def produce():
-        company = Company.objects.select_related("parent").filter(slug=slug).first()
+        company = (Company.objects.select_related("parent", "bpp_data_company")
+                   .filter(slug=slug).first())
         return _serialize(company) if company else {}
 
     found = _cached(f"company:slug:{slug}", produce)
@@ -98,10 +104,10 @@ def resolve_host_label(label: str) -> dict | None:
     смена псевдонима вступает в силу не позже чем через 5 с.
     """
     def produce():
-        company = (Company.objects.select_related("parent")
+        company = (Company.objects.select_related("parent", "bpp_data_company")
                    .filter(subdomain=label).first())
         if company is None:
-            company = (Company.objects.select_related("parent")
+            company = (Company.objects.select_related("parent", "bpp_data_company")
                        .filter(slug=label, subdomain__isnull=True).first())
         return _serialize(company) if company else {}
 
@@ -252,8 +258,28 @@ def is_archived(slug: str) -> bool:
     return bool(company) and not company["is_active"]
 
 
+def bpp_data_company(slug: str) -> str | None:
+    """Слаг компании, где ведётся БЗО ``slug`` (решение 19.10), или ``None`` —
+    БЗО ведётся у самой компании."""
+    company = get_company(slug)
+    return company.get("bpp_data_company") if company else None
+
+
+def companies_delegating_bpp_to(slug: str) -> list[str]:
+    """Действующие компании, чьё БЗО ведётся в ``slug``, по алфавиту."""
+    return sorted(
+        Company.objects.filter(bpp_data_company__slug=slug, status=CompanyStatus.ACTIVE)
+        .values_list("slug", flat=True)
+    )
+
+
 def user_company_slugs(user_id: int) -> list[str]:
-    """Компании, в которых пользователь имеет право работать."""
+    """Компании, в которых пользователь числится, — и со входом, и без.
+
+    «Без входа» (``CompanyMembership.login_allowed=False``) — тоже участник:
+    его видно в составе компании, ему идут уведомления и выдаются роли.
+    Можно ли ВОЙТИ, решает ``user_may_enter_company``.
+    """
     return _cached(
         f"company:member:{user_id}",
         lambda: sorted(
@@ -261,6 +287,26 @@ def user_company_slugs(user_id: int) -> list[str]:
             .values_list("company__slug", flat=True)
         ),
     )
+
+
+def _login_company_slugs(user_id: int) -> list[str]:
+    """Компании, куда пользователю разрешён вход."""
+    return _cached(
+        f"company:login:{user_id}",
+        lambda: sorted(
+            CompanyMembership.objects.filter(user_id=user_id, login_allowed=True)
+            .values_list("company__slug", flat=True)
+        ),
+    )
+
+
+def forget_user_memberships(user_id: int) -> None:
+    """Сбросить кэш членств пользователя после их правки."""
+    try:
+        cache.delete_many([f"company:member:{user_id}", f"company:login:{user_id}"])
+    except Exception:  # кэш живёт 5 с; недоступный Redis не помеха
+        logger.warning("cache.delete_many failed for memberships of user %s",
+                       user_id, exc_info=True)
 
 
 def active_member_ids(slug: str) -> list[int]:
@@ -310,6 +356,9 @@ def user_may_enter_company(user_id: int, slug: str) -> bool:
     Архивную компанию (спека docs/plans/2026-09-25-archive-read-only-spec.md
     §6.1) читает только суперпользователь, и членство ему для этого не
     нужно: заводить его в архив некому и незачем. Участникам архива — нет.
+
+    Участник без входа (``login_allowed=False``, решение 19.10) числится в
+    компании, но токена на её поддомен не получает.
     """
     company = get_company(slug)
     if company is None:
@@ -318,7 +367,7 @@ def user_may_enter_company(user_id: int, slug: str) -> bool:
         from apps.users import interface as users
 
         return users.is_superuser(user_id)
-    return slug in user_company_slugs(user_id)
+    return slug in _login_company_slugs(user_id)
 
 
 def default_company_slug(user_id: int) -> str | None:
@@ -328,7 +377,8 @@ def default_company_slug(user_id: int) -> str | None:
     в 404 (спека архива §6.2).
     """
     row = (CompanyMembership.objects
-           .filter(user_id=user_id, company__status=CompanyStatus.ACTIVE)
+           .filter(user_id=user_id, company__status=CompanyStatus.ACTIVE,
+                   login_allowed=True)
            .order_by("-is_default", "company__slug")
            .values_list("company__slug", flat=True)
            .first())
@@ -384,20 +434,19 @@ def descendant_slugs(slug: str) -> list[str]:
     return sorted(below)
 
 
-def grant_membership(slug: str, user_id: int) -> bool:
+def grant_membership(slug: str, user_id: int, *, login_allowed: bool = True) -> bool:
     """Членство пользователя в компании (``True`` — создано, ``False`` —
     уже было). Та же точка логики, что у ``company_grant`` (с базовой ролью).
-    Неизвестный слаг — ``LookupError``."""
+    ``login_allowed=False`` — участник без входа (решение 19.10); уже
+    существующее членство не меняется. Неизвестный слаг — ``LookupError``."""
     from apps.companies.services import membership_service
 
     company = Company.objects.filter(slug=slug).first()
     if company is None:
         raise LookupError(f"Компания {slug!r} не найдена")
-    created = membership_service.grant_membership(company, user_id)
-    try:  # кэш «в каких компаниях» живёт 5 с; недоступный Redis не помеха
-        cache.delete(f"company:member:{user_id}")
-    except Exception:
-        logger.warning("cache.delete failed for member %s", user_id, exc_info=True)
+    created = membership_service.grant_membership(company, user_id,
+                                                  login_allowed=login_allowed)
+    forget_user_memberships(user_id)
     return created
 
 

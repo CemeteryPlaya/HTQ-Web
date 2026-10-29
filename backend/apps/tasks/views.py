@@ -35,6 +35,7 @@ from apps.companies import interface as companies
 from . import schemas
 from .services import block_service
 from .services import board_scope
+from .services import board_service
 from .services import calendar_service
 from .services import contractor_service
 from .services import daily_report_service
@@ -54,7 +55,10 @@ from .services import site_service
 from .services import staff_report_service
 from .services import task_content_service
 from .services import task_response
+from .services import task_scope
 from .services import task_service
+from .services import transfer
+from .services.automation.events import records_blocks
 
 
 def _no_content() -> HttpResponse:
@@ -442,30 +446,40 @@ def _list_tasks(request):
             "label_id": _int_param(request, "label_id"),
             "search": _str_param(request, "search"),
         }
+        tab = _str_param(request, "scope")
+        if tab not in (None, "mine", "department"):
+            raise _ParamError(json_error("scope must be one of: mine, department", 422))
     except _ParamError as exc:
         return exc.response
 
-    visibility, department_id = task_service.scope_for(request.token)
+    scope = task_scope.for_request(request)
     tasks = task_service.list_tasks(
-        offset=offset, limit=limit, visibility=visibility,
-        visibility_user_id=request.token.user_id,
-        visibility_department_id=department_id, **filters,
+        offset=offset, limit=limit, scope=scope,
+        extra_q=task_service.tab_q(tab, scope), **filters,
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 @api_view(methods=("POST",), body=schemas.TaskCreate, status=201, module="tasks", level="write")
 def _create_task(request, data: schemas.TaskCreate):
+    # Быстрое добавление на доске (канбан §6.2): доска проверяется ДО создания
+    # — на невидимую доску задачу не положить (404).
+    board = (board_service.resolve(request, data.board.kind, data.board.id)
+             if data.board is not None else None)
     # ``create_task`` raises ValueError for a site that does not belong to
     # the task's project. Unlike _update_task this view had no except arm at
     # all, so any ValueError from the service reached the client as a 500.
     try:
-        task = task_service.create_task(data, user_id=request.token.user_id)
+        task = task_service.create_task(data, user_id=request.token.user_id,
+                                        scope=task_scope.for_request(request))
     except ValueError as exc:
         return json_error(str(exc), 400)
+    if board is not None and board_service.board_tasks(board).filter(pk=task.id).exists():
+        board_service.place_new(board, task)
     # Re-read through the visibility-aware loader so the response is built
     # from the same fully-prefetched shape every other endpoint returns.
-    return task_response.build_detail(task_service.get_task(task.id))
+    return task_response.build_detail(
+        task_service.get_task(task.id), scope=task_scope.for_request(request))
 
 
 def tasks_collection(request):
@@ -484,49 +498,48 @@ def task_stats(request):
         site_id = _int_param(request, "site_id")
     except _ParamError as exc:
         return exc.response
-    visibility, visibility_department_id = task_service.scope_for(
-        request.token, reports=True
-    )
     return schemas.TaskStats.model_validate(task_service.task_stats(
         department_id=department_id, project_id=project_id, site_id=site_id,
-        visibility=visibility, visibility_user_id=request.token.user_id,
-        visibility_department_id=visibility_department_id,
+        visibility_condition=task_service.report_visibility_q(request.token),
     ))
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_task(request, task_id: int):
     return task_response.build_detail(
-        task_service.load_for_action(task_id, request.token)
-    )
+        task_service.load_for_action(task_id, request),
+        scope=task_scope.for_request(request))
 
 
 @api_view(methods=("PATCH",), body=schemas.TaskUpdate, module="tasks", level="write")
+@records_blocks
 def _update_task(request, task_id: int, data: schemas.TaskUpdate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Status/progress alone need only the soft-edit role; touching anything
     # else requires full edit.
     fields = set(data.model_dump(exclude_unset=True))
     if fields and fields.issubset({"status", "progress_percent"}):
-        task_service.require_soft_edit(task, request.token)
+        task_service.require_soft_edit(task, request)
     else:
-        task_service.require_full_edit(task, request.token)
+        task_service.require_full_edit(task, request)
 
     try:
-        task_service.update_task(task_id, data, user_id=request.token.user_id)
+        task_service.update_task(task_id, data, user_id=request.token.user_id,
+                                 scope=task_scope.for_request(request))
     except date_rules.DatesOutOfOrder as exc:
         # 422, а не 500: до правила дат раньше добиралась только БД.
         return json_error(str(exc), 422)
     except ValueError as exc:
         # Rejected FSM transition — 400, as in the original.
         return json_error(str(exc), 400)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def _delete_task(request, task_id: int):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.delete_task(task_id)
     return _no_content()
 
@@ -543,39 +556,63 @@ def task_detail(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def task_transitions(request, task_id: int):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     return [{"status": status}
             for status in task_service.available_transitions(task)]
 
 
+@api_view(methods=("POST",), body=schemas.TransferIn, module="tasks", level="write")
+def task_transfer(request, task_id: int, data: schemas.TransferIn):
+    """«Отправить в отдел» (канбан K1.6): глава отдела задачи или администратор;
+    исполнители снимаются, отдел-отправитель остаётся связью ``origin``."""
+    task = transfer.transfer(task_id, data.department_id, request,
+                             sender_department_id=data.sender_department_id)
+    return task_response.build_detail(
+        task_service.get_task(task.id), scope=task_scope.for_request(request))
+
+
+@api_view(methods=("POST",), module="tasks", level="write")
+def task_claim(request, task_id: int):
+    """«Взять в работу» (канбан K1.6): неразобранная задача своего отдела."""
+    task = task_service.claim(task_id, request)
+    return task_response.build_detail(
+        task_service.get_task(task.id), scope=task_scope.for_request(request))
+
+
 @api_view(methods=("PATCH",), body=schemas.AssigneesUpdate, module="tasks", level="write")
 def update_assignees(request, task_id: int, data: schemas.AssigneesUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.replace_assignees(task_id, data.assignees,
                                    actor_id=request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("PATCH",), body=schemas.SupervisorUpdate, module="tasks", level="write")
 def update_supervisor(request, task_id: int, data: schemas.SupervisorUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_full_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_full_edit(task, request)
     task_service.set_supervisor(task_id, data.user_id,
                                 actor_id=request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("POST",), body=schemas.DelegateCreate, status=201, module="tasks", level="write")
 def _add_delegate(request, task_id: int, data: schemas.DelegateCreate):
-    task = task_service.load_for_action(task_id, request.token)
-    # Only the supervisor (or an admin) may delegate. Reporters and existing
-    # delegates deliberately cannot — otherwise delegates self-propagate.
-    if not request.token.is_elevated and task.supervisor_id != request.token.user_id:
+    task = task_service.load_for_action(task_id, request)
+    # Only the supervisor, the head of the task's department (K-06, S1-24)
+    # or an admin may delegate. Reporters and existing delegates deliberately
+    # cannot — otherwise delegates self-propagate.
+    if not (request.token.is_elevated
+            or task.supervisor_id == request.token.user_id
+            or task_service.is_head_of(task, task_scope.for_request(request))):
         return json_error("Only the supervisor (or admin) can add delegates", 403)
     task_service.add_delegate(task_id, data.user_id,
                               granted_by=request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 def task_delegates(request, task_id: int):
@@ -588,28 +625,32 @@ def task_delegates(request, task_id: int):
 def remove_delegate(request, task_id: int, user_id: int):
     """The supervisor can revoke anyone; a delegate may also give up their
     own seat. Returns the task (200), not 204 — as the original did."""
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     is_self = user_id == request.token.user_id
-    is_supervisor = task.supervisor_id == request.token.user_id
+    is_supervisor = (task.supervisor_id == request.token.user_id
+                     or task_service.is_head_of(task, task_scope.for_request(request)))
     if not (request.token.is_elevated or is_supervisor or is_self):
         return json_error("Cannot revoke another user's delegate seat", 403)
     task_service.remove_delegate(task_id, user_id,
                                  actor_id=request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("POST",), status=201, module="tasks", level="write")
 def _watch_task(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     task_service.add_watcher(task_id, request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 @api_view(methods=("DELETE",), module="tasks", level="write")
 def _unwatch_task(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     task_service.remove_watcher(task_id, request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 def task_watch(request, task_id: int):
@@ -623,11 +664,12 @@ def task_watch(request, task_id: int):
 
 @api_view(methods=("PATCH",), body=schemas.ProgressUpdate, module="tasks", level="write")
 def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_soft_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_soft_edit(task, request)
     task_service.set_progress(task_id, data.percent,
                               actor_id=request.token.user_id)
-    return task_response.build_detail(task_service.get_task(task_id))
+    return task_response.build_detail(
+        task_service.get_task(task_id), scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -643,7 +685,7 @@ def update_progress(request, task_id: int, data: schemas.ProgressUpdate):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_comments(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_comments(task_id)
 
 
@@ -654,7 +696,7 @@ def _create_comment(request, task_id: int, data: schemas.CommentCreate):
     # watcher or a colleague looking at free work in their department — may
     # say something about it. What must not happen is commenting on a task
     # the caller cannot see at all.
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.create_comment(task_id, data.body,
                                                request.token.user_id)
 
@@ -669,7 +711,7 @@ def task_comments(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_attachments(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_attachments(task_id)
 
 
@@ -688,8 +730,8 @@ def _upload_attachment(request, task_id: int):
     """
     from apps.media_files import interface as media_interface
 
-    task = task_service.load_for_action(task_id, request.token)
-    task_service.require_soft_edit(task, request.token)
+    task = task_service.load_for_action(task_id, request)
+    task_service.require_soft_edit(task, request)
 
     upload = request.FILES.get("file")
     if upload is None:
@@ -740,25 +782,25 @@ def task_attachments(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def task_activity(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return task_content_service.list_activity(task_id)
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_volumes(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return [schemas.TaskVolumeResponse.model_validate(row)
             for row in task_content_service.list_task_volumes(task_id)]
 
 
 @api_view(methods=("PUT",), body=schemas.VolumesUpdate, module="tasks", level="write")
 def _set_task_volumes(request, task_id: int, data: schemas.VolumesUpdate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Мягкое право, а не полное: «развезли 180 из 250» — это отчёт о ходе
     # работ, ровно то же, что progress_percent, а он под require_soft_edit.
     # Требовать здесь full_edit значило бы запретить исполнителю отчитаться
     # о собственной задаче.
-    task_service.require_soft_edit(task, request.token)
+    task_service.require_soft_edit(task, request)
     try:
         rows = task_content_service.set_task_volumes(
             task_id, [v.model_dump() for v in data.volumes])
@@ -785,7 +827,7 @@ def task_volumes(request, task_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_task_reports(request, task_id: int):
-    task_service.load_for_action(task_id, request.token)
+    task_service.load_for_action(task_id, request)
     return [schemas.DailyReportResponse.model_validate(row)
             for row in daily_report_service.build_reports(
                 daily_report_service.list_reports(task_id=task_id))]
@@ -793,11 +835,11 @@ def _list_task_reports(request, task_id: int):
 
 @api_view(methods=("POST",), body=schemas.DailyReportCreate, status=201, module="tasks", level="write")
 def _create_task_report(request, task_id: int, data: schemas.DailyReportCreate):
-    task = task_service.load_for_action(task_id, request.token)
+    task = task_service.load_for_action(task_id, request)
     # Мягкое право: отчёт о выполненном — то же, что progress, а не
     # планирование. Требовать full_edit значило бы запретить исполнителю
     # отчитаться о собственной смене.
-    task_service.require_soft_edit(task, request.token)
+    task_service.require_soft_edit(task, request)
     try:
         report = daily_report_service.create_report(
             task_id, data.model_dump(), author_id=request.token.user_id)
@@ -824,7 +866,7 @@ def _report_for_write(request, report_id: int):
     завести свою.
     """
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     token = request.token
     if not (token.is_elevated
             or report.author_id == token.user_id
@@ -838,7 +880,7 @@ def _report_for_write(request, report_id: int):
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_report(request, report_id: int):
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     return schemas.DailyReportResponse.model_validate(
         daily_report_service.build_report(report))
 
@@ -877,7 +919,7 @@ def daily_report_detail(request, report_id: int):
 def daily_report_revisions(request, report_id: int):
     """Лента версий отчёта. Читают все, кто видит задачу."""
     report = daily_report_service.get_report(report_id)
-    task_service.load_for_action(report.task_id, request.token)
+    task_service.load_for_action(report.task_id, request)
     return [schemas.DailyReportRevisionResponse.model_validate(row)
             for row in daily_report_service.build_revisions(
                 daily_report_service.list_revisions(report_id))]
@@ -912,9 +954,9 @@ def roadmap_daily_reports(request, roadmap_id: int):
         date_to = _date_param(request, "date_to")
     except _ParamError as exc:
         return exc.response
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
-                                department_id=department_id)
+                                department_ids=department_ids)
     return [schemas.DailyReportResponse.model_validate(row)
             for row in daily_report_service.build_reports(
                 daily_report_service.list_reports(
@@ -945,9 +987,9 @@ def _staff_project(request, project_id: int):
     Один helper на чтение и на запись намеренно: правило здесь буквально
     одно, и двум копиям было бы нечему соответствовать, кроме друг друга.
     """
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     project = project_service.get_project(
-        project_id, employee_scope=employee_scope, department_id=department_id)
+        project_id, employee_scope=employee_scope, department_ids=department_ids)
     if not (request.token.is_elevated
             or project.owner_id == request.token.user_id):
         raise PermissionDenied(
@@ -965,10 +1007,10 @@ def staff_report_projects(request):
     ``is_staff``/``is_superuser``), поэтому роут-гейт фронта шире
     серверного правила, и сузить список должен сервер.
     """
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     projects = [
         project for project in project_service.list_projects(
-            employee_scope=employee_scope, department_id=department_id)
+            employee_scope=employee_scope, department_ids=department_ids)
         if request.token.is_elevated
         or project.owner_id == request.token.user_id]
     return project_service.build_responses(projects)
@@ -1097,9 +1139,9 @@ def _create_link(request, data: schemas.LinkCreate):
     # the response and on the other task's card. Write permission is
     # required on the source only — that is the side the link is created
     # from, and the side link_detail authorises deletion against.
-    source = task_service.load_for_action(data.source_id, request.token)
-    task_service.load_for_action(data.target_id, request.token)
-    task_service.require_full_edit(source, request.token)
+    source = task_service.load_for_action(data.source_id, request)
+    task_service.load_for_action(data.target_id, request)
+    task_service.require_full_edit(source, request)
     try:
         link = link_service.create_link(source_id=data.source_id,
                                         target_id=data.target_id,
@@ -1126,8 +1168,8 @@ def links_collection(request):
 @api_view(methods=("DELETE",), status=204, module="tasks", level="write")
 def link_detail(request, link_id: int):
     source = task_service.load_for_action(
-        link_service.link_source_task_id(link_id), request.token)
-    task_service.require_full_edit(source, request.token)
+        link_service.link_source_task_id(link_id), request)
+    task_service.require_full_edit(source, request)
     link_service.delete_link(link_id)
     return _no_content()
 
@@ -1449,14 +1491,10 @@ def site_detail(request, site_id: int):
 def site_tasks(request, site_id: int):
     """Tasks on one object — visibility-scoped like every other task list."""
     site_service.get_site(site_id)          # 404 first for an unknown object
-    visibility, department_id = task_service.scope_for(request.token)
     tasks = task_service.list_tasks(
-        limit=1000, site_id=site_id,
-        visibility=visibility,
-        visibility_user_id=request.token.user_id,
-        visibility_department_id=department_id,
+        limit=1000, site_id=site_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1612,9 +1650,9 @@ def project_sites(request, project_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _list_projects(request):
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     return project_service.build_responses(project_service.list_projects(
-        employee_scope=employee_scope, department_id=department_id,
+        employee_scope=employee_scope, department_ids=department_ids,
         refs=board_scope.refs_for_request(request),
         project_ref=request.GET.get("project_ref", "").strip() or None))
 
@@ -1647,10 +1685,10 @@ def projects_collection(request):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_project(request, project_id: int):
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     return project_service.build_response(project_service.get_project(
         project_id, employee_scope=employee_scope,
-        department_id=department_id, refs=board_scope.refs_for_request(request)))
+        department_ids=department_ids, refs=board_scope.refs_for_request(request)))
 
 
 def _project_for_write(request, project_id: int):
@@ -1665,9 +1703,9 @@ def _project_for_write(request, project_id: int):
       touch a project they own. Editing someone else's roadmap is an
       elevated act.
     """
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     project = project_service.get_project(
-        project_id, employee_scope=employee_scope, department_id=department_id)
+        project_id, employee_scope=employee_scope, department_ids=department_ids)
     if not (request.token.is_elevated
             or project.owner_id == request.token.user_id):
         raise PermissionDenied("Only the project owner (or admin) can change it")
@@ -1724,11 +1762,11 @@ def _list_roadmaps(request):
         block_id = _int_param(request, "block_id")
     except _ParamError as exc:
         return exc.response
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     return [schemas.RoadmapResponse.model_validate(row)
             for row in roadmap_service.build_responses(
                 roadmap_service.list_roadmaps(
-                    employee_scope=employee_scope, department_id=department_id,
+                    employee_scope=employee_scope, department_ids=department_ids,
                     project_id=project_id, site_id=site_id, block_id=block_id,
                     status=_str_param(request, "status"),
                     refs=board_scope.refs_for_request(request)))]
@@ -1764,9 +1802,9 @@ def _roadmap_for_write(request, roadmap_id: int):
     сначала 404 для чужой области видимости (чтобы ручка не работала
     перечислителем), затем владение.
     """
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     roadmap = roadmap_service.get_roadmap(
-        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+        roadmap_id, employee_scope=employee_scope, department_ids=department_ids)
     if not (request.token.is_elevated
             or roadmap.owner_id == request.token.user_id):
         raise PermissionDenied(
@@ -1776,11 +1814,11 @@ def _roadmap_for_write(request, roadmap_id: int):
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def _get_roadmap(request, roadmap_id: int):
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     return schemas.RoadmapResponse.model_validate(
         roadmap_service.build_response(roadmap_service.get_roadmap(
             roadmap_id, employee_scope=employee_scope,
-            department_id=department_id)))
+            department_ids=department_ids)))
 
 
 @api_view(methods=("PATCH",), body=schemas.RoadmapUpdate, module="tasks", level="write")
@@ -1825,27 +1863,24 @@ def roadmap_detail(request, roadmap_id: int):
 @api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_tasks(request, roadmap_id: int):
     """Плоский список задач пакета — дерево строит UI, как и у проектов."""
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
-                                department_id=department_id)
-    # Видеть роудмап — не значит видеть каждую его задачу: та же тройка
-    # видимости, что у плоского списка (см. project_tasks).
-    visibility, visibility_department_id = task_service.scope_for(request.token)
+                                department_ids=department_ids,
+                                refs=board_scope.refs_for_request(request))
+    # Видеть роудмап — не значит видеть каждую его задачу: та же видимость,
+    # что у плоского списка (см. project_tasks).
     tasks = task_service.list_tasks(
-        limit=1000, roadmap_id=roadmap_id,
-        visibility=visibility,
-        visibility_user_id=request.token.user_id,
-        visibility_department_id=visibility_department_id,
+        limit=1000, roadmap_id=roadmap_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
 def roadmap_metrics(request, roadmap_id: int):
     """План против факта по трём осям доски: срок, люди, техника."""
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     roadmap = roadmap_service.get_roadmap(
-        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+        roadmap_id, employee_scope=employee_scope, department_ids=department_ids)
     return schemas.RoadmapMetricsResponse.model_validate(
         roadmap_service.roadmap_metrics(roadmap))
 
@@ -1853,25 +1888,22 @@ def roadmap_metrics(request, roadmap_id: int):
 @api_view(methods=("GET",), module="tasks", level="read")
 def project_tasks(request, project_id: int):
     """Flat task list for a project — the UI builds the tree itself."""
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     # 404s first if the project is out of scope, so this cannot be used to
     # enumerate tasks of a project the caller may not see. Доска своего
     # «Проекта» (``board_scope``) — в зоне видимости; задачи внутри — ниже,
     # по своим правилам.
     project_service.get_project(project_id, employee_scope=employee_scope,
-                                department_id=department_id,
+                                department_ids=department_ids,
                                 refs=board_scope.refs_for_request(request))
     # Seeing the project is NOT seeing every task in it: narrowing by
     # department alone still handed over tasks the caller has no part in.
-    # Same visibility triple as the flat list endpoint.
-    visibility, visibility_department_id = task_service.scope_for(request.token)
+    # Same visibility as the flat list endpoint (держатель «Доски задач
+    # проекта» видит её задачи целиком — K-14).
     tasks = task_service.list_tasks(
-        limit=1000, project_id=project_id,
-        visibility=visibility,
-        visibility_user_id=request.token.user_id,
-        visibility_department_id=visibility_department_id,
+        limit=1000, project_id=project_id, scope=task_scope.for_request(request),
     )
-    return task_response.build_list(tasks)
+    return task_response.build_list(tasks, scope=task_scope.for_request(request))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1887,8 +1919,8 @@ def _authorise_resource_target(request, task_id: int | None,
                                roadmap_id: int | None):
     """Проверить право писать ресурсы указанной цели."""
     if task_id is not None:
-        task = task_service.load_for_action(task_id, request.token)
-        task_service.require_full_edit(task, request.token)
+        task = task_service.load_for_action(task_id, request)
+        task_service.require_full_edit(task, request)
     else:
         _roadmap_for_write(request, roadmap_id)
 
@@ -1897,11 +1929,12 @@ def _read_resource_target(request, task_id: int | None,
                           roadmap_id: int | None):
     """Проверить право ЧИТАТЬ ресурсы цели — только видимость, без правки."""
     if task_id is not None:
-        task_service.load_for_action(task_id, request.token)
+        task_service.load_for_action(task_id, request)
     else:
-        employee_scope, department_id = roadmap_service.scope_for(request.token)
+        employee_scope, department_ids = roadmap_service.scope_for(request)
         roadmap_service.get_roadmap(roadmap_id, employee_scope=employee_scope,
-                                    department_id=department_id)
+                                    department_ids=department_ids,
+                                    refs=board_scope.refs_for_request(request))
 
 
 @api_view(methods=("GET",), module="tasks", level="read")
@@ -2116,7 +2149,9 @@ def reports_gantt(request):
         gantt_service.reports_gantt(_csv_ints(_str_param(request, "ids")),
                                     _csv(_str_param(request, "status")),
                                     project_id, site_id, roadmap_id,
-                                    site_block_id)
+                                    site_block_id,
+                                    task_condition=task_service.visibility_q(
+                                        task_scope.for_request(request)))
     )
 
 
@@ -2139,7 +2174,9 @@ def resource_gantt(request):
     return schemas.ResourceGanttResponse.model_validate(
         gantt_service.resource_gantt(dt_from, dt_to, kinds, department_id,
                                      _str_param(request, "search"),
-                                     project_id, site_id)
+                                     project_id, site_id,
+                                     task_condition=task_service.visibility_q(
+                                         task_scope.for_request(request)))
     )
 
 
@@ -2158,9 +2195,9 @@ def project_plan_fact(request, project_id: int):
         on = _date_param(request, "date") or timezone.localdate()
     except _ParamError as exc:
         return exc.response
-    employee_scope, department_id = project_service.scope_for(request.token)
+    employee_scope, department_ids = project_service.scope_for(request)
     project = project_service.get_project(
-        project_id, employee_scope=employee_scope, department_id=department_id)
+        project_id, employee_scope=employee_scope, department_ids=department_ids)
     return schemas.PlanFactNode.model_validate(
         plan_fact_service.project_plan_fact(project, on))
 
@@ -2172,9 +2209,9 @@ def roadmap_plan_fact(request, roadmap_id: int):
         on = _date_param(request, "date") or timezone.localdate()
     except _ParamError as exc:
         return exc.response
-    employee_scope, department_id = roadmap_service.scope_for(request.token)
+    employee_scope, department_ids = roadmap_service.scope_for(request)
     roadmap = roadmap_service.get_roadmap(
-        roadmap_id, employee_scope=employee_scope, department_id=department_id)
+        roadmap_id, employee_scope=employee_scope, department_ids=department_ids)
     return schemas.PlanFactNode.model_validate(
         plan_fact_service.roadmap_plan_fact(roadmap, on))
 
@@ -2248,7 +2285,9 @@ def calendar_timeline(request):
         start, end = _bounded_range(request, "start", "end")
     except _ParamError as exc:
         return exc.response
-    return calendar_service.timeline(request.token, start, end)
+    return calendar_service.timeline(
+        request.token, start, end,
+        task_condition=task_service.visibility_q(task_scope.for_request(request)))
 
 
 @api_view(methods=("GET",), module="tasks", level="read")

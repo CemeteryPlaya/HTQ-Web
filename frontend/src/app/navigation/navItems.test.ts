@@ -56,6 +56,16 @@ describe('navItems', () => {
     expect(bottomNavItems({ ...PLAIN, hasBpp: true }).map((i) => i.id)).not.toContain('bpp');
   });
 
+  it('«Тендеры» видны только при tender:read и ведут в раздел /tender (T0.4)', () => {
+    expect(visibleNavItems(PLAIN).map((i) => i.id)).not.toContain('tender');
+    const tender = visibleNavItems({ ...PLAIN, hasTender: true }).find((i) => i.id === 'tender');
+    expect(tender?.href).toBe('/tender');
+    expect(tender?.labelKey).toBe('tender.nav.title');
+    expect(tender?.labelFallback).toBe('Тендеры');
+    // Раздел со своим левым меню — в мобильную нижнюю панель не просится.
+    expect(bottomNavItems({ ...PLAIN, hasTender: true }).map((i) => i.id)).not.toContain('tender');
+  });
+
   it('«Договоры» заморожены и есть bpp:read — пункт уходит из шапки в «Закупки и оплаты» (A6.2)', () => {
     const ids = visibleNavItems({ ...PLAIN, hasBpp: true, contractsFrozen: true }).map((i) => i.id);
     expect(ids).not.toContain('contracts');

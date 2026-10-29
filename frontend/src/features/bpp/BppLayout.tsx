@@ -17,7 +17,7 @@
 import { Suspense, useMemo, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Archive, ChevronRight, ShieldOff } from 'lucide-react';
+import { Archive, Building2, ChevronRight, ShieldOff } from 'lucide-react';
 
 import { BackToProfile } from '@/components/BackToProfile';
 import { Footer } from '@/components/Footer';
@@ -28,6 +28,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { cn } from '@/lib/utils';
 
 import { moduleVisible } from './core/moduleAccess';
+import { useBppDataCompany } from './core/useBppDataCompany';
 // Базовый путь раздела и адреса пунктов меню — в `modules.ts`: их же берёт
 // блок «Подтверждения» сайдбара профиля, не затягивая в свой чанк раскладку.
 import { bppMenuHref as menuHref, bppModules, type BppModule } from './modules';
@@ -59,6 +60,23 @@ function SectionNotFound() {
 
 function PageSkeleton() {
   return <Skeleton className="h-64 w-full" />;
+}
+
+/** Решение 19.10: БЗО компании ведётся в другой — данные общие с ней. */
+function DataCompanyNotice() {
+  const { t } = useTranslation();
+  const { company } = useBppDataCompany();
+  if (!company) return null;
+  return (
+    <div role="note" className="flex items-start gap-2 rounded-xl border bg-muted/40 px-4 py-3 text-sm">
+      <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <p>
+        {t('bpp.layout.dataCompany',
+          'Данные раздела ведёт {{name}}: «Проекты», бюджеты, заявки, договоры и счета — общие с ней. Права на них выдаются там.',
+          { name: company.name })}
+      </p>
+    </div>
+  );
 }
 
 /** Экран подмодуля — или «Нет доступа», если подмодуль закрыт правами. */
@@ -140,6 +158,7 @@ export function BppLayout({ modules = bppModules }: Props) {
             <h1 className="text-3xl font-extrabold tracking-tight text-foreground">
               {t('bpp.nav.title', 'Закупки и оплаты')}
             </h1>
+            <DataCompanyNotice />
           </div>
 
           {menu.length > 0 && (
